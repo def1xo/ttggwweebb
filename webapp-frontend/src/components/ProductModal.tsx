@@ -224,16 +224,22 @@ export default function ProductModal({
 
           <div style={{ display: "grid", gap: 10 }}>
             <label className="small-muted">Фото</label>
-            <input
-              className="input"
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={(e) => {
-                const list = Array.from(e.target.files || []);
-                setFiles(list);
-              }}
-            />
+            <label className="btn ghost" style={{ width: "fit-content", cursor: "pointer" }}>
+              Выбрать файлы
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const list = Array.from(e.target.files || []);
+                  setFiles(list);
+                }}
+              />
+            </label>
+            <div className="small-muted">
+              {files.length > 0 ? `Выбрано файлов: ${files.length}` : "Файлы не выбраны"}
+            </div>
 
             {(filePreviews.length > 0 || existingImages.length > 0) && (
               <div className="thumb-grid">

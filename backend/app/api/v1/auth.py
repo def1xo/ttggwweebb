@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Depends, Body
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 
 import jwt
 
@@ -134,11 +135,17 @@ def webapp_init(payload_in: InitDataIn = Body(...), db: Session = Depends(get_db
             role=models.UserRole.admin if is_admin_id(telegram_id) else models.UserRole.user,
             balance=0,
         )
-
         db.add(user)
-        db.commit()
-        db.refresh(user)
-        created = True
+        try:
+            db.commit()
+            db.refresh(user)
+            created = True
+        except IntegrityError:
+            # Race condition: two parallel webapp_init requests for the same Telegram user.
+            db.rollback()
+            user = db.query(models.User).filter(models.User.telegram_id == telegram_id).one_or_none()
+            if not user:
+                raise HTTPException(status_code=500, detail="failed to initialize user")
     else:
         changed = False
         if username and user.username != username:

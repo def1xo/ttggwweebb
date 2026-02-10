@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Collapsible from "../components/Collapsible";
 import { axiosInstance, reportClientError } from "../services/api";
-import { hapticImpact, hapticSelection } from "../utils/tg";
+import { hapticImpact } from "../utils/tg";
 
 type OrderAny = any;
 
@@ -118,6 +118,14 @@ export default function Orders() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      load();
+    }, 30000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function toggle(id: string) {
     try { hapticImpact("light"); } catch {}
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -128,17 +136,6 @@ export default function Orders() {
       <div className="page-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
         <div style={{ fontWeight: 900, fontSize: 18 }}>Заказы</div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button
-            className="btn ghost"
-            onClick={() => {
-              try { hapticSelection(); } catch {}
-              load();
-            }}
-            disabled={loading}
-            title="Обновить"
-          >
-            ↻
-          </button>
           <Link to="/profile" className="btn">
             Профиль
           </Link>
@@ -153,12 +150,16 @@ export default function Orders() {
       ) : null}
 
       {!loading && !err && sorted.length === 0 ? (
-        <div className="card" style={{ padding: 14, marginTop: 12 }}>
-          <div style={{ fontWeight: 900, marginBottom: 6 }}>Пока нет заказов</div>
-          <div className="small-muted" style={{ marginBottom: 12 }}>
+        <div className="card empty-state" style={{ padding: 14, marginTop: 12 }}>
+          <div className="empty-emoji" aria-hidden>📦</div>
+          <div style={{ fontWeight: 900, fontSize: 18 }}>Пока нет заказов</div>
+          <div className="small-muted" style={{ marginTop: 8 }}>
             Когда вы оформите заказ — он появится тут.
           </div>
-          <Link to="/catalog" className="btn">Перейти в каталог</Link>
+          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Link to="/catalog" className="btn" style={{ textDecoration: "none" }}>Перейти в каталог</Link>
+            <Link to="/profile" className="btn ghost" style={{ textDecoration: "none" }}>Профиль</Link>
+          </div>
         </div>
       ) : null}
 

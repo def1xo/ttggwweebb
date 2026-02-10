@@ -44,7 +44,8 @@ type CartOut = {
   promo?: CartPromo | null;
 };
 
-const FREE_DELIVERY_FROM = 10000;
+const FREE_DELIVERY_FROM = 5000;
+const DELIVERY_PRICE = 449;
 
 function fmtRub(value: any) {
   const n = Number(value || 0);
@@ -115,6 +116,9 @@ export default function Cart() {
 
   const remainingToFree = Math.max(0, FREE_DELIVERY_FROM - subtotal);
   const freeProgress = Math.min(1, subtotal / FREE_DELIVERY_FROM);
+  const hasDeliveryAddress = pvz.trim().length > 0;
+  const deliveryPrice = items.length > 0 && hasDeliveryAddress && subtotal < FREE_DELIVERY_FROM ? DELIVERY_PRICE : 0;
+  const payableTotal = total + deliveryPrice;
 
   const promoApplied = useMemo(() => {
     return cart?.promo?.code ? String(cart.promo.code) : "";
@@ -325,12 +329,7 @@ export default function Cart() {
           <div className="card sticky-summary">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ fontWeight: 900 }}>Итого</div>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <button className="icon-btn" onClick={load} disabled={loading} title="Обновить" aria-label="Обновить">
-                  ↻
-                </button>
-                <div className="small-muted">Подробно</div>
-              </div>
+              <div className="small-muted">Подробно</div>
             </div>
 
             <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
@@ -342,9 +341,13 @@ export default function Cart() {
                 <div className="small-muted">Скидка</div>
                 <div>-{fmtRub(discount)}</div>
               </div>
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <div className="small-muted">Доставка</div>
+                <div>{deliveryPrice > 0 ? fmtRub(deliveryPrice) : "Бесплатно"}</div>
+              </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 900, marginTop: 6 }}>
                 <div>К оплате</div>
-                <div>{fmtRub(total)}</div>
+                <div>{fmtRub(payableTotal)}</div>
               </div>
             </div>
 
@@ -401,6 +404,11 @@ export default function Cart() {
 
             <label className="small-muted">Адрес ПВЗ</label>
             <input className="input" value={pvz} onChange={(e) => setPvz(e.target.value)} placeholder="CDEK / Ozon / Яндекс — укажите ПВЗ" style={{ marginTop: 6, marginBottom: 8 }} />
+
+            <div className="notice" style={{ marginBottom: 8 }}>
+              <strong>Доставка:</strong> фикс {fmtRub(DELIVERY_PRICE)} при сумме заказа до {fmtRub(FREE_DELIVERY_FROM)},
+              от {fmtRub(FREE_DELIVERY_FROM)} — бесплатно.
+            </div>
 
             <div className="notice" style={{ marginBottom: 8 }}>
               <strong>Важно:</strong> реквизиты для оплаты появятся <strong>после</strong> нажатия “Оформить заказ”.

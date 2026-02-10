@@ -207,16 +207,27 @@ function AdminOrdersPanel({ onBack }: { onBack: () => void }) {
         </button>
         <div style={{ fontWeight: 700 }}>Заказы</div>
         <div style={{ flex: 1 }} />
-        <select className="input" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ maxWidth: 220 }}>
-          {STATUSES.map((s) => (
-            <option key={s || "all"} value={s}>
-              {s ? s : "Все статусы"}
-            </option>
-          ))}
-        </select>
-        <button className="btn btn-secondary" onClick={load}>
-          Обновить
-        </button>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", maxWidth: 520 }}>
+          {STATUSES.map((s) => {
+            const active = statusFilter === s;
+            const label = s || "Все статусы";
+            return (
+              <button
+                key={s || "all"}
+                className="btn"
+                style={{
+                  padding: "8px 10px",
+                  border: active ? "1px solid var(--ring)" : undefined,
+                  background: active ? "rgba(255,255,255,0.08)" : undefined,
+                }}
+                onClick={() => setStatusFilter(s)}
+                type="button"
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {actionMsg ? <div className="card" style={{ padding: 12, marginBottom: 12 }}>{actionMsg}</div> : null}
@@ -462,9 +473,7 @@ function AdminPaymentSettingsPanel({ onBack }: { onBack: () => void }) {
         </button>
         <div style={{ fontWeight: 700 }}>Реквизиты оплаты</div>
         <div style={{ flex: 1 }} />
-        <button className="btn btn-secondary" onClick={load} disabled={loading}>
-          Обновить
-        </button>
+
       </div>
 
       {loading ? <div className="card" style={{ padding: 14 }}>Загрузка…</div> : null}
@@ -651,9 +660,7 @@ function AdminPromosPanel({ onBack }: { onBack: () => void }) {
         <div style={{ fontWeight: 700 }}>Спец‑промокоды</div>
         <div style={{ flex: 1 }} />
         <input className="input" placeholder="Поиск по коду" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 220 }} />
-        <button className="btn btn-secondary" onClick={load} disabled={loading}>
-          Обновить
-        </button>
+
       </div>
 
       {loading ? <div className="card" style={{ padding: 14 }}>Загрузка…</div> : null}
