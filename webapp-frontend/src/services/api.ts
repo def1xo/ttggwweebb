@@ -1021,23 +1021,18 @@ export async function getAdminProducts() {
 
 export async function createProduct(payload: any) {
   try {
-    const hasFile = payload?.image instanceof File || (payload?.images && Array.isArray(payload.images));
-    if (hasFile) {
-      const form = new FormData();
-      form.append("title", payload.title || "");
-      form.append("description", payload.description || "");
-      form.append("base_price", String(payload.base_price ?? payload.price ?? 0));
-      if (payload.category_id) form.append("category_id", String(payload.category_id));
-      if (payload.sizes) form.append("sizes", String(payload.sizes));
-      if (payload.color) form.append("color", String(payload.color));
-      if (payload.image instanceof File) form.append("images", payload.image);
-      if (payload.images && Array.isArray(payload.images)) payload.images.forEach((f: File) => form.append("images", f));
-      const res = await axiosInstance.post("/api/admin/products", form, { headers: { "Content-Type": "multipart/form-data" } });
-      return res.data;
-    } else {
-      const res = await axiosInstance.post("/api/admin/products", payload);
-      return res.data;
-    }
+    const form = new FormData();
+    form.append("title", String(payload?.title || ""));
+    form.append("description", String(payload?.description || ""));
+    form.append("base_price", String(payload?.base_price ?? payload?.price ?? 0));
+    if (payload?.category_id) form.append("category_id", String(payload.category_id));
+    if (payload?.visible != null) form.append("visible", payload.visible ? "true" : "false");
+    if (payload?.sizes) form.append("sizes", String(payload.sizes));
+    if (payload?.color) form.append("color", String(payload.color));
+    if (payload?.image instanceof File) form.append("images", payload.image);
+    if (payload?.images && Array.isArray(payload.images)) payload.images.forEach((f: File) => form.append("images", f));
+    const res = await axiosInstance.post("/api/admin/products", form, { headers: { "Content-Type": "multipart/form-data" } });
+    return res.data;
   } catch (e) {
     return handleAxiosError(e);
   }
@@ -1045,22 +1040,17 @@ export async function createProduct(payload: any) {
 
 export async function updateProduct(id: number, payload: any) {
   try {
-    const hasFile = payload?.image instanceof File || (payload?.images && Array.isArray(payload.images));
-    if (hasFile) {
-      const form = new FormData();
-      if (payload.title != null) form.append("title", payload.title || "");
-      if (payload.description != null) form.append("description", payload.description || "");
-      if (payload.base_price != null || payload.price != null) form.append("base_price", String(payload.base_price ?? payload.price ?? 0));
-      if (payload.category_id) form.append("category_id", String(payload.category_id));
-      if (payload.visible != null) form.append("visible", payload.visible ? "true" : "false");
-      if (payload.sizes) form.append("sizes", String(payload.sizes));
-      if (payload.color) form.append("color", String(payload.color));
-      if (payload.image instanceof File) form.append("images", payload.image);
-      if (payload.images && Array.isArray(payload.images)) payload.images.forEach((f: File) => form.append("images", f));
-      const res = await axiosInstance.patch(`/api/admin/products/${id}`, form, { headers: { "Content-Type": "multipart/form-data" } });
-      return res.data;
-    }
-    const res = await axiosInstance.patch(`/api/admin/products/${id}`, payload);
+    const form = new FormData();
+    if (payload?.title != null) form.append("title", payload.title || "");
+    if (payload?.description != null) form.append("description", payload.description || "");
+    if (payload?.base_price != null || payload?.price != null) form.append("base_price", String(payload.base_price ?? payload.price ?? 0));
+    if (payload?.category_id) form.append("category_id", String(payload.category_id));
+    if (payload?.visible != null) form.append("visible", payload.visible ? "true" : "false");
+    if (payload?.sizes) form.append("sizes", String(payload.sizes));
+    if (payload?.color) form.append("color", String(payload.color));
+    if (payload?.image instanceof File) form.append("images", payload.image);
+    if (payload?.images && Array.isArray(payload.images)) payload.images.forEach((f: File) => form.append("images", f));
+    const res = await axiosInstance.patch(`/api/admin/products/${id}`, form, { headers: { "Content-Type": "multipart/form-data" } });
     return res.data;
   } catch (e) {
     return handleAxiosError(e);

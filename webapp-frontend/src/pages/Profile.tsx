@@ -259,7 +259,7 @@ export default function Profile() {
           </div>
         </div>
 
-        {canSeeRef || canEditPromos ? (
+        {canSeeRef || canEditRefCode ? (
           <div className="card" style={{ padding: 12, marginTop: 12 }}>
             <div className="small-muted" style={{ marginBottom: 6 }}>
               Реферальный код (скидка 5% на первый заказ)
