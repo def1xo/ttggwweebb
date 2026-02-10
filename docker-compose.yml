@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   db:
     image: postgres:15
@@ -79,6 +77,8 @@ services:
     build:
       context: ./webapp-frontend
       dockerfile: Dockerfile
+      args:
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-/api}
     image: ttggwweebb-frontend:latest
     ports:
       - "3000:80"
