@@ -24,6 +24,11 @@ export default function AdminProductManager() {
     load();
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => load(), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   async function load() {
     setLoading(true);
     setErr(null);
@@ -74,7 +79,6 @@ export default function AdminProductManager() {
         <div className="panel-title">Товары</div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn" onClick={() => setEditing({ title: "", price: 0 })}>Добавить товар</button>
-          <button className="btn ghost" onClick={load}>Обновить</button>
         </div>
       </div>
 

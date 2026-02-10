@@ -9,10 +9,14 @@ export default function AdminCategoryManager() {
   const [err, setErr] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
-  const [editingId, setEditingId] = useState<number | null>(null);
 
   useEffect(() => {
     load();
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => load(), 30000);
+    return () => window.clearInterval(timer);
   }, []);
 
   async function load() {
@@ -47,46 +51,33 @@ export default function AdminCategoryManager() {
 
   async function onCreate(e?: React.FormEvent) {
     if (e) e.preventDefault();
-    if (!name) return setErr("Укажи название");
+    if (!name.trim()) return setErr("Укажи название");
     setErr(null);
     try {
       if (typeof apiDefault.createAdminCategory === "function") {
-        await apiDefault.createAdminCategory({ name, slug });
+        await apiDefault.createAdminCategory({ name: name.trim(), slug: slug.trim() });
       } else if (typeof apiDefault.createCategory === "function") {
-        await apiDefault.createCategory({ name });
+        await apiDefault.createCategory({ name: name.trim() });
       } else {
-        await fetch("/api/admin/categories", {
+        // backend admin categories may require multipart/form-data (name: Form(...))
+        const fd = new FormData();
+        fd.append("name", name.trim());
+        if (slug.trim()) fd.append("slug", slug.trim());
+        const resp = await fetch("/api/admin/categories", {
           method: "POST",
           credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, slug }),
+          body: fd,
         });
+        if (!resp.ok) {
+          const txt = await resp.text();
+          throw new Error(txt || "Ошибка создания");
+        }
       }
-      setName(""); setSlug("");
+      setName("");
+      setSlug("");
       await load();
     } catch (e: any) {
       setErr(e?.message || "Ошибка создания");
-    }
-  }
-
-  async function onSaveEdit(id: number) {
-    setErr(null);
-    try {
-      if (typeof apiDefault.updateAdminCategory === "function") {
-        await apiDefault.updateAdminCategory(id, { name, slug });
-      } else {
-        await fetch(`/api/admin/categories/${id}`, {
-          method: "PATCH",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, slug }),
-        });
-      }
-      setEditingId(null);
-      setName(""); setSlug("");
-      await load();
-    } catch (e: any) {
-      setErr(e?.message || "Ошибка редактирования");
     }
   }
 
@@ -112,17 +103,16 @@ export default function AdminCategoryManager() {
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div className="panel-title">Категории</div>
-          <div><button className="btn" onClick={load}>Обновить</button></div>
+          {loading ? <div className="small-muted">Загрузка…</div> : null}
         </div>
 
         <div style={{ marginTop: 12 }}>
           {err && <div style={{ color: "red" }}>{err}</div>}
-          {loading && <div className="small-muted">Загрузка…</div>}
 
-          <form onSubmit={onCreate} style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <form onSubmit={onCreate} style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
             <input className="input" placeholder="Название" value={name} onChange={(e) => setName(e.target.value)} />
             <input className="input" placeholder="slug (url)" value={slug} onChange={(e) => setSlug(e.target.value)} />
-            <button className="btn" type="submit">Создать</button>
+            <button className="btn" type="submit" disabled={loading}>Создать</button>
           </form>
 
           <ul style={{ marginTop: 12 }}>
@@ -130,17 +120,8 @@ export default function AdminCategoryManager() {
               <li key={c.id} style={{ marginBottom: 8 }}>
                 <strong>{c.name}</strong> — <span className="small-muted">{c.slug ?? c.image_url ?? ""}</span>
                 <div style={{ display: "inline-block", marginLeft: 8 }}>
-                  <button className="btn ghost" onClick={() => { setEditingId(c.id); setName(c.name); setSlug(c.slug ?? ""); }}>Редактировать</button>
                   <button className="btn ghost" onClick={() => onDelete(c.id)}>Удалить</button>
                 </div>
-                {editingId === c.id && (
-                  <div style={{ marginTop: 8 }}>
-                    <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
-                    <input className="input" value={slug} onChange={(e) => setSlug(e.target.value)} />
-                    <button className="btn" onClick={() => onSaveEdit(c.id)}>Сохранить</button>
-                    <button className="btn ghost" onClick={() => { setEditingId(null); setName(""); setSlug(""); }}>Отмена</button>
-                  </div>
-                )}
               </li>
             ))}
           </ul>

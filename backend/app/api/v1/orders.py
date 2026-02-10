@@ -28,6 +28,10 @@ def _to_decimal(v) -> Decimal:
         return Decimal("0")
 
 
+FREE_DELIVERY_FROM = Decimal("5000")
+DELIVERY_PRICE = Decimal("449")
+
+
 def _promo_value_to_percent(val: Decimal) -> Decimal:
     """PromoCode.value can be stored as 10 (percent) or 0.10 (fraction)."""
     if val is None:
@@ -182,7 +186,11 @@ def create_order(
             # if promo is invalid for discount, ignore
             promo_code_str = None
 
-    total_amount = (subtotal - discount).quantize(Decimal("0.01"))
+    delivery_price = Decimal("0")
+    if payload.delivery_address and subtotal < FREE_DELIVERY_FROM:
+        delivery_price = DELIVERY_PRICE
+
+    total_amount = (subtotal - discount + delivery_price).quantize(Decimal("0.01"))
 
     # Resolve commissions attribution by referral code
     manager_id = None
@@ -211,6 +219,7 @@ def create_order(
         subtotal_amount=subtotal,
         discount_amount=discount,
         total_amount=total_amount,
+        delivery_price=delivery_price,
         delivery_type=payload.delivery_type,
         delivery_address=payload.delivery_address,
         fio=payload.fio,

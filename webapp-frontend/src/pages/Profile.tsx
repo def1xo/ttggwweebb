@@ -152,6 +152,16 @@ export default function Profile() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      loadMe();
+      loadOrders();
+      loadFavorites();
+    }, 45000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const lastOrders = useMemo(() => {
     const copy = [...orders];
     copy.sort((a, b) => {
@@ -197,22 +207,6 @@ export default function Profile() {
       <div className="page-head">
         <div className="page-head__title">Профиль</div>
         <div className="page-head__actions">
-          <button
-            className="icon-btn"
-            onClick={() => {
-              try {
-                hapticSelection();
-              } catch {}
-              loadMe();
-              loadOrders();
-              loadFavorites();
-            }}
-            aria-label="Обновить"
-            title="Обновить"
-            disabled={meLoading || ordersLoading || favLoading}
-          >
-            ↻
-          </button>
           <Link to="/catalog" className="btn ghost" style={{ textDecoration: "none" }}>
             Каталог
           </Link>

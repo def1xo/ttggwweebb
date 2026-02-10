@@ -257,7 +257,7 @@ export default function ProductPage() {
           </button>
           <div className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>
             <div>💡 Свайпай по фото, чтобы листать.</div>
-            <div>Бесплатная доставка от 10 000 ₽.</div>
+            <div>Доставка 449 ₽, бесплатно от 5 000 ₽.</div>
           </div>
         </div>
       </div>
