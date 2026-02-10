@@ -144,8 +144,8 @@ export default function ProductModal({
   };
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true">
-      <div className="modal card" style={{ maxWidth: 720, width: "min(92vw, 720px)" }}>
+    <div className="modal-overlay" role="dialog" aria-modal="true" style={{ alignItems: "flex-start", overflowY: "auto", padding: "14px 0" }}>
+      <div className="modal card" style={{ maxWidth: 720, width: "min(92vw, 720px)", maxHeight: "92vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>{product ? "Редактирование" : "Новый товар"}</h2>
           <button className="btn ghost" onClick={onClose} aria-label="Close">

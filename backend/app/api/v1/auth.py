@@ -238,7 +238,7 @@ def patch_me(body: ProfilePatch, current_user: models.User = Depends(get_current
     # promo_code update (unique)
     # Only admin/manager may change it. For regular users ignore silently.
     role = role_value(getattr(current_user, "role", ""))
-    can_edit_promo = role in ("admin", "manager") or is_admin_id(getattr(current_user, "telegram_id", None))
+    can_edit_promo = role in ("admin", "manager", "assistant") or is_admin_id(getattr(current_user, "telegram_id", None))
     if body.promo_code is not None and can_edit_promo:
         code = (body.promo_code or '').strip()
         if code == '':

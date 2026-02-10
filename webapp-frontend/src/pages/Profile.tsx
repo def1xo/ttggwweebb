@@ -76,10 +76,13 @@ export default function Profile() {
   const [favLoading, setFavLoading] = useState(false);
   const [favErr, setFavErr] = useState<string | null>(null);
 
+  const [refCodeDraft, setRefCodeDraft] = useState("");
+  const [refCodeSaving, setRefCodeSaving] = useState(false);
+  const [refCodeMsg, setRefCodeMsg] = useState<string | null>(null);
+
   const role = String(me?.role || "user");
-  const canSeeRef = role === "admin" || role === "manager" || role === "supermanager" || role === "superadmin";
-  const canEditPromos = role === "admin" || role === "superadmin" || role === "manager" || role === "supermanager" || role === "assistant";
-  const promoManagePath = role === "admin" || role === "superadmin" ? "/admin" : "/manager";
+  const canSeeRef = role === "admin" || role === "manager" || role === "assistant" || role === "supermanager" || role === "superadmin";
+  const canEditRefCode = canSeeRef;
 
   const displayName = useMemo(() => {
     const dn = me?.display_name || me?.name;
@@ -89,6 +92,11 @@ export default function Profile() {
     const full = `${fn} ${ln}`.trim();
     return full || (me?.username ? `@${me.username}` : "Профиль");
   }, [me]);
+
+
+  useEffect(() => {
+    setRefCodeDraft(String(me?.promo_code || ""));
+  }, [me?.promo_code]);
 
   async function loadMe() {
     setMeLoading(true);
@@ -183,6 +191,27 @@ export default function Profile() {
     setOrdersExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+
+  const saveRefCode = async () => {
+    if (!canEditRefCode) return;
+    const code = refCodeDraft.trim();
+    setRefCodeSaving(true);
+    setRefCodeMsg(null);
+    try {
+      const res: any = await axiosInstance.patch("/api/auth/me", { promo_code: code || null });
+      const detail = res?.data?.detail || res?.detail;
+      if (detail) throw new Error(String(detail));
+      await loadMe();
+      setRefCodeMsg("Реф-код сохранён ✅");
+      try { hapticNotify("success"); } catch {}
+    } catch (e: any) {
+      setRefCodeMsg(e?.message || "Не удалось сохранить реф-код");
+      try { hapticNotify("error"); } catch {}
+    } finally {
+      setRefCodeSaving(false);
+    }
+  };
+
   const copyRef = async () => {
     const code = String(me?.promo_code || "").trim();
     if (!code) return;
@@ -232,33 +261,35 @@ export default function Profile() {
 
         {canSeeRef || canEditPromos ? (
           <div className="card" style={{ padding: 12, marginTop: 12 }}>
-            {canSeeRef ? (
-              <>
-                <div className="small-muted" style={{ marginBottom: 6 }}>
-                  Реф. код (видно только админу/менеджеру)
-                </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <div style={{ fontWeight: 900, fontSize: 16 }}>{me?.promo_code ? String(me.promo_code) : "—"}</div>
-                  {me?.promo_code ? (
-                    <button className="btn btn-secondary btn-sm" onClick={copyRef} type="button">
-                      Скопировать
-                    </button>
-                  ) : null}
-                </div>
-              </>
-            ) : (
-              <div className="small-muted" style={{ marginBottom: 6 }}>
-                Управление промокодами
-              </div>
-            )}
+            <div className="small-muted" style={{ marginBottom: 6 }}>
+              Реферальный код (скидка 5% на первый заказ)
+            </div>
 
-            {canEditPromos ? (
-              <div style={{ marginTop: canSeeRef ? 8 : 0 }}>
-                <Link to={promoManagePath} className="btn btn-sm" style={{ textDecoration: "none" }}>
-                  Изменить промокоды
-                </Link>
-              </div>
-            ) : null}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <input
+                className="input"
+                value={refCodeDraft}
+                onChange={(e) => setRefCodeDraft(e.target.value)}
+                placeholder="Например: defshop5"
+                maxLength={32}
+                style={{ maxWidth: 260 }}
+              />
+              {canEditRefCode ? (
+                <button className="btn btn-sm" type="button" onClick={saveRefCode} disabled={refCodeSaving}>
+                  {refCodeSaving ? "Сохраняю…" : "Сохранить"}
+                </button>
+              ) : null}
+              {String(me?.promo_code || "").trim() ? (
+                <button className="btn btn-secondary btn-sm" onClick={copyRef} type="button">
+                  Скопировать
+                </button>
+              ) : null}
+            </div>
+
+            <div className="small-muted" style={{ marginTop: 8 }}>
+              Код можно передавать новым покупателям — скидка применяется на первый заказ.
+            </div>
+            {refCodeMsg ? <div style={{ marginTop: 8, color: refCodeMsg.includes("✅") ? "#78e08f" : "#ff7b7b" }}>{refCodeMsg}</div> : null}
           </div>
         ) : null}
       </div>

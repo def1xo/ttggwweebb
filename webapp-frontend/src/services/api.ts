@@ -938,8 +938,13 @@ export async function approveWithdraw(withdrawId: number, approve = true) {
 
 export async function getAdminManagers() {
   try {
-    const res = await axiosInstance.get("/api/admin/managers");
-    return res.data;
+    const candidates = [
+      "/api/admin/managers",
+      "/admin/managers",
+      "/api/v1/admin/managers",
+      "/v1/admin/managers",
+    ];
+    return await tryCandidates(candidates, { method: "get" });
   } catch (e) {
     return handleAxiosError(e);
   }
@@ -951,29 +956,41 @@ export async function addAdminManager(payload: { user_id?: number; telegram_id?:
     return { detail: "Некорректный user_id" };
   }
 
-  try {
-    // primary payload expected by most backends
-    const res = await axiosInstance.post("/api/admin/managers", { user_id: uid });
-    return res.data;
-  } catch (e: any) {
-    const status = e?.response?.status;
-    // fallback for backends that expect telegram_id instead of user_id
-    if (status === 400 || status === 404 || status === 422) {
-      try {
-        const res = await axiosInstance.post("/api/admin/managers", { telegram_id: uid });
-        return res.data;
-      } catch (e2) {
-        return handleAxiosError(e2);
-      }
+  const candidates = [
+    "/api/admin/managers",
+    "/admin/managers",
+    "/api/v1/admin/managers",
+    "/v1/admin/managers",
+  ];
+
+  const bodies = [
+    { user_id: uid },
+    { telegram_id: uid },
+    { id: uid },
+  ];
+
+  let lastErr: any = null;
+  for (const body of bodies) {
+    try {
+      return await tryCandidates(candidates, { method: "post", data: body });
+    } catch (e: any) {
+      lastErr = e;
+      const st = e?.response?.status;
+      if (st && st !== 400 && st !== 404 && st !== 422) break;
     }
-    return handleAxiosError(e);
   }
+  return handleAxiosError(lastErr || new Error("add manager failed"));
 }
 
 export async function patchAdminManager(id: number, payload: { role?: string; balance?: number }) {
   try {
-    const res = await axiosInstance.patch(`/api/admin/managers/${id}`, payload);
-    return res.data;
+    const candidates = [
+      `/api/admin/managers/${id}`,
+      `/admin/managers/${id}`,
+      `/api/v1/admin/managers/${id}`,
+      `/v1/admin/managers/${id}`,
+    ];
+    return await tryCandidates(candidates, { method: "patch", data: payload });
   } catch (e) {
     return handleAxiosError(e);
   }
@@ -981,8 +998,13 @@ export async function patchAdminManager(id: number, payload: { role?: string; ba
 
 export async function deleteAdminManager(id: number) {
   try {
-    const res = await axiosInstance.delete(`/api/admin/managers/${id}`);
-    return res.data;
+    const candidates = [
+      `/api/admin/managers/${id}`,
+      `/admin/managers/${id}`,
+      `/api/v1/admin/managers/${id}`,
+      `/v1/admin/managers/${id}`,
+    ];
+    return await tryCandidates(candidates, { method: "delete" });
   } catch (e) {
     return handleAxiosError(e);
   }
@@ -1085,21 +1107,6 @@ export async function getAdminCategories() {
     const res = await axiosInstance.get("/api/admin/categories");
     return res.data;
   } catch (e) {
-    const status = (e as any)?.response?.status;
-    // Some backends (e.g. FastAPI) validate this endpoint as form-data and respond 422 for JSON.
-    if (status === 415 || status === 422) {
-      try {
-        const form = new FormData();
-        form.append("name", payload?.name || "");
-        if ((payload as any)?.slug) form.append("slug", String((payload as any).slug));
-        const res = await axiosInstance.post("/api/admin/categories", form, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
-        return res.data;
-      } catch (retryErr) {
-        return handleAxiosError(retryErr);
-      }
-    }
     return handleAxiosError(e);
   }
 }
