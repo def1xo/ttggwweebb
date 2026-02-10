@@ -116,24 +116,24 @@ export default function OrderSuccess() {
             </div>
 
             <div className="small-muted" style={{ marginTop: 10 }}>
-              После оплаты загрузите чек — без чека заказ не будет подтверждён.
+              После оплаты прикрепите чек и подтвердите отправку. Мы проверим оплату и уведомим вас.
             </div>
           </div>
         ) : null}
       </div>
 
       <div style={{ marginTop: 12 }}>
-        <PaymentDetails />
+        <PaymentDetails amount={Number((order as any)?.total_amount || (order as any)?.total || 0)} />
       </div>
 
       <div className="card" style={{ padding: 14, marginTop: 12 }}>
-        <div style={{ fontWeight: 900, marginBottom: 10 }}>📎 Загрузить чек</div>
+        <div style={{ fontWeight: 900, marginBottom: 10 }}>📎 Подтверждение оплаты</div>
 
         {paymentUrl ? (
           <div className="card" style={{ padding: 12, marginBottom: 10 }}>
-            <div className="small-muted">Чек уже загружен</div>
+            <div className="small-muted">Чек прикреплён</div>
             <a href={paymentUrl} target="_blank" rel="noreferrer" className="btn" style={{ marginTop: 8 }}>
-              Открыть чек
+              Открыть файл
             </a>
           </div>
         ) : null}
@@ -144,7 +144,7 @@ export default function OrderSuccess() {
           onClick={() => setProofOpen(true)}
           disabled={!canUpload}
         >
-          {canUpload ? (paymentUrl ? "Заменить чек" : "Я оплатил — загрузить чек") : "Чек уже принят"}
+          {canUpload ? "Подтвердить чек" : "Чек уже принят"}
         </button>
 
         <div style={{ marginTop: 12, display: "flex", gap: 10, justifyContent: "space-between" }}>
@@ -163,10 +163,9 @@ export default function OrderSuccess() {
           orderId={id}
           onClose={() => setProofOpen(false)}
           onUploaded={async () => {
-            try {
-              notify("Чек отправлен на модерацию ✅", "success");
-            } catch {}
             await load();
+            setProofOpen(false);
+            notify("Спасибо за покупку! Чек отправлен на проверку 💙", "success");
           }}
         />
       ) : null}

@@ -180,7 +180,7 @@ function AdminOrdersPanel({ onBack }: { onBack: () => void }) {
   const updateStatus = async (id: number, status: string) => {
     if (!confirm(`Поменять статус заказа #${id} на "${status}"?`)) return;
     try {
-      await api.patch(`/admin/orders/${id}/status`, { status });
+      await api.post(`/api/admin/orders/${id}/status`, { status });
       setActionMsg(`Статус заказа #${id} обновлён: ${status}`);
       load();
     } catch (e: any) {
@@ -191,7 +191,7 @@ function AdminOrdersPanel({ onBack }: { onBack: () => void }) {
   const confirmPayment = async (id: number) => {
     if (!confirm(`Подтвердить оплату заказа #${id}?`)) return;
     try {
-      await api.post(`/admin/orders/${id}/confirm_payment`);
+      await api.post(`/api/admin/orders/${id}/confirm_payment`, {});
       setActionMsg(`Оплата подтверждена для заказа #${id}`);
       load();
     } catch (e: any) {

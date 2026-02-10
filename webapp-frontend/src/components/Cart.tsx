@@ -124,18 +124,6 @@ export default function Cart() {
     return cart?.promo?.code ? String(cart.promo.code) : "";
   }, [cart?.promo]);
 
-  // UI: hide promo inputs for regular users.
-  const canUsePromo = useMemo(() => {
-    try {
-      const raw = localStorage.getItem("me");
-      if (!raw) return false;
-      const p = JSON.parse(raw);
-      const role = String(p?.role || "user");
-      return role === "admin" || role === "manager" || role === "supermanager" || role === "superadmin";
-    } catch {
-      return false;
-    }
-  }, []);
 
   async function changeQty(variant_id: number, nextQty: number) {
     const q = Math.max(0, Number(nextQty) || 0);
@@ -220,6 +208,7 @@ export default function Cart() {
         delivery_type: "pvz",
         delivery_address: pvz.trim(),
         note: note.trim() || undefined,
+        promo_code: promoApplied || promo.trim() || undefined,
       };
 
       const res: any = await createOrder(payload);
@@ -364,8 +353,7 @@ export default function Cart() {
               </div>
             </div>
 
-            {canUsePromo ? (
-              <div style={{ marginTop: 14 }}>
+            <div style={{ marginTop: 14 }}>
                 <div className="small-muted" style={{ marginBottom: 8 }}>Промокод</div>
                 {promoApplied ? (
                 <div className="card" style={{ padding: 10, marginBottom: 10 }}>
@@ -375,7 +363,7 @@ export default function Cart() {
                       <div className="small-muted" style={{ marginTop: 4 }}>
                         {cart?.promo?.kind === "special"
                           ? `Скидка: ${cart?.promo?.discount_percent ?? "?"}%`
-                          : "Реферальный код"}
+                          : "Промокод применён"}
                         {cart?.promo?.expires_at ? ` • До: ${toIsoDateTime(cart.promo.expires_at)}` : ""}
                       </div>
                     </div>
@@ -393,7 +381,7 @@ export default function Cart() {
                   </div>
                 )}
               </div>
-            ) : null}
+
           </div>
 
           <div className="card" style={{ marginTop: 12 }}>
@@ -410,10 +398,6 @@ export default function Cart() {
               от {fmtRub(FREE_DELIVERY_FROM)} — бесплатно.
             </div>
 
-            <div className="notice" style={{ marginBottom: 8 }}>
-              <strong>Важно:</strong> реквизиты для оплаты появятся <strong>после</strong> нажатия “Оформить заказ”.
-              После оплаты загрузите чек — заказ уйдёт на модерацию.
-            </div>
 
             <label className="small-muted">Телефон (опционально)</label>
             <input className="input" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+7 9xx xxx xx xx" style={{ marginTop: 6, marginBottom: 8 }} />
