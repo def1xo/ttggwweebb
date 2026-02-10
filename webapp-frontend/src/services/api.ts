@@ -1085,6 +1085,21 @@ export async function getAdminCategories() {
     const res = await axiosInstance.get("/api/admin/categories");
     return res.data;
   } catch (e) {
+    const status = (e as any)?.response?.status;
+    // Some backends (e.g. FastAPI) validate this endpoint as form-data and respond 422 for JSON.
+    if (status === 415 || status === 422) {
+      try {
+        const form = new FormData();
+        form.append("name", payload?.name || "");
+        if ((payload as any)?.slug) form.append("slug", String((payload as any).slug));
+        const res = await axiosInstance.post("/api/admin/categories", form, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        return res.data;
+      } catch (retryErr) {
+        return handleAxiosError(retryErr);
+      }
+    }
     return handleAxiosError(e);
   }
 }
