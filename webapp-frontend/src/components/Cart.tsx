@@ -73,6 +73,7 @@ export default function Cart() {
 
   const [cart, setCart] = useState<CartOut | null>(null);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [promo, setPromo] = useState("");
@@ -84,8 +85,9 @@ export default function Cart() {
   const [note, setNote] = useState("");
   const [placing, setPlacing] = useState(false);
 
-  async function load() {
-    setLoading(true);
+  async function load(silent = false) {
+    if (silent) setRefreshing(true);
+    else setLoading(true);
     setError(null);
     try {
       const res: any = await getCart();
@@ -100,12 +102,25 @@ export default function Cart() {
       setCart(null);
       setError(e?.message || "Не удалось загрузить корзину");
     } finally {
-      setLoading(false);
+      if (silent) setRefreshing(false);
+      else setLoading(false);
     }
   }
 
   useEffect(() => {
     load();
+
+    const onCartChanged = () => {
+      load(true);
+    };
+
+    window.addEventListener("focus", onCartChanged);
+    window.addEventListener("cart:updated", onCartChanged as EventListener);
+
+    return () => {
+      window.removeEventListener("focus", onCartChanged);
+      window.removeEventListener("cart:updated", onCartChanged as EventListener);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -181,6 +196,7 @@ export default function Cart() {
       const data = res?.data ?? res;
       setCart(data);
       notify("Корзина очищена", "success");
+      try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
     } catch (e: any) {
       notify(e?.response?.data?.detail || e?.message || "Не удалось очистить корзину", "error");
     }
@@ -221,6 +237,7 @@ export default function Cart() {
       const orderId = data?.id;
       notify("Заказ создан ✅", "success");
       // move to success page (there payment requisites + proof upload)
+      try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
       if (orderId) nav(`/order/success/${orderId}`);
       else nav(`/profile`);
     } catch (e: any) {
@@ -236,7 +253,7 @@ export default function Cart() {
         <div>
           <div className="page-head__title">Корзина</div>
           <div className="small-muted" style={{ marginTop: 6 }}>
-            {loading ? "Загрузка…" : items.length ? `${items.length} товар(ов)` : "Пока пусто"}
+            {loading ? "Загрузка…" : refreshing ? "Обновляем…" : items.length ? `${items.length} товар(ов)` : "Пока пусто"}
           </div>
         </div>
         <div className="page-head__actions">
@@ -292,20 +309,21 @@ export default function Cart() {
                     <div className="field-block qty-block">
                       <div className="small-muted">Кол-во</div>
                       <div className="qty-control">
-                        <button onClick={() => changeQty(it.variant_id, (it.quantity || 1) - 1)} className="btn ghost">-</button>
+                        <button onClick={() => changeQty(it.variant_id, (it.quantity || 1) - 1)} className="btn ghost" disabled={placing || loading || refreshing}>-</button>
                         <input
                           type="number"
                           className="input qty-input"
                           value={it.quantity || 1}
                           onChange={(e) => changeQty(it.variant_id, Number(e.target.value) || 1)}
                           min={1}
+                          disabled={placing || loading || refreshing}
                         />
-                        <button onClick={() => changeQty(it.variant_id, (it.quantity || 1) + 1)} className="btn ghost">+</button>
+                        <button onClick={() => changeQty(it.variant_id, (it.quantity || 1) + 1)} className="btn ghost" disabled={placing || loading || refreshing}>+</button>
                       </div>
                     </div>
 
                     <div className="remove-block">
-                      <button onClick={() => changeQty(it.variant_id, 0)} className="btn ghost remove-btn">Удалить</button>
+                      <button onClick={() => changeQty(it.variant_id, 0)} className="btn ghost remove-btn" disabled={placing || loading || refreshing}>Удалить</button>
                     </div>
                   </div>
                 </div>
@@ -367,15 +385,15 @@ export default function Cart() {
                         {cart?.promo?.expires_at ? ` • До: ${toIsoDateTime(cart.promo.expires_at)}` : ""}
                       </div>
                     </div>
-                    <button className="btn ghost" onClick={onRemovePromo} disabled={promoApplying}>
+                    <button className="btn ghost" onClick={onRemovePromo} disabled={promoApplying || placing || loading || refreshing}>
                       Убрать
                     </button>
                   </div>
                 </div>
                 ) : (
                   <div style={{ display: "flex", gap: 8 }}>
-                    <input className="input" placeholder="Введите промокод" value={promo} onChange={(e) => setPromo(e.target.value)} />
-                    <button className="btn" onClick={onApplyPromo} disabled={promoApplying || !promo.trim()}>
+                    <input className="input" placeholder="Введите промокод" value={promo} onChange={(e) => setPromo(e.target.value)} disabled={promoApplying || placing || loading || refreshing} />
+                    <button className="btn" onClick={onApplyPromo} disabled={promoApplying || placing || loading || refreshing || !promo.trim()}>
                       {promoApplying ? "…" : "Применить"}
                     </button>
                   </div>
@@ -407,10 +425,10 @@ export default function Cart() {
           </div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-            <button className="btn full-width-on-mobile" onClick={onPlaceOrder} disabled={placing || loading}>
+            <button className="btn full-width-on-mobile" onClick={onPlaceOrder} disabled={placing || loading || refreshing}>
               {placing ? "Оформляем…" : "Оформить заказ"}
             </button>
-            <button className="btn ghost full-width-on-mobile" onClick={onClearCart} disabled={placing || loading}>
+            <button className="btn ghost full-width-on-mobile" onClick={onClearCart} disabled={placing || loading || refreshing}>
               Очистить
             </button>
           </div>
