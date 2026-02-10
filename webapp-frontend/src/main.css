@@ -1261,7 +1261,8 @@ img, picture { max-width: 100%; height: auto; display: block; }
 .product-add-btn {
   width: 100%;
   min-height: 48px;
-  font-size: 20px;
+  font-size: 18px;
+  line-height: 1.2;
   border-radius: 14px;
 }
 
@@ -1283,5 +1284,17 @@ img, picture { max-width: 100%; height: auto; display: block; }
   }
   .card {
     backdrop-filter: none;
+  }
+
+  .app-header,
+  .sticky-search,
+  .product-card .badge,
+  .product-card .quick-add button,
+  .bottom-nav-inner {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .bottom-nav-inner {
+    background: rgba(8, 8, 8, 0.96);
   }
 }

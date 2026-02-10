@@ -45,7 +45,7 @@ def _promo_value_to_percent(val: Decimal) -> Decimal:
 def _resolve_referral(db: Session, code: str) -> Optional[models.User]:
     if not code:
         return None
-    return db.query(models.User).filter(models.User.promo_code == code).one_or_none()
+    return db.query(models.User).filter(models.User.promo_code.ilike(code)).one_or_none()
 
 
 def _get_cart_items(db: Session, user_id: int) -> List[models.CartItem]:
@@ -171,7 +171,7 @@ def create_order(
             # enforce "one promo per life" + pending lock
             if user.promo_used_code:
                 raise HTTPException(status_code=400, detail="promo already used")
-            if user.promo_pending_code and user.promo_pending_code != promo.code:
+            if user.promo_pending_code and str(user.promo_pending_code).lower() != str(promo.code).lower():
                 raise HTTPException(status_code=400, detail="another promo is pending")
 
             resv = _active_reservation(db, user.id, promo.id)

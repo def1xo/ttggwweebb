@@ -126,7 +126,7 @@ def _normalize_code(code: str) -> str:
 def _resolve_referral_owner(db: Session, code: str) -> Optional[models.User]:
     if not code:
         return None
-    return db.query(models.User).filter(models.User.promo_code == code).one_or_none()
+    return db.query(models.User).filter(models.User.promo_code.ilike(code)).one_or_none()
 
 
 def _resolve_special_promo(db: Session, code: str) -> Optional[models.PromoCode]:
@@ -353,7 +353,7 @@ def apply_promo(payload: ApplyPromoIn, db: Session = Depends(get_db), user: mode
         raise HTTPException(status_code=400, detail="promo already used")
 
     # prevent switching promos while pending
-    if user.promo_pending_code and user.promo_pending_code.strip() and user.promo_pending_code.strip() != code:
+    if user.promo_pending_code and user.promo_pending_code.strip() and user.promo_pending_code.strip().lower() != code.lower():
         raise HTTPException(status_code=400, detail="you already have a pending promo for another order")
 
     # referral code
