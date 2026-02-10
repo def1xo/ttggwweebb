@@ -35,7 +35,7 @@ export default function AdminOrdersList(): JSX.Element {
     try {
       const params: any = {};
       if (statusFilter) params.status = statusFilter;
-      const res = await api.get("/admin/orders", { params });
+      const res = await api.get("/api/admin/orders", { params });
       const arr: any[] = (res as any).data || [];
       setOrders(arr.map((o: any) => ({
         id: Number(o.id),
@@ -55,7 +55,7 @@ export default function AdminOrdersList(): JSX.Element {
   async function changeStatus(orderId: number, newStatus: string) {
     if (!confirm(`Поменять статус заказа #${orderId} на "${newStatus}"?`)) return;
     try {
-      await api.patch(`/admin/orders/${orderId}/status`, { status: newStatus });
+      await api.post(`/api/admin/orders/${orderId}/status`, { status: newStatus });
       setMessage(`Статус заказа ${orderId} обновлён: ${newStatus}`);
       load();
     } catch (err: any) {
@@ -67,7 +67,7 @@ export default function AdminOrdersList(): JSX.Element {
 async function confirmPayment(orderId: number) {
     if (!confirm(`Подтвердить оплату заказа #${orderId}?`)) return;
     try {
-      await api.post(`/admin/orders/${orderId}/confirm_payment`);
+      await api.post(`/api/admin/orders/${orderId}/confirm_payment`, {});
       setMessage(`Оплата подтверждена для заказа ${orderId}`);
       load();
     } catch (err: any) {
@@ -181,7 +181,7 @@ async function confirmPayment(orderId: number) {
                       Отменить
                     </button>
                     <a
-                      href={`/admin/orders/${o.id}`}
+                      href={`/api/admin/orders/${o.id}`}
                       className="px-2 py-1 border rounded text-sm"
                       title="Открыть"
                     >

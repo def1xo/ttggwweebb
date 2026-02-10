@@ -62,14 +62,14 @@ export default function AdminManagersView() {
     setMsg(null);
     try {
       if (typeof apiDefault.addAdminManager === "function") {
-        const res = await apiDefault.addAdminManager({ user_id: userId });
+        const res = await apiDefault.addAdminManager({ telegram_id: userId });
         if (res?.detail || res?.error) throw new Error(res?.detail || res?.error);
       } else {
         const resp = await fetch("/api/admin/managers", {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_id: userId }),
+          body: JSON.stringify({ telegram_id: userId }),
         });
         if (!resp.ok) throw new Error((await resp.text()) || "Ошибка добавления");
       }

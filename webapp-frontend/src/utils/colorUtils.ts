@@ -8,22 +8,22 @@ export type ColorSwatchInfo = {
 };
 
 const COLOR_MAP: Array<{ re: RegExp; hex: string }> = [
-  { re: /\b(black|черн)/i, hex: "#111827" },
-  { re: /\b(white|бел)/i, hex: "#F9FAFB" },
-  { re: /\b(gray|grey|сер)/i, hex: "#9CA3AF" },
-  { re: /\b(red|красн)/i, hex: "#EF4444" },
-  { re: /\b(blue|син)/i, hex: "#3B82F6" },
-  { re: /\b(голуб|sky)/i, hex: "#60A5FA" },
-  { re: /\b(green|зел)/i, hex: "#22C55E" },
-  { re: /\b(yellow|желт)/i, hex: "#EAB308" },
-  { re: /\b(orange|оранж)/i, hex: "#F97316" },
-  { re: /\b(purple|violet|фиолет)/i, hex: "#A855F7" },
-  { re: /\b(pink|роз)/i, hex: "#EC4899" },
-  { re: /\b(brown|корич)/i, hex: "#92400E" },
-  { re: /\b(beige|беж)/i, hex: "#F5F5DC" },
-  { re: /\b(gold|золот)/i, hex: "#D4AF37" },
-  { re: /\b(silver|сереб)/i, hex: "#C0C0C0" },
-  { re: /\b(teal|бирюз)/i, hex: "#14B8A6" },
+  { re: /(black|черн)/i, hex: "#111827" },
+  { re: /(white|бел)/i, hex: "#F9FAFB" },
+  { re: /(gray|grey|сер)/i, hex: "#9CA3AF" },
+  { re: /(red|красн)/i, hex: "#EF4444" },
+  { re: /(blue|син)/i, hex: "#3B82F6" },
+  { re: /(голуб|sky)/i, hex: "#60A5FA" },
+  { re: /(green|зел)/i, hex: "#22C55E" },
+  { re: /(yellow|желт)/i, hex: "#EAB308" },
+  { re: /(orange|оранж)/i, hex: "#F97316" },
+  { re: /(purple|violet|фиолет)/i, hex: "#A855F7" },
+  { re: /(pink|роз)/i, hex: "#EC4899" },
+  { re: /(brown|корич)/i, hex: "#92400E" },
+  { re: /(beige|беж)/i, hex: "#F5F5DC" },
+  { re: /(gold|золот)/i, hex: "#D4AF37" },
+  { re: /(silver|сереб)/i, hex: "#C0C0C0" },
+  { re: /(teal|бирюз)/i, hex: "#14B8A6" },
 ];
 
 function partToHex(part: string): string {

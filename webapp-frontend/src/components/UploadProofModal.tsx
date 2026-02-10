@@ -128,16 +128,16 @@ export default function UploadProofModal({ open, orderId, onClose, onUploaded }:
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={onClose}>
-      <div className="modal" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 560, width: "min(92vw, 560px)" }}>
+      <div className="modal modal-proof" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 560, width: "min(92vw, 560px)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <div style={{ fontWeight: 900, fontSize: 16 }}>📎 Загрузка чека</div>
+          <div style={{ fontWeight: 900, fontSize: 16 }}>📎 Подтверждение чека</div>
           <button className="btn ghost" onClick={onClose} aria-label="Close">
             ✕
           </button>
         </div>
 
         <div className="small-muted" style={{ marginTop: 8 }}>
-          Принимаем <b>jpg/png/webp</b> или <b>pdf</b>. После загрузки заказ уйдёт на модерацию.
+          Принимаем <b>jpg/png/webp</b> или <b>pdf</b>. После подтверждения заказ уйдёт на модерацию.
         </div>
 
         <input
@@ -175,9 +175,6 @@ export default function UploadProofModal({ open, orderId, onClose, onUploaded }:
                   <div style={{ fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis" }}>{file.name}</div>
                   <div style={{ fontSize: 12, color: "var(--muted)" }}>{formatBytes(file.size)}</div>
                 </div>
-                <button className="btn ghost" onClick={(e) => { e.stopPropagation(); setFile(null); }}>
-                  Сбросить
-                </button>
               </div>
 
               {previewUrl ? (
@@ -196,7 +193,7 @@ export default function UploadProofModal({ open, orderId, onClose, onUploaded }:
             </div>
           ) : (
             <div>
-              <div style={{ fontWeight: 900 }}>Нажми или перетащи файл сюда</div>
+              <div style={{ fontWeight: 900 }}>Прикрепи файл чека</div>
               <div className="small-muted" style={{ marginTop: 6 }}>Максимум {formatBytes(MAX_BYTES)}. Лучше скрин из банка/чек одним файлом.</div>
             </div>
           )}
@@ -209,7 +206,7 @@ export default function UploadProofModal({ open, orderId, onClose, onUploaded }:
             Отмена
           </button>
           <button className="btn-primary" style={{ flex: 1 }} onClick={doUpload} disabled={busy || !file}>
-            {busy ? "Загружаю…" : "Загрузить"}
+            {busy ? "Подтверждаем…" : "Подтвердить чек"}
           </button>
         </div>
       </div>
