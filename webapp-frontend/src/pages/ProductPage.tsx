@@ -153,7 +153,7 @@ export default function ProductPage() {
   }
 
   return (
-    <div className="container" style={{ paddingTop: 12 }}>
+    <div className="container" style={{ paddingTop: 12, paddingBottom: 120 }}>
       <div className="card" style={{ padding: 14 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <button className="btn" onClick={() => nav(-1)}>
@@ -167,7 +167,7 @@ export default function ProductPage() {
             className="btn ghost"
             onClick={toggleFav}
             aria-label={isFavorite(Number(product?.id)) ? "Убрать из избранного" : "В избранное"}
-            style={{ width: 44, height: 44, display: "grid", placeItems: "center" }}
+            style={{ width: 44, height: 44, padding: 0, lineHeight: 0, display: "grid", placeItems: "center", overflow: "visible" }}
           >
             <HeartSmall filled={isFavorite(Number(product?.id))} />
           </button>
@@ -198,9 +198,6 @@ export default function ProductPage() {
 
         <div style={{ marginTop: 14, display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
           <div style={{ fontWeight: 900, fontSize: 20 }}>{price.toLocaleString("ru-RU")} ₽</div>
-          <div className="muted" style={{ fontWeight: 700 }}>
-            Оплата и доставка уточняются
-          </div>
         </div>
 
         {product.description ? <p style={{ marginTop: 10, color: "var(--text)" }}>{product.description}</p> : null}
@@ -217,9 +214,14 @@ export default function ProductPage() {
                   type="button"
                   className="chip"
                   onClick={() => setSelectedColor((prev) => (prev === c ? null : c))}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 8,
+                    borderColor: selectedColor === c ? "var(--ring)" : undefined,
+                  }}
                 >
-                  <ColorSwatch colorName={c} size={16} />
+                  <ColorSwatch name={c} size={16} />
                   <span style={{ fontWeight: 800 }}>{c}</span>
                 </button>
               ))}
@@ -252,7 +254,7 @@ export default function ProductPage() {
         ) : null}
 
         <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
-          <button className="btn-primary" onClick={addToCart}>
+          <button className="btn btn-primary product-add-btn" onClick={addToCart}>
             Добавить в корзину
           </button>
           <div className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>

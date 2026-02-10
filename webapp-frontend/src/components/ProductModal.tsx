@@ -5,6 +5,15 @@ import ColorSwatch from "./ColorSwatch";
 type Category = { id: number; name: string };
 type AdminProduct = any;
 
+
+function parseColors(input: string): string[] {
+  const s = (input || "").trim();
+  if (!s) return [];
+  return Array.from(new Set(
+    s.split(/[\n,;/]+/g).map((x) => x.trim()).filter(Boolean)
+  ));
+}
+
 function parseSizes(input: string): string[] {
   const s = (input || "").trim();
   if (!s) return [];
@@ -63,11 +72,13 @@ export default function ProductModal({
   const [description, setDescription] = useState("");
   const [categoryId, setCategoryId] = useState<string>("");
   const [visible, setVisible] = useState(true);
+  const [categoryOpen, setCategoryOpen] = useState(false);
 
   const [sizesInput, setSizesInput] = useState("");
   const parsedSizes = useMemo(() => parseSizes(sizesInput), [sizesInput]);
 
   const [colorInput, setColorInput] = useState("");
+  const parsedColors = useMemo(() => parseColors(colorInput), [colorInput]);
 
   const [files, setFiles] = useState<File[]>([]);
   const filePreviews = useMemo(() => files.map((f) => URL.createObjectURL(f)), [files]);
@@ -97,6 +108,7 @@ export default function ProductModal({
     setSizesInput((p.sizes && Array.isArray(p.sizes) ? p.sizes.join(", ") : "") || "");
     setColorInput((p.colors && Array.isArray(p.colors) ? p.colors.join(" / ") : "") || "");
     setFiles([]);
+    setCategoryOpen(false);
   }, [open, product]);
 
   useEffect(() => {
@@ -108,6 +120,11 @@ export default function ProductModal({
   if (!open) return null;
 
   const existingImages: string[] = (product as any)?.images || ((product as any)?.default_image ? [(product as any).default_image] : []);
+
+  const selectedCategory = useMemo(() => {
+    if (!categoryId) return null;
+    return categories.find((c) => String(c.id) === String(categoryId)) || null;
+  }, [categories, categoryId]);
 
   const submit = async () => {
     if (!title.trim()) {
@@ -124,7 +141,7 @@ export default function ProductModal({
         visible: !!visible,
       };
       if (parsedSizes.length) payload.sizes = parsedSizes.join(",");
-      if (colorInput.trim()) payload.color = colorInput.trim();
+      if (parsedColors.length) payload.color = parsedColors.join(", ");
       if (files.length === 1) payload.image = files[0];
       if (files.length > 1) payload.images = files;
 
@@ -144,8 +161,8 @@ export default function ProductModal({
   };
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" style={{ alignItems: "flex-start", overflowY: "auto", padding: "14px 0" }}>
-      <div className="modal card" style={{ maxWidth: 720, width: "min(92vw, 720px)", maxHeight: "92vh", overflowY: "auto" }}>
+    <div className="modal-overlay" role="dialog" aria-modal="true" style={{ alignItems: "flex-start", overflowY: "auto", padding: "calc(14px + env(safe-area-inset-top)) 0 14px" }}>
+      <div className="modal card product-modal" style={{ maxWidth: 980, width: "min(96vw, 980px)", maxHeight: "94vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>{product ? "Редактирование" : "Новый товар"}</h2>
           <button className="btn ghost" onClick={onClose} aria-label="Close">
@@ -153,27 +170,57 @@ export default function ProductModal({
           </button>
         </div>
 
-        <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+        <div className="product-modal__body" style={{ marginTop: 12, display: "grid", gap: 12 }}>
           <div style={{ display: "grid", gap: 10 }}>
             <label className="small-muted">Название</label>
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Например: Nike Air Max" />
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div className="product-modal__row2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div style={{ display: "grid", gap: 10 }}>
               <label className="small-muted">Цена (₽)</label>
               <input className="input" value={basePrice} onChange={(e) => setBasePrice(e.target.value)} inputMode="decimal" placeholder="3990" />
             </div>
-            <div style={{ display: "grid", gap: 10 }}>
+            <div style={{ display: "grid", gap: 10, position: "relative" }}>
               <label className="small-muted">Категория</label>
-              <select className="input" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-                <option value="">— не выбрано —</option>
-                {categories.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+              <button
+                type="button"
+                className="input"
+                onClick={() => setCategoryOpen((v) => !v)}
+                style={{ textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center" }}
+              >
+                <span>{selectedCategory?.name || "— не выбрано —"}</span>
+                <span style={{ opacity: 0.7 }}>{categoryOpen ? "▴" : "▾"}</span>
+              </button>
+              {categoryOpen ? (
+                <div className="card" style={{ padding: 8, maxHeight: 240, overflowY: "auto" }}>
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    style={{ width: "100%", justifyContent: "flex-start", textAlign: "left" }}
+                    onClick={() => {
+                      setCategoryId("");
+                      setCategoryOpen(false);
+                    }}
+                  >
+                    — не выбрано —
+                  </button>
+                  {categories.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className="btn ghost"
+                      style={{ width: "100%", justifyContent: "flex-start", textAlign: "left", marginTop: 6 }}
+                      onClick={() => {
+                        setCategoryId(String(c.id));
+                        setCategoryOpen(false);
+                      }}
+                    >
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -212,12 +259,21 @@ export default function ProductModal({
           </div>
 
           <div style={{ display: "grid", gap: 10 }}>
-            <label className="small-muted">Цвет</label>
+            <label className="small-muted">Цвета</label>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <input className="input" value={colorInput} onChange={(e) => setColorInput(e.target.value)} placeholder="черно-красный" style={{ flex: 1 }} />
-              <ColorSwatch name={colorInput} size={22} />
+              <input className="input" value={colorInput} onChange={(e) => setColorInput(e.target.value)} placeholder="черный, белый, фиолетовый" style={{ flex: 1 }} />
             </div>
-            <div className="small-muted">Можно писать через дефис/слеш: «черно-красный», «белый/черный» — превью строится автоматически.</div>
+            {parsedColors.length > 0 ? (
+              <div className="chips">
+                {parsedColors.map((c) => (
+                  <span key={c} className="chip" style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <ColorSwatch name={c} size={16} />
+                    {c}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <div className="small-muted">Пиши через запятую или слеш. Мы покажем предпросмотр цветов.</div>
           </div>
 
           <div style={{ display: "grid", gap: 10 }}>
@@ -251,7 +307,7 @@ export default function ProductModal({
             )}
           </div>
 
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div className="product-modal__actions" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <input type="checkbox" checked={visible} onChange={(e) => setVisible(e.target.checked)} />
               <span className="small-muted">Показывать в каталоге</span>

@@ -51,7 +51,7 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default function PaymentDetails() {
+export default function PaymentDetails({ amount }: { amount?: number | null }) {
   const [req, setReq] = useState<Requisites | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -79,10 +79,19 @@ export default function PaymentDetails() {
   const phone = req?.phone || "—";
   const card = req?.card_number || "—";
   const bank = req?.bank_name || "—";
+  const amountNum = Number(amount || 0);
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
       <div style={{ fontWeight: 900, fontSize: 16, marginBottom: 6 }}>Реквизиты для оплаты</div>
+      {amountNum > 0 ? (
+        <div className="card" style={{ padding: 12 }}>
+          <div className="small-muted">Сумма к оплате</div>
+          <div style={{ marginTop: 4, fontSize: 24, fontWeight: 900 }}>
+            {new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(amountNum)}
+          </div>
+        </div>
+      ) : null}
 
       <div className="card" style={{ padding: 12 }}>
         <div style={{ marginBottom: 10 }}>

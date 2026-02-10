@@ -108,7 +108,13 @@ body {
 }
 
 /* background + color */
-body { background: var(--bg); color: var(--panel); }
+body {
+  background:
+    radial-gradient(1200px 420px at 12% -10%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 58%),
+    radial-gradient(980px 360px at 92% -12%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 62%),
+    var(--bg);
+  color: var(--panel);
+}
 
 /* focus visible (accessibility) */
 :focus { outline: none; }
@@ -173,42 +179,49 @@ body { background: var(--bg); color: var(--panel); }
 
 /* card */
 .card {
-  background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.02));
+  background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 4%, transparent), rgba(255,255,255,0.015));
   border-radius: var(--radius);
   padding: 16px;
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklab, var(--accent) 24%, var(--border));
   box-shadow: var(--shadow-strong);
+  backdrop-filter: blur(10px);
 }
 
 /* inputs and buttons */
 .input {
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: transparent;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklab, var(--accent) 22%, var(--border));
+  background: color-mix(in srgb, var(--bg) 82%, var(--panel) 18%);
   color: var(--panel);
   width: 100%;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+.input:focus,
+.input:focus-visible {
+  border-color: color-mix(in oklab, var(--accent) 68%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 14%, transparent);
 }
 select.input { appearance: none; }
 
 .btn {
   padding: 10px 14px;
-  border-radius: 10px;
-  background: var(--panel);
+  border-radius: 12px;
+  background: linear-gradient(180deg, color-mix(in oklab, var(--panel) 92%, transparent), color-mix(in oklab, var(--panel) 80%, var(--bg) 20%));
   color: var(--bg);
-  font-weight: 700;
-  border: 1px solid var(--border);
+  font-weight: 800;
+  border: 1px solid color-mix(in oklab, var(--accent) 26%, var(--border));
   cursor: pointer;
-  transition: transform 110ms ease, box-shadow 110ms ease;
+  transition: transform 110ms ease, box-shadow 110ms ease, filter 110ms ease;
 }
-.btn:hover { transform: translateY(-2px); box-shadow: var(--shadow-soft); }
+.btn:hover { transform: translateY(-2px); box-shadow: var(--shadow-soft); filter: saturate(1.05); }
 .btn:active { transform: translateY(0); }
 
 /* ghost style */
 .btn.ghost {
-  background: transparent;
+  background: color-mix(in srgb, var(--bg) 84%, var(--panel) 16%);
   color: var(--panel);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in oklab, var(--accent) 24%, var(--border));
 }
 
 /* accessible focus */
@@ -398,13 +411,14 @@ select.input { appearance: none; }
   flex-direction: column;
   gap: 10px;
   padding: 0;
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
-  border: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.02));
+  border: 1px solid color-mix(in oklab, var(--accent) 45%, var(--border));
+  background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 14%, transparent), rgba(255,255,255,0.01));
   text-align: left;
   cursor: pointer;
   width: 100%;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
 }
 
 /* image container */
@@ -448,14 +462,8 @@ select.input { appearance: none; }
 /* Two-column layout on larger screens (полная длина — плитки по ширине) */
 @media (min-width: 900px) {
   .categories-grid {
-    grid-template-columns: 1fr 1fr; /* две колонки */
+    grid-template-columns: 1fr;
   }
-  .category-media { height: 220px; }
-}
-
-/* Three columns optional on very wide screens */
-@media (min-width: 1400px) {
-  .categories-grid { grid-template-columns: repeat(3, 1fr); }
 }
 
 /* touch friendly: enlarge tap targets */
@@ -465,10 +473,11 @@ select.input { appearance: none; }
 
 /* small visual polish: hover/focus */
 .category-full-tile:hover,
-.category-full-tile:focus {
-  transform: translateY(-4px);
-  transition: transform 120ms ease;
-  box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+.category-full-tile:focus,
+.category-full-tile:focus-visible {
+  transform: translateY(-2px);
+  border-color: color-mix(in oklab, var(--accent) 70%, var(--border));
+  box-shadow: 0 10px 24px rgba(0,0,0,0.38);
 }
 
 /* images & avatars default */
@@ -1012,8 +1021,8 @@ img, picture { max-width: 100%; height: auto; display: block; }
 .link-pill {
   padding: 8px 12px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: rgba(255,255,255,0.02);
+  border: 1px solid color-mix(in oklab, var(--accent) 26%, var(--border));
+  background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 10%, transparent), rgba(255,255,255,0.02));
   color: var(--panel);
   text-decoration: none;
   font-weight: 800;
@@ -1177,5 +1186,115 @@ img, picture { max-width: 100%; height: auto; display: block; }
     animation: none !important;
     transition: none !important;
     transform: none !important;
+  }
+}
+
+/* Admin product modal usability */
+.product-modal {
+  padding: 18px;
+}
+
+.product-modal__body {
+  padding-bottom: 4px;
+}
+
+.product-modal__row2 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.product-modal__actions {
+  position: sticky;
+  bottom: -2px;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+
+@media (max-width: 760px) {
+  .product-modal {
+    width: calc(100vw - 12px) !important;
+    max-width: calc(100vw - 12px) !important;
+    max-height: 95vh !important;
+    padding: 12px;
+    border-radius: 14px;
+  }
+
+  .product-modal__row2 {
+    grid-template-columns: 1fr;
+  }
+
+  .product-modal__actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .product-modal__actions > div {
+    width: 100%;
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+}
+
+
+.modal-proof {
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(16,16,16,0.98), rgba(10,10,10,0.98));
+}
+
+.modal-proof .screenshot-drop {
+  border-radius: 14px;
+  border-width: 1px;
+  background: rgba(255,255,255,0.02);
+}
+
+
+@media (hover: none) and (pointer: coarse) {
+  .input:focus,
+  .input:focus-visible {
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 12%, transparent);
+  }
+}
+
+
+.product-add-btn {
+  width: 100%;
+  min-height: 48px;
+  font-size: 18px;
+  line-height: 1.2;
+  border-radius: 14px;
+}
+
+.order-check-trigger {
+  width: 100%;
+  min-height: 46px;
+  border-radius: 14px;
+}
+
+.proof-modal__actions .btn {
+  min-height: 46px;
+  border-radius: 14px;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  :focus,
+  :focus-visible {
+    outline: none !important;
+  }
+  .card {
+    backdrop-filter: none;
+  }
+
+  .app-header,
+  .sticky-search,
+  .product-card .badge,
+  .product-card .quick-add button,
+  .bottom-nav-inner {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .bottom-nav-inner {
+    background: rgba(8, 8, 8, 0.96);
   }
 }

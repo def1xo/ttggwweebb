@@ -91,40 +91,18 @@ export default function Catalog() {
             Категорий пока нет
           </div>
         ) : (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
-              gap: 12,
-              marginTop: 6,
-            }}
-          >
+          <div className="categories-grid" style={{ marginTop: 8 }}>
             {filtered.map((c) => (
               <Link
                 key={c.id}
                 to={`/catalog/${c.slug || c.id}`}
-                className="card"
-                style={{
-                  textDecoration: "none",
-                  color: "inherit",
-                  padding: 12,
-                  textAlign: "center",
-                }}
+                className="category-full-tile"
+                style={{ textDecoration: "none", color: "inherit" }}
               >
-                {c.image_url ? (
-                  <img
-                    src={c.image_url}
-                    alt={c.name}
-                    style={{
-                      width: "100%",
-                      height: 100,
-                      objectFit: "cover",
-                      borderRadius: 8,
-                      marginBottom: 8,
-                    }}
-                  />
-                ) : null}
-                <div style={{ fontWeight: 800 }}>{c.name}</div>
+                <div className="category-info">
+                  <div className="category-title">{c.name}</div>
+                  <div className="category-sub">Перейти в категорию</div>
+                </div>
               </Link>
             ))}
           </div>
