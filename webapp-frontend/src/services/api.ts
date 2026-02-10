@@ -935,6 +935,81 @@ export async function approveWithdraw(withdrawId: number, approve = true) {
   }
 }
 
+
+export async function getAdminManagers() {
+  try {
+    const candidates = [
+      "/api/admin/managers",
+      "/admin/managers",
+      "/api/v1/admin/managers",
+      "/v1/admin/managers",
+    ];
+    return await tryCandidates(candidates, { method: "get" });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function addAdminManager(payload: { user_id?: number; telegram_id?: number }) {
+  const uid = Number(payload?.user_id ?? payload?.telegram_id);
+  if (!Number.isFinite(uid) || uid <= 0) {
+    return { detail: "Некорректный user_id" };
+  }
+
+  const candidates = [
+    "/api/admin/managers",
+    "/admin/managers",
+    "/api/v1/admin/managers",
+    "/v1/admin/managers",
+  ];
+
+  const bodies = [
+    { user_id: uid },
+    { telegram_id: uid },
+    { id: uid },
+  ];
+
+  let lastErr: any = null;
+  for (const body of bodies) {
+    try {
+      return await tryCandidates(candidates, { method: "post", data: body });
+    } catch (e: any) {
+      lastErr = e;
+      const st = e?.response?.status;
+      if (st && st !== 400 && st !== 404 && st !== 422) break;
+    }
+  }
+  return handleAxiosError(lastErr || new Error("add manager failed"));
+}
+
+export async function patchAdminManager(id: number, payload: { role?: string; balance?: number }) {
+  try {
+    const candidates = [
+      `/api/admin/managers/${id}`,
+      `/admin/managers/${id}`,
+      `/api/v1/admin/managers/${id}`,
+      `/v1/admin/managers/${id}`,
+    ];
+    return await tryCandidates(candidates, { method: "patch", data: payload });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function deleteAdminManager(id: number) {
+  try {
+    const candidates = [
+      `/api/admin/managers/${id}`,
+      `/admin/managers/${id}`,
+      `/api/v1/admin/managers/${id}`,
+      `/v1/admin/managers/${id}`,
+    ];
+    return await tryCandidates(candidates, { method: "delete" });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function getAdminProducts() {
   try {
     const res = await axiosInstance.get("/api/admin/products");
@@ -1001,13 +1076,47 @@ export async function deleteProduct(id: number) {
   }
 }
 
-export async function createCategory(payload: { name: string; image_url?: string }) {
+export async function createCategory(payload: { name: string }) {
   try {
-    const res = await axiosInstance.post("/api/admin/categories", payload);
+    const body: any = { name: payload?.name || "" };
+    if ((payload as any)?.slug) body.slug = String((payload as any).slug);
+    const res = await axiosInstance.post("/api/admin/categories", body);
+    return res.data;
+  } catch (e) {
+    const status = (e as any)?.response?.status;
+    // Some backends (e.g. FastAPI) validate this endpoint as form-data and respond 422 for JSON.
+    if (status === 415 || status === 422) {
+      try {
+        const form = new FormData();
+        form.append("name", payload?.name || "");
+        if ((payload as any)?.slug) form.append("slug", String((payload as any).slug));
+        const res = await axiosInstance.post("/api/admin/categories", form, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        return res.data;
+      } catch (retryErr) {
+        return handleAxiosError(retryErr);
+      }
+    }
+    return handleAxiosError(e);
+  }
+}
+
+export async function getAdminCategories() {
+  try {
+    const res = await axiosInstance.get("/api/admin/categories");
     return res.data;
   } catch (e) {
     return handleAxiosError(e);
   }
+}
+
+export async function createAdminCategory(payload: { name: string; slug?: string }) {
+  return createCategory(payload);
+}
+
+export async function deleteAdminCategory(id: number) {
+  return deleteCategory(id);
 }
 
 export async function getRecommendations(limitRecent = 10, resultCount = 4) {
@@ -1063,6 +1172,13 @@ api.requestManagerWithdraw = requestManagerWithdraw;
 api.getAssistantDashboard = getAssistantDashboard;
 api.assistantRequestWithdraw = assistantRequestWithdraw;
 api.getAdminOrders = getAdminOrders;
+api.getAdminManagers = getAdminManagers;
+api.addAdminManager = addAdminManager;
+api.patchAdminManager = patchAdminManager;
+api.deleteAdminManager = deleteAdminManager;
+api.getAdminCategories = getAdminCategories;
+api.createAdminCategory = createAdminCategory;
+api.deleteAdminCategory = deleteAdminCategory;
 api.adminLogin = adminLogin;
 api.getAdminStats = getAdminStats;
 api.downloadAdminSalesXlsx = downloadAdminSalesXlsx;
