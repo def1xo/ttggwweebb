@@ -78,7 +78,7 @@ services:
       context: ./webapp-frontend
       dockerfile: Dockerfile
       args:
-        VITE_BACKEND_URL: ${VITE_BACKEND_URL:-/api}
+        VITE_BACKEND_URL: /api
     image: ttggwweebb-frontend:latest
     ports:
       - "3000:80"

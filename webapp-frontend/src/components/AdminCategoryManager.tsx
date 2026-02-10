@@ -8,11 +8,6 @@ function normalizeCategories(data: any): Category[] {
   return arr as Category[];
 }
 
-function normalizeCategories(data: any): Category[] {
-  const arr = Array.isArray(data) ? data : Array.isArray(data?.categories) ? data.categories : Array.isArray(data?.items) ? data.items : [];
-  return arr as Category[];
-}
-
 export default function AdminCategoryManager() {
   const [list, setList] = useState<Category[]>([]);
   const [loading, setLoading] = useState(false);
