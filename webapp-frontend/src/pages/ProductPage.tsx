@@ -119,6 +119,7 @@ export default function ProductPage() {
         await addCartItem(Number(variantId), 1);
         hapticImpact("light");
         notify("Добавлено в корзину", "success");
+        try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
       } catch {
         notify("Не удалось добавить в корзину", "error");
       }
