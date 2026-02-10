@@ -1236,3 +1236,15 @@ img, picture { max-width: 100%; height: auto; display: block; }
     gap: 10px;
   }
 }
+
+
+.modal-proof {
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(16,16,16,0.98), rgba(10,10,10,0.98));
+}
+
+.modal-proof .screenshot-drop {
+  border-radius: 14px;
+  border-width: 1px;
+  background: rgba(255,255,255,0.02);
+}
