@@ -133,13 +133,8 @@ export default function Orders() {
 
   return (
     <div className="container" style={{ paddingTop: 12, paddingBottom: 90 }}>
-      <div className="page-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-        <div style={{ fontWeight: 900, fontSize: 18 }}>Заказы</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Link to="/profile" className="btn">
-            Профиль
-          </Link>
-        </div>
+      <div className="page-head">
+        <div className="page-head__title">Заказы</div>
       </div>
 
       {loading ? <div className="small-muted" style={{ marginTop: 10 }}>Загрузка…</div> : null}
@@ -158,7 +153,6 @@ export default function Orders() {
           </div>
           <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Link to="/catalog" className="btn" style={{ textDecoration: "none" }}>Перейти в каталог</Link>
-            <Link to="/profile" className="btn ghost" style={{ textDecoration: "none" }}>Профиль</Link>
           </div>
         </div>
       ) : null}
