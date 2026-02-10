@@ -1091,7 +1091,7 @@ export async function getAdminCategories() {
       try {
         const form = new FormData();
         form.append("name", payload?.name || "");
-        if (payload?.image_url) form.append("image_url", payload.image_url);
+        if ((payload as any)?.slug) form.append("slug", String((payload as any).slug));
         const res = await axiosInstance.post("/api/admin/categories", form, {
           headers: { "Content-Type": "multipart/form-data" },
         });
@@ -1104,16 +1104,7 @@ export async function getAdminCategories() {
   }
 }
 
-export async function getAdminCategories() {
-  try {
-    const res = await axiosInstance.get("/api/admin/categories");
-    return res.data;
-  } catch (e) {
-    return handleAxiosError(e);
-  }
-}
-
-export async function createAdminCategory(payload: { name: string; slug?: string; image_url?: string }) {
+export async function createAdminCategory(payload: { name: string; slug?: string }) {
   return createCategory(payload);
 }
 
@@ -1174,6 +1165,10 @@ api.requestManagerWithdraw = requestManagerWithdraw;
 api.getAssistantDashboard = getAssistantDashboard;
 api.assistantRequestWithdraw = assistantRequestWithdraw;
 api.getAdminOrders = getAdminOrders;
+api.getAdminManagers = getAdminManagers;
+api.addAdminManager = addAdminManager;
+api.patchAdminManager = patchAdminManager;
+api.deleteAdminManager = deleteAdminManager;
 api.getAdminCategories = getAdminCategories;
 api.createAdminCategory = createAdminCategory;
 api.deleteAdminCategory = deleteAdminCategory;
