@@ -144,8 +144,8 @@ export default function ProductModal({
   };
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" style={{ alignItems: "flex-start", overflowY: "auto", padding: "14px 0" }}>
-      <div className="modal card" style={{ maxWidth: 720, width: "min(92vw, 720px)", maxHeight: "92vh", overflowY: "auto" }}>
+    <div className="modal-overlay" role="dialog" aria-modal="true" style={{ alignItems: "flex-start", overflowY: "auto", padding: "10px 0" }}>
+      <div className="modal card product-modal" style={{ maxWidth: 980, width: "min(96vw, 980px)", maxHeight: "94vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>{product ? "Редактирование" : "Новый товар"}</h2>
           <button className="btn ghost" onClick={onClose} aria-label="Close">
@@ -153,13 +153,13 @@ export default function ProductModal({
           </button>
         </div>
 
-        <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+        <div className="product-modal__body" style={{ marginTop: 12, display: "grid", gap: 12 }}>
           <div style={{ display: "grid", gap: 10 }}>
             <label className="small-muted">Название</label>
             <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Например: Nike Air Max" />
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div className="product-modal__row2" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div style={{ display: "grid", gap: 10 }}>
               <label className="small-muted">Цена (₽)</label>
               <input className="input" value={basePrice} onChange={(e) => setBasePrice(e.target.value)} inputMode="decimal" placeholder="3990" />
@@ -251,7 +251,7 @@ export default function ProductModal({
             )}
           </div>
 
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div className="product-modal__actions" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <input type="checkbox" checked={visible} onChange={(e) => setVisible(e.target.checked)} />
               <span className="small-muted">Показывать в каталоге</span>
