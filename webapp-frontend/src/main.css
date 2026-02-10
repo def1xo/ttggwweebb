@@ -200,7 +200,7 @@ body {
 .input:focus,
 .input:focus-visible {
   border-color: color-mix(in oklab, var(--accent) 68%, var(--border));
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 18%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 14%, transparent);
 }
 select.input { appearance: none; }
 
@@ -1247,4 +1247,12 @@ img, picture { max-width: 100%; height: auto; display: block; }
   border-radius: 14px;
   border-width: 1px;
   background: rgba(255,255,255,0.02);
+}
+
+
+@media (hover: none) and (pointer: coarse) {
+  .input:focus,
+  .input:focus-visible {
+    box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 12%, transparent);
+  }
 }

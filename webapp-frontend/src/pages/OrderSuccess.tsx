@@ -80,7 +80,7 @@ export default function OrderSuccess() {
   const paymentUrl = (order as any)?.payment_screenshot ? String((order as any).payment_screenshot) : null;
 
   return (
-    <div className="container" style={{ paddingTop: 12, paddingBottom: 90 }}>
+    <div className="container" style={{ paddingTop: 12, paddingBottom: 150 }}>
       <div className="card" style={{ padding: 14 }}>
         <div style={{ fontWeight: 900, fontSize: 18 }}>✅ Заказ оформлен</div>
         <div className="small-muted" style={{ marginTop: 6 }}>

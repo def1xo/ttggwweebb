@@ -231,7 +231,7 @@ export default function Cart() {
   }
 
   return (
-    <div className="container" style={{ paddingTop: 12, paddingBottom: 90 }}>
+    <div className="container" style={{ paddingTop: 12, paddingBottom: 150 }}>
       <div className="page-head">
         <div>
           <div className="page-head__title">Корзина</div>

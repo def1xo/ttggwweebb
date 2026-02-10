@@ -264,9 +264,14 @@ function AdminOrdersPanel({ onBack }: { onBack: () => void }) {
                   <td>{o.created_at ? new Date(o.created_at).toLocaleString("ru-RU") : "—"}</td>
                   <td>
                     {o.payment_screenshot ? (
-                      <a href={String(o.payment_screenshot)} target="_blank" rel="noreferrer" className="btn ghost">
-                        Открыть
-                      </a>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <a href={String(o.payment_screenshot)} target="_blank" rel="noreferrer" className="btn ghost">
+                          Открыть
+                        </a>
+                        <a href={String(o.payment_screenshot)} download className="btn ghost">
+                          Скачать
+                        </a>
+                      </div>
                     ) : (
                       "—"
                     )}
@@ -529,6 +534,80 @@ type PromoRow = {
   updated_at?: string | null;
 };
 
+
+function toLocalDateInput(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function toLocalTimeInput(iso?: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function mergeDateTimeToIso(datePart: string, timePart: string): string | null {
+  if (!datePart) return null;
+  const t = timePart || "23:59";
+  const local = new Date(`${datePart}T${t}:00`);
+  if (Number.isNaN(local.getTime())) return null;
+  return local.toISOString();
+}
+
+type DateTimeEditorProps = {
+  value?: string | null;
+  onChange: (nextIso: string | null) => void;
+};
+
+function DateTimeEditor({ value, onChange }: DateTimeEditorProps) {
+  const [datePart, setDatePart] = useState(() => toLocalDateInput(value));
+  const [timePart, setTimePart] = useState(() => toLocalTimeInput(value));
+
+  useEffect(() => {
+    setDatePart(toLocalDateInput(value));
+    setTimePart(toLocalTimeInput(value));
+  }, [value]);
+
+  const apply = (d: string, t: string) => {
+    setDatePart(d);
+    setTimePart(t);
+    onChange(mergeDateTimeToIso(d, t));
+  };
+
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 6 }}>
+        <input
+          className="input"
+          type="date"
+          value={datePart}
+          onChange={(e) => apply(e.target.value, timePart)}
+        />
+        <input
+          className="input"
+          type="time"
+          value={timePart}
+          onChange={(e) => apply(datePart, e.target.value)}
+        />
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <button type="button" className="chip" onClick={() => apply(datePart || toLocalDateInput(new Date().toISOString()), "12:00")}>12:00</button>
+        <button type="button" className="chip" onClick={() => apply(datePart || toLocalDateInput(new Date().toISOString()), "18:00")}>18:00</button>
+        <button type="button" className="chip" onClick={() => apply(datePart || toLocalDateInput(new Date().toISOString()), "23:59")}>23:59</button>
+        <button type="button" className="chip" onClick={() => apply("", "")}>Без срока</button>
+      </div>
+    </div>
+  );
+}
+
 function AdminPromosPanel({ onBack }: { onBack: () => void }) {
   const [items, setItems] = useState<PromoRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -673,7 +752,10 @@ function AdminPromosPanel({ onBack }: { onBack: () => void }) {
           <input className="input" placeholder="CODE" value={createForm.code} onChange={(e) => setCreateForm((p) => ({ ...p, code: e.target.value }))} />
           <input className="input" placeholder="Скидка (например 10)" value={createForm.value} onChange={(e) => setCreateForm((p) => ({ ...p, value: e.target.value }))} />
           <input className="input" placeholder="Usage limit (опц.)" value={createForm.usage_limit} onChange={(e) => setCreateForm((p) => ({ ...p, usage_limit: e.target.value }))} />
-          <input className="input" type="datetime-local" value={createForm.expires_at} onChange={(e) => setCreateForm((p) => ({ ...p, expires_at: e.target.value }))} />
+          <DateTimeEditor
+            value={createForm.expires_at || null}
+            onChange={(nextIso) => setCreateForm((p) => ({ ...p, expires_at: nextIso || "" }))}
+          />
         </div>
         <button className="btn btn-primary" style={{ marginTop: 10 }} onClick={create} disabled={creating}>
           {creating ? "Создаю…" : "Создать"}
@@ -715,14 +797,9 @@ function AdminPromosPanel({ onBack }: { onBack: () => void }) {
                   />
                 </td>
                 <td style={{ minWidth: 220 }}>
-                  <input
-                    className="input"
-                    type="datetime-local"
-                    value={p.expires_at ? new Date(p.expires_at).toISOString().slice(0, 16) : ""}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      updateRow(p.id, { expires_at: v ? new Date(v).toISOString() : null });
-                    }}
+                  <DateTimeEditor
+                    value={p.expires_at || null}
+                    onChange={(nextIso) => updateRow(p.id, { expires_at: nextIso })}
                   />
                 </td>
                 <td style={{ minWidth: 120 }}>
