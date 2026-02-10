@@ -1,5 +1,8 @@
 ﻿FROM node:20-alpine AS builder
 
+ARG VITE_BACKEND_URL=/api
+ENV VITE_BACKEND_URL=$VITE_BACKEND_URL
+
 WORKDIR /app
 
 COPY package*.json ./

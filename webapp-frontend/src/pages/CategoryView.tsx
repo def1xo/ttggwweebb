@@ -15,8 +15,19 @@ export default function CategoryView() {
     (async () => {
       try {
         const cat = await api.get(`/api/categories/${id}`);
-        setCategory((cat as any).data || cat);
-        const prods = await api.get(`/api/products`, { params: { category_id: id } });
+        const catData = (cat as any).data || cat;
+        setCategory(catData);
+
+        const parsedId = Number(id);
+        const categoryId = Number.isFinite(parsedId) && parsedId > 0
+          ? parsedId
+          : Number((catData as any)?.id);
+
+        const params = Number.isFinite(categoryId) && categoryId > 0
+          ? { category_id: categoryId }
+          : undefined;
+
+        const prods = await api.get(`/api/products`, { params });
         const data = (prods as any)?.data ?? prods;
         setProducts(Array.isArray(data) ? data : data?.items || []);
       } catch (e) {
@@ -42,11 +53,13 @@ export default function CategoryView() {
 
   return (
     <div className="container">
-      <div className="app-header">
-        <button onClick={() => nav(-1)} style={{ position: "absolute", left: 12 }}>
-          ←
+      <div className="app-header" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button className="btn btn-secondary" onClick={() => nav(-1)} aria-label="Назад">
+          ← Назад
         </button>
-        <h1 style={{ margin: "0 auto" }}>{category ? category.name : "Категория"}</h1>
+        <h1 style={{ margin: 0, flex: 1, textAlign: "center", paddingRight: 72 }}>
+          {category ? category.name : "Категория"}
+        </h1>
       </div>
 
       <div style={{ marginTop: 12 }}>

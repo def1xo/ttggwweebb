@@ -2,7 +2,6 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import FavoriteRow from "../components/FavoriteRow";
 import { getFavorites } from "../services/api";
-import { hapticSelection } from "../utils/tg";
 
 function parseFavorites(res: any): any[] {
   const data = (res as any)?.data ?? res;
@@ -46,25 +45,6 @@ export default function Favorites() {
     <div className="container" style={{ paddingTop: 12, paddingBottom: 90 }}>
       <div className="page-head">
         <div className="page-head__title">Избранное</div>
-        <div className="page-head__actions">
-          <button
-            className="icon-btn"
-            onClick={() => {
-              try {
-                hapticSelection();
-              } catch {}
-              load();
-            }}
-            disabled={loading}
-            title="Обновить"
-            aria-label="Обновить"
-          >
-            ↻
-          </button>
-          <Link to="/catalog" className="btn ghost" style={{ textDecoration: "none" }}>
-            Каталог
-          </Link>
-        </div>
       </div>
 
       {loading ? (

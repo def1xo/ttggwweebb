@@ -78,6 +78,8 @@ export default function Profile() {
 
   const role = String(me?.role || "user");
   const canSeeRef = role === "admin" || role === "manager" || role === "supermanager" || role === "superadmin";
+  const canEditPromos = role === "admin" || role === "superadmin" || role === "manager" || role === "supermanager" || role === "assistant";
+  const promoManagePath = role === "admin" || role === "superadmin" ? "/admin" : "/manager";
 
   const displayName = useMemo(() => {
     const dn = me?.display_name || me?.name;
@@ -228,19 +230,35 @@ export default function Profile() {
           </div>
         </div>
 
-        {canSeeRef ? (
+        {canSeeRef || canEditPromos ? (
           <div className="card" style={{ padding: 12, marginTop: 12 }}>
-            <div className="small-muted" style={{ marginBottom: 6 }}>
-              Реф. код (видно только админу/менеджеру)
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <div style={{ fontWeight: 900, fontSize: 16 }}>{me?.promo_code ? String(me.promo_code) : "—"}</div>
-              {me?.promo_code ? (
-                <button className="btn btn-secondary btn-sm" onClick={copyRef} type="button">
-                  Скопировать
-                </button>
-              ) : null}
-            </div>
+            {canSeeRef ? (
+              <>
+                <div className="small-muted" style={{ marginBottom: 6 }}>
+                  Реф. код (видно только админу/менеджеру)
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ fontWeight: 900, fontSize: 16 }}>{me?.promo_code ? String(me.promo_code) : "—"}</div>
+                  {me?.promo_code ? (
+                    <button className="btn btn-secondary btn-sm" onClick={copyRef} type="button">
+                      Скопировать
+                    </button>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <div className="small-muted" style={{ marginBottom: 6 }}>
+                Управление промокодами
+              </div>
+            )}
+
+            {canEditPromos ? (
+              <div style={{ marginTop: canSeeRef ? 8 : 0 }}>
+                <Link to={promoManagePath} className="btn btn-sm" style={{ textDecoration: "none" }}>
+                  Изменить промокоды
+                </Link>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

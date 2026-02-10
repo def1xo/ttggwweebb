@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import axiosInstance from "../services/api";
+import api from "../services/api";
 import ColorSwatch from "./ColorSwatch";
 
 type Category = { id: number; name: string };
@@ -76,9 +76,10 @@ export default function ProductModal({
     if (!open) return;
     (async () => {
       try {
-        const r = await axiosInstance.get("/api/categories");
-        const data = (r as any).data ?? r;
-        setCategories(Array.isArray(data) ? data : (data?.items || []));
+        const r = await api.get("/api/categories");
+        const data = (r as any)?.data ?? r;
+        const list = Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : Array.isArray(data?.categories) ? data.categories : [];
+        setCategories(list);
       } catch (e) {
         setCategories([]);
       }
@@ -115,27 +116,24 @@ export default function ProductModal({
     }
     setSaving(true);
     try {
-      const fd = new FormData();
-      fd.append("title", title.trim());
-      if (basePrice !== "") fd.append("base_price", String(basePrice));
-      if (description.trim()) fd.append("description", description.trim());
-      if (categoryId) fd.append("category_id", categoryId);
-      fd.append("visible", String(!!visible));
+      const payload: any = {
+        title: title.trim(),
+        base_price: basePrice === "" ? 0 : Number(basePrice),
+        description: description.trim() || undefined,
+        category_id: categoryId ? Number(categoryId) : undefined,
+        visible: !!visible,
+      };
+      if (parsedSizes.length) payload.sizes = parsedSizes.join(",");
+      if (colorInput.trim()) payload.color = colorInput.trim();
+      if (files.length === 1) payload.image = files[0];
+      if (files.length > 1) payload.images = files;
 
-      if (parsedSizes.length) fd.append("sizes", parsedSizes.join(","));
-      if (colorInput.trim()) fd.append("color", colorInput.trim());
+      const res = product?.id
+        ? await api.updateProduct(product.id, payload)
+        : await api.createProduct(payload);
 
-      // multiple images
-      for (const f of files) fd.append("images", f);
-
-      if (product?.id) {
-        await axiosInstance.put(`/api/admin/products/${product.id}`, fd, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
-      } else {
-        await axiosInstance.post(`/api/admin/products`, fd, {
-          headers: { "Content-Type": "multipart/form-data" },
-        });
+      if ((res as any)?.detail || (res as any)?.error) {
+        throw new Error((res as any)?.detail || (res as any)?.error || "Ошибка сохранения");
       }
       onSaved();
     } catch (e: any) {
