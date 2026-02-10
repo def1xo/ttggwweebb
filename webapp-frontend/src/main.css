@@ -318,7 +318,7 @@ select.input { appearance: none; }
 }
 .bottom-nav a:active { transform: scale(0.96); }
 .bottom-nav a.active { transform: translateY(-1px); color: var(--panel); }
-.bottom-nav a.active { background: color-mix(in srgb, var(--panel) 14%, transparent); }
+.bottom-nav a.active { background: transparent; }
 
 .bottom-nav-indicator {
   position: absolute;
@@ -326,7 +326,7 @@ select.input { appearance: none; }
   bottom: 4px;
   height: 3px;
   border-radius: 99px;
-  background: color-mix(in srgb, var(--panel) 76%, transparent);
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
   opacity: 0.85;
   transition: transform .22s ease, width .22s ease, opacity .22s ease;
   pointer-events: none;
@@ -841,6 +841,7 @@ img, picture { max-width: 100%; height: auto; display: block; }
 }
 @media (hover: none) {
   .product-card:hover { transform: none; }
+  .product-card:active { transform: none; }
 }
 .product-card:active { transform: scale(0.99); }
 

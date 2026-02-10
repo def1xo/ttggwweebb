@@ -4,7 +4,7 @@
 // Restores the "nice" cart layout and keeps payment requisites hidden until
 // the user presses "Оформить заказ" (next step: OrderSuccess).
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   applyCartPromo,
@@ -85,12 +85,16 @@ export default function Cart() {
   const [note, setNote] = useState("");
   const [placing, setPlacing] = useState(false);
 
+  const reqIdRef = useRef(0);
+
   async function load(silent = false) {
+    const reqId = ++reqIdRef.current;
     if (silent) setRefreshing(true);
     else setLoading(true);
     setError(null);
     try {
       const res: any = await getCart();
+      if (reqId !== reqIdRef.current) return;
       const data = (res as any)?.data ?? res;
       if ((data as any)?.status && (data as any)?.status >= 400) {
         setError((data as any)?.detail || "Не удалось загрузить корзину");
@@ -99,9 +103,11 @@ export default function Cart() {
         setCart(data as CartOut);
       }
     } catch (e: any) {
+      if (reqId !== reqIdRef.current) return;
       setCart(null);
       setError(e?.message || "Не удалось загрузить корзину");
     } finally {
+      if (reqId !== reqIdRef.current) return;
       if (silent) setRefreshing(false);
       else setLoading(false);
     }
@@ -114,12 +120,17 @@ export default function Cart() {
       load(true);
     };
 
-    window.addEventListener("focus", onCartChanged);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") load(true);
+    };
+
     window.addEventListener("cart:updated", onCartChanged as EventListener);
+    document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
-      window.removeEventListener("focus", onCartChanged);
+      reqIdRef.current += 1;
       window.removeEventListener("cart:updated", onCartChanged as EventListener);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
