@@ -3,6 +3,11 @@ import apiDefault from "../services/api";
 
 type Category = { id: number; name: string; slug?: string; image_url?: string };
 
+function normalizeCategories(data: any): Category[] {
+  const arr = Array.isArray(data) ? data : Array.isArray(data?.categories) ? data.categories : Array.isArray(data?.items) ? data.items : [];
+  return arr as Category[];
+}
+
 export default function AdminCategoryManager() {
   const [list, setList] = useState<Category[]>([]);
   const [loading, setLoading] = useState(false);
@@ -25,8 +30,12 @@ export default function AdminCategoryManager() {
     try {
       if (typeof apiDefault.getAdminCategories === "function") {
         const res = await apiDefault.getAdminCategories();
-        const arr = res?.categories ?? res ?? [];
-        setList(arr);
+        if (res?.detail || res?.error) {
+          setErr(res?.detail || res?.error || "Ошибка загрузки категорий");
+          setList([]);
+          return;
+        }
+        setList(normalizeCategories(res));
       } else {
         const tryUrls = ["/api/admin/categories", "/admin/categories", "/api/categories", "/categories"];
         let data: any = null;
@@ -39,8 +48,7 @@ export default function AdminCategoryManager() {
             }
           } catch {}
         }
-        const arr = Array.isArray(data) ? data : data?.items ?? data?.categories ?? [];
-        setList(arr);
+        setList(normalizeCategories(data));
       }
     } catch (e: any) {
       setErr(e?.message || "Ошибка загрузки категорий");

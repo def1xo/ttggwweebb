@@ -1006,8 +1006,40 @@ export async function createCategory(payload: { name: string; image_url?: string
     const res = await axiosInstance.post("/api/admin/categories", payload);
     return res.data;
   } catch (e) {
+    const status = (e as any)?.response?.status;
+    // Some backends (e.g. FastAPI) validate this endpoint as form-data and respond 422 for JSON.
+    if (status === 415 || status === 422) {
+      try {
+        const form = new FormData();
+        form.append("name", payload?.name || "");
+        if (payload?.image_url) form.append("image_url", payload.image_url);
+        const res = await axiosInstance.post("/api/admin/categories", form, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        return res.data;
+      } catch (retryErr) {
+        return handleAxiosError(retryErr);
+      }
+    }
     return handleAxiosError(e);
   }
+}
+
+export async function getAdminCategories() {
+  try {
+    const res = await axiosInstance.get("/api/admin/categories");
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function createAdminCategory(payload: { name: string; slug?: string; image_url?: string }) {
+  return createCategory(payload);
+}
+
+export async function deleteAdminCategory(id: number) {
+  return deleteCategory(id);
 }
 
 export async function getRecommendations(limitRecent = 10, resultCount = 4) {
@@ -1063,6 +1095,9 @@ api.requestManagerWithdraw = requestManagerWithdraw;
 api.getAssistantDashboard = getAssistantDashboard;
 api.assistantRequestWithdraw = assistantRequestWithdraw;
 api.getAdminOrders = getAdminOrders;
+api.getAdminCategories = getAdminCategories;
+api.createAdminCategory = createAdminCategory;
+api.deleteAdminCategory = deleteAdminCategory;
 api.adminLogin = adminLogin;
 api.getAdminStats = getAdminStats;
 api.downloadAdminSalesXlsx = downloadAdminSalesXlsx;
