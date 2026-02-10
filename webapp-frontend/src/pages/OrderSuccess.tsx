@@ -139,15 +139,15 @@ export default function OrderSuccess() {
         ) : null}
 
         <button
-          className="btn-primary"
+          className="btn btn-primary order-check-trigger"
           style={{ width: "100%", marginTop: 12 }}
           onClick={() => setProofOpen(true)}
           disabled={!canUpload}
         >
-          {canUpload ? "Подтвердить чек" : "Чек уже принят"}
+          {canUpload ? "Открыть загрузку чека" : "Чек уже принят"}
         </button>
 
-        <div style={{ marginTop: 12, display: "flex", gap: 10, justifyContent: "space-between" }}>
+        <div style={{ marginTop: 12, display: "flex", gap: 10, justifyContent: "space-between", flexWrap: "wrap" }}>
           <Link to="/profile" className="btn ghost">Профиль / Заказы</Link>
           <Link to="/catalog" className="btn">В магазин</Link>
         </div>

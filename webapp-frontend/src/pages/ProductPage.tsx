@@ -254,7 +254,7 @@ export default function ProductPage() {
         ) : null}
 
         <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
-          <button className="btn-primary" onClick={addToCart}>
+          <button className="btn btn-primary product-add-btn" onClick={addToCart}>
             Добавить в корзину
           </button>
           <div className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>

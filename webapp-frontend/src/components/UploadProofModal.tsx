@@ -201,11 +201,11 @@ export default function UploadProofModal({ open, orderId, onClose, onUploaded }:
 
         {error ? <div style={{ color: "salmon", marginTop: 10 }}>{error}</div> : null}
 
-        <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+        <div className="proof-modal__actions" style={{ display: "flex", gap: 10, marginTop: 12 }}>
           <button className="btn" style={{ flex: 1 }} onClick={onClose} disabled={busy}>
             Отмена
           </button>
-          <button className="btn-primary" style={{ flex: 1 }} onClick={doUpload} disabled={busy || !file}>
+          <button className="btn btn-primary" style={{ flex: 1 }} onClick={doUpload} disabled={busy || !file}>
             {busy ? "Подтверждаем…" : "Подтвердить чек"}
           </button>
         </div>

@@ -141,7 +141,7 @@ export default function ProductModal({
         visible: !!visible,
       };
       if (parsedSizes.length) payload.sizes = parsedSizes.join(",");
-      if (parsedColors.length) payload.color = parsedColors[0];
+      if (parsedColors.length) payload.color = parsedColors.join(", ");
       if (files.length === 1) payload.image = files[0];
       if (files.length > 1) payload.images = files;
 

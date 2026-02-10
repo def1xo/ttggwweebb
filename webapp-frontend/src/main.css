@@ -1256,3 +1256,32 @@ img, picture { max-width: 100%; height: auto; display: block; }
     box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 12%, transparent);
   }
 }
+
+
+.product-add-btn {
+  width: 100%;
+  min-height: 48px;
+  font-size: 20px;
+  border-radius: 14px;
+}
+
+.order-check-trigger {
+  width: 100%;
+  min-height: 46px;
+  border-radius: 14px;
+}
+
+.proof-modal__actions .btn {
+  min-height: 46px;
+  border-radius: 14px;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  :focus,
+  :focus-visible {
+    outline: none !important;
+  }
+  .card {
+    backdrop-filter: none;
+  }
+}
