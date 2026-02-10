@@ -84,6 +84,7 @@ export default function ProductCard({ product }: Props) {
       await addCartItem(Number(variantId), 1);
       hapticImpact("light");
       notify("Добавлено в корзину", "success");
+      try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
     } catch {
       notify("Не удалось добавить в корзину", "error");
     }
@@ -147,7 +148,7 @@ export default function ProductCard({ product }: Props) {
               </div>
               <div style={{ display: "flex", gap: 6 }}>
                 {meta.colors.slice(0, 2).map((c) => (
-                  <ColorSwatch key={c} colorName={c} size={14} />
+                  <ColorSwatch key={c} name={c} size={14} />
                 ))}
               </div>
             </div>
