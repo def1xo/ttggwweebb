@@ -1,0 +1,95 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - appnet
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    networks:
+      - appnet
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: ttggwweebb-backend:latest
+    env_file:
+      - .env.production
+    environment:
+      # ensure backend sees DATABASE_URL pointing to docker db
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ./backend/uploads:/app/uploads   # persistent uploads (cheks, product images)
+    ports:
+      - "8000:8000"
+    networks:
+      - appnet
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    image: ttggwweebb-backend:latest
+    depends_on:
+      - redis
+      - db
+    env_file:
+      - .env.production
+    command: ["celery", "-A", "app.tasks", "worker", "--loglevel=info"]
+    volumes:
+      - ./backend/uploads:/app/uploads
+    networks:
+      - appnet
+
+  bot:
+    build:
+      context: ./bot/telegraf_bot
+      dockerfile: Dockerfile
+    image: ttggwweebb-bot:latest
+    env_file:
+      - .env.production
+    environment:
+      # Bot posts channel updates to backend using internal Docker DNS name
+      - BACKEND_URL=http://backend:8000/api/importer/channel_post
+    depends_on:
+      - backend
+    networks:
+      - appnet
+
+  frontend:
+    build:
+      context: ./webapp-frontend
+      dockerfile: Dockerfile
+    image: ttggwweebb-frontend:latest
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - appnet
+
+volumes:
+  db_data:
+
+networks:
+  appnet:
+    driver: bridge

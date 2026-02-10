@@ -1,0 +1,24 @@
+{$DOMAIN} {
+  tls {$CADDY_EMAIL}
+  encode gzip
+
+  # API и webhook проксируются к backend
+  @api path_regexp ^/api/(.*)
+  handle @api {
+    reverse_proxy backend:8000
+  }
+
+  @webhook path /telegram/webhook*
+  handle @webhook {
+    reverse_proxy backend:8000
+  }
+
+  # все остальное — фронтенд
+  handle {
+    reverse_proxy frontend:80
+  }
+
+  log {
+    output file /var/log/caddy/access.log
+  }
+}
