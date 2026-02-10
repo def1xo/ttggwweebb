@@ -26,7 +26,7 @@ export default function AdminManagersView() {
     try {
       if (typeof apiDefault.getAdminManagers === "function") {
         const res = await apiDefault.getAdminManagers();
-        const arr = res?.managers ?? res ?? [];
+        const arr = Array.isArray(res) ? res : Array.isArray(res?.managers) ? res.managers : Array.isArray(res?.items) ? res.items : [];
         setList(arr);
       } else {
         const tryUrls = ["/api/admin/managers", "/admin/managers", "/api/managers"];
@@ -56,7 +56,8 @@ export default function AdminManagersView() {
     setErr(null);
     try {
       if (typeof apiDefault.addAdminManager === "function") {
-        await apiDefault.addAdminManager({ user_id: Number(newId) });
+        const res = await apiDefault.addAdminManager({ user_id: Number(newId) });
+        if (res?.detail || res?.error) throw new Error(res?.detail || res?.error);
       } else {
         await fetch("/api/admin/managers", {
           method: "POST",

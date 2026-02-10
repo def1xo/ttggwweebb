@@ -78,6 +78,8 @@ export default function Profile() {
 
   const role = String(me?.role || "user");
   const canSeeRef = role === "admin" || role === "manager" || role === "supermanager" || role === "superadmin";
+  const canEditPromos = role === "admin" || role === "superadmin" || role === "manager" || role === "supermanager" || role === "assistant";
+  const promoManagePath = role === "admin" || role === "superadmin" ? "/admin" : "/manager";
 
   const displayName = useMemo(() => {
     const dn = me?.display_name || me?.name;
@@ -239,6 +241,11 @@ export default function Profile() {
                 <button className="btn btn-secondary btn-sm" onClick={copyRef} type="button">
                   Скопировать
                 </button>
+              ) : null}
+              {canEditPromos ? (
+                <Link to={promoManagePath} className="btn btn-sm" style={{ textDecoration: "none" }}>
+                  Изменить промокоды
+                </Link>
               ) : null}
             </div>
           </div>
