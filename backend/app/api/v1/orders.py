@@ -30,6 +30,7 @@ def _to_decimal(v) -> Decimal:
 
 FREE_DELIVERY_FROM = Decimal("5000")
 DELIVERY_PRICE = Decimal("449")
+REFERRAL_DISCOUNT_PERCENT = Decimal("5")
 
 
 def _promo_value_to_percent(val: Decimal) -> Decimal:
@@ -185,6 +186,15 @@ def create_order(
         else:
             # if promo is invalid for discount, ignore
             promo_code_str = None
+
+
+    # Apply referral promo discount (5%) if no special promo is active
+    if discount == Decimal("0") and referral_code:
+        owner = _resolve_referral(db, referral_code)
+        if owner and owner.id != user.id:
+            promo_discount_percent = REFERRAL_DISCOUNT_PERCENT
+            discount = (subtotal * promo_discount_percent / Decimal("100")).quantize(Decimal("0.01"))
+            promo_kind = "referral"
 
     delivery_price = Decimal("0")
     if payload.delivery_address and subtotal < FREE_DELIVERY_FROM:

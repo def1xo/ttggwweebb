@@ -23,6 +23,28 @@ def _money(v: Optional[str], default: Decimal = Decimal("0.00")) -> Decimal:
         return default
 
 
+def _parse_colors(raw: Optional[str]) -> List[str]:
+    if not raw:
+        return []
+    src = str(raw).strip()
+    if not src:
+        return []
+    vals: List[str] = []
+    for part in src.replace("\n", ",").replace("/", ",").replace(";", ",").split(","):
+        name = str(part).strip()
+        if name:
+            vals.append(name[:128])
+    uniq: List[str] = []
+    seen = set()
+    for v in vals:
+        k = v.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(v)
+    return uniq
+
+
 def _parse_sizes(raw: Optional[str]) -> List[str]:
     """Parse sizes from admin input.
 
@@ -219,24 +241,31 @@ def create_product(
 
     # variants creation: sizes + optional color
     size_list = _parse_sizes(sizes)
-    color_obj = None
+    color_objs: List[models.Color] = []
     if color and str(color).strip():
         try:
-            color_obj = _get_or_create_color(db, str(color))
+            for c_name in _parse_colors(str(color)):
+                color_objs.append(_get_or_create_color(db, c_name))
         except Exception as exc:
             raise HTTPException(400, detail=f"invalid color: {exc}")
 
     if not size_list:
-        v = models.ProductVariant(product_id=p.id, price=p.base_price, color_id=(color_obj.id if color_obj else None))
-        db.add(v)
+        if color_objs:
+            for c_obj in color_objs:
+                db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=c_obj.id))
+        else:
+            db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=None))
     else:
         for sz in size_list:
             try:
                 s_obj = _get_or_create_size(db, sz)
             except Exception as exc:
                 raise HTTPException(400, detail=f"invalid size: {exc}")
-            v = models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=(color_obj.id if color_obj else None))
-            db.add(v)
+            if color_objs:
+                for c_obj in color_objs:
+                    db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=c_obj.id))
+            else:
+                db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=None))
 
     db.commit()
     db.refresh(p)
@@ -250,7 +279,7 @@ def create_product(
             "default_image": p.default_image,
             "category_id": p.category_id,
             "sizes": size_list,
-            "colors": [color_obj.name] if color_obj else [],
+            "colors": [c.name for c in color_objs],
         },
     }
 
@@ -338,9 +367,10 @@ def update_product(
     # variants adjustments
     if sizes is not None or color is not None:
         size_list = _parse_sizes(sizes) if sizes is not None else []
-        color_obj = None
+        color_objs: List[models.Color] = []
         if color is not None and str(color).strip():
-            color_obj = _get_or_create_color(db, str(color))
+            for c_name in _parse_colors(str(color)):
+                color_objs.append(_get_or_create_color(db, c_name))
 
         if p.variants is None:
             p.variants = []
@@ -360,23 +390,31 @@ def update_product(
                 s_obj = _get_or_create_size(db, sz)
                 v = existing_by_size.get(s_obj.name)
                 if v:
-                    if color_obj is not None:
-                        v.color_id = color_obj.id
+                    if color_objs:
+                        v.color_id = color_objs[0].id
                     # keep stock, sync price
                     v.price = p.base_price
                     db.add(v)
                 else:
-                    db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=(color_obj.id if color_obj else None)))
+                    if color_objs:
+                        for c_obj in color_objs:
+                            db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=c_obj.id))
+                    else:
+                        db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=None))
         else:
             # no size list supplied: at least update first variant color/price
             if p.variants:
                 v0 = p.variants[0]
                 v0.price = p.base_price
-                if color_obj is not None:
-                    v0.color_id = color_obj.id
+                if color_objs:
+                    v0.color_id = color_objs[0].id
                 db.add(v0)
             else:
-                db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=(color_obj.id if color_obj else None)))
+                if color_objs:
+                    for c_obj in color_objs:
+                        db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=c_obj.id))
+                else:
+                    db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=None))
 
     db.add(p)
     db.commit()

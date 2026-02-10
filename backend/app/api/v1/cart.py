@@ -14,6 +14,7 @@ from app.db import models
 router = APIRouter(prefix="/cart", tags=["cart"])
 
 PROMO_TTL_HOURS = 2
+REFERRAL_DISCOUNT_PERCENT = Decimal("5")
 
 
 # ----- schemas -----
@@ -244,7 +245,7 @@ def _calc_cart(db: Session, user: models.User) -> CartOut:
                     expires_at=resv.expires_at,
                 )
 
-    # referral promo (no discount)
+    # referral promo (fixed discount)
     if not promo_out and st.referral_code:
         owner = _resolve_referral_owner(db, st.referral_code)
         if not owner:
@@ -252,7 +253,9 @@ def _calc_cart(db: Session, user: models.User) -> CartOut:
             db.add(st)
             db.flush()
         else:
-            promo_out = PromoOut(code=st.referral_code, kind="referral")
+            percent = REFERRAL_DISCOUNT_PERCENT
+            discount = (subtotal * percent / Decimal("100")).quantize(Decimal("0.01"))
+            promo_out = PromoOut(code=st.referral_code, kind="referral", discount_percent=percent, discount_amount=discount)
 
     total = (subtotal - discount).quantize(Decimal("0.01"))
     return CartOut(items=out_items, subtotal=subtotal.quantize(Decimal("0.01")), discount=discount, total=total, promo=promo_out)
