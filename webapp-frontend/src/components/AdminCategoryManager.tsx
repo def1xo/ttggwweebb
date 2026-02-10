@@ -1,7 +1,12 @@
 import React, { useEffect, useState } from "react";
 import apiDefault from "../services/api";
 
-type Category = { id: number; name: string; slug?: string; image_url?: string };
+type Category = { id: number; name: string; slug?: string };
+
+function normalizeCategories(data: any): Category[] {
+  const arr = Array.isArray(data) ? data : Array.isArray(data?.categories) ? data.categories : Array.isArray(data?.items) ? data.items : [];
+  return arr as Category[];
+}
 
 function normalizeCategories(data: any): Category[] {
   const arr = Array.isArray(data) ? data : Array.isArray(data?.categories) ? data.categories : Array.isArray(data?.items) ? data.items : [];
@@ -123,16 +128,15 @@ export default function AdminCategoryManager() {
             <button className="btn" type="submit" disabled={loading}>Создать</button>
           </form>
 
-          <ul style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 10 }}>
             {list.map((c) => (
-              <li key={c.id} style={{ marginBottom: 8 }}>
-                <strong>{c.name}</strong> — <span className="small-muted">{c.slug ?? c.image_url ?? ""}</span>
-                <div style={{ display: "inline-block", marginLeft: 8 }}>
-                  <button className="btn ghost" onClick={() => onDelete(c.id)}>Удалить</button>
-                </div>
-              </li>
+              <div key={c.id} className="card" style={{ padding: 12 }}>
+                <div style={{ fontWeight: 800, marginBottom: 4 }}>{c.name}</div>
+                <div className="small-muted" style={{ minHeight: 18 }}>{c.slug || "—"}</div>
+                <button className="btn ghost" style={{ marginTop: 10 }} onClick={() => onDelete(c.id)}>Удалить</button>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
       </div>
     </div>
