@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, getAdminStats } from "../services/api";
+import api, { adminLogin, getAdminAnalyticsFunnel, getAdminStats } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -21,6 +21,22 @@ type AdminStats = {
   range: RangeKey;
   series: SeriesPoint[];
   month: MonthSummary;
+};
+
+type AnalyticsFunnel = {
+  days: number;
+  counts: {
+    view_product: number;
+    add_to_cart: number;
+    begin_checkout: number;
+    purchase: number;
+  };
+  conversion: {
+    view_to_cart_percent: number;
+    cart_to_checkout_percent: number;
+    checkout_to_purchase_percent: number;
+    view_to_purchase_percent: number;
+  };
 };
 
 type ViewKey =
@@ -837,6 +853,8 @@ export default function AdminDashboard() {
   const [loadingStats, setLoadingStats] = useState(false);
   const [statsErr, setStatsErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<SeriesPoint | null>(null);
+  const [funnel, setFunnel] = useState<AnalyticsFunnel | null>(null);
+  const [funnelErr, setFunnelErr] = useState<string | null>(null);
   const [view, setView] = useState<ViewKey>("dashboard");
 
   const loadStats = async (r: RangeKey) => {
@@ -866,9 +884,29 @@ export default function AdminDashboard() {
     }
   };
 
+  const loadFunnel = async () => {
+    setFunnelErr(null);
+    try {
+      const res: any = await getAdminAnalyticsFunnel(30);
+      if (res?.counts && res?.conversion) {
+        setFunnel(res as AnalyticsFunnel);
+        return;
+      }
+      if (res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
+        return;
+      }
+      setFunnelErr(res?.detail || "Не удалось загрузить воронку");
+    } catch (e: any) {
+      setFunnelErr(e?.message || "Не удалось загрузить воронку");
+    }
+  };
+
   useEffect(() => {
     if (!authed) return;
     loadStats(range);
+    loadFunnel();
   }, [authed, range]);
 
   const navButtons = useMemo(
@@ -1027,6 +1065,21 @@ export default function AdminDashboard() {
         <div className="card" style={{ padding: 12 }}>
           <div style={{ color: "var(--muted)", fontSize: 12 }}>Маржа (оценка)</div>
           <div style={{ fontSize: 20, fontWeight: 800 }}>{(stats?.month.margin_percent ?? 0).toFixed(1)}%</div>
+        </div>
+      </div>
+
+
+      <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Воронка продаж (30 дней)</div>
+        {funnelErr ? <div style={{ color: "#ff8c8c", marginBottom: 8 }}>{funnelErr}</div> : null}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Просмотры товара</div><div style={{ fontWeight: 800 }}>{funnel?.counts.view_product ?? 0}</div></div>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Добавления в корзину</div><div style={{ fontWeight: 800 }}>{funnel?.counts.add_to_cart ?? 0}</div></div>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Начали оформление</div><div style={{ fontWeight: 800 }}>{funnel?.counts.begin_checkout ?? 0}</div></div>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Покупки</div><div style={{ fontWeight: 800 }}>{funnel?.counts.purchase ?? 0}</div></div>
+        </div>
+        <div style={{ marginTop: 10, color: "var(--muted)", fontSize: 13 }}>
+          CR view→cart: <b>{(funnel?.conversion.view_to_cart_percent ?? 0).toFixed(2)}%</b> • cart→checkout: <b>{(funnel?.conversion.cart_to_checkout_percent ?? 0).toFixed(2)}%</b> • checkout→purchase: <b>{(funnel?.conversion.checkout_to_purchase_percent ?? 0).toFixed(2)}%</b>
         </div>
       </div>
 

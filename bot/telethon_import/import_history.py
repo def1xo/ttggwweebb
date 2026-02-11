@@ -27,6 +27,7 @@ API_HASH = os.getenv('TELETHON_API_HASH')
 SESSION = os.getenv('TELETHON_SESSION', 'importer_session')
 CHANNEL = os.getenv('CHANNEL_USERNAME')  # @channel or channel id
 BACKEND_URL = os.getenv('BACKEND_URL')
+IMPORTER_API_KEY = os.getenv('IMPORTER_API_KEY') or os.getenv('BACKEND_IMPORTER_KEY')
 S3_BUCKET = os.getenv('S3_BUCKET')
 S3_REGION = os.getenv('S3_REGION', 'us-east-1')
 
@@ -39,8 +40,43 @@ if not BACKEND_URL:
 if not S3_BUCKET:
     logger.warning('S3_BUCKET is not set; telethon_import will skip uploading media to S3. Set S3_BUCKET to enable.')
     # sys.exit(1)
-
 s3 = boto3.client('s3', region_name=S3_REGION)
+
+
+def derive_backend_base(url: str) -> str:
+    u = (url or '').strip().rstrip('/')
+    if not u:
+        return ''
+    idx = u.find('/api/')
+    if idx >= 0:
+        return u[:idx]
+    return u
+
+
+def build_importer_candidates(url: str):
+    raw = (url or '').strip().rstrip('/')
+    if not raw:
+        return []
+    if raw.endswith('/importer/channel_post'):
+        return [raw]
+    base = derive_backend_base(raw)
+    cands = [
+        f'{base}/api/v1/importer/channel_post',
+        f'{base}/api/importer/channel_post',
+        f'{base}/importer/channel_post',
+    ]
+    if '/api/' in raw:
+        cands.insert(0, raw)
+    # dedupe preserve order
+    out = []
+    for c in cands:
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
+IMPORTER_CANDIDATES = build_importer_candidates(BACKEND_URL)
+logger.info('Importer endpoints: %s', ', '.join(IMPORTER_CANDIDATES))
 
 client = TelegramClient(SESSION, API_ID, API_HASH)
 
@@ -90,9 +126,22 @@ async def process_message(msg):
     }
 
     try:
-        r = requests.post(BACKEND_URL, json=payload, timeout=20)
-        r.raise_for_status()
-        logger.info('Imported message %s -> response %s', message_id, r.status_code)
+        headers = {'X-Importer-Key': IMPORTER_API_KEY} if IMPORTER_API_KEY else None
+        last_exc = None
+        ok = False
+        for endpoint in IMPORTER_CANDIDATES:
+            try:
+                r = requests.post(endpoint, json=payload, timeout=20, headers=headers)
+                if r.status_code in (404, 405):
+                    continue
+                r.raise_for_status()
+                logger.info('Imported message %s -> %s (%s)', message_id, endpoint, r.status_code)
+                ok = True
+                break
+            except Exception as e:
+                last_exc = e
+        if not ok:
+            raise last_exc or RuntimeError('No importer endpoint accepted request')
     except Exception as e:
         logger.exception('Failed to POST to backend for message %s: %s', message_id, e)
 
