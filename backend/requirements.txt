@@ -29,3 +29,5 @@ requests==2.31.0
 setuptools>=59.6.0
 wheel
 openpyxl==3.1.5
+
+Pillow==10.4.0

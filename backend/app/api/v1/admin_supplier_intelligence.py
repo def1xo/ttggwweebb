@@ -22,6 +22,7 @@ from app.services.supplier_intelligence import (
     image_print_signature_from_url,
     map_category,
     pick_best_offer,
+    print_signature_hamming,
     suggest_sale_price,
 )
 
@@ -343,6 +344,8 @@ class ImportProductsIn(BaseModel):
     dry_run: bool = True
     publish_visible: bool = False
     ai_style_description: bool = True
+    use_avito_pricing: bool = False
+    avito_max_pages: int = Field(default=1, ge=1, le=3)
 
 
 class ImportProductsOut(BaseModel):
@@ -506,6 +509,7 @@ def import_products_from_sources(
     created_variants = 0
     source_reports: list[dict[str, object]] = []
     signature_product_map: dict[str, int] = {}
+    avito_price_cache: dict[str, float | None] = {}
 
     def get_or_create_category(name: str) -> models.Category:
         nonlocal created_categories
@@ -547,6 +551,29 @@ def import_products_from_sources(
         db.add(x)
         db.flush()
         return x
+
+    def find_product_by_signature(sig: str | None) -> models.Product | None:
+        if not sig:
+            return None
+        if sig in signature_product_map:
+            return db.query(models.Product).filter(models.Product.id == signature_product_map[sig]).one_or_none()
+        # fuzzy match for same print with minor image differences
+        for known_sig, pid in signature_product_map.items():
+            dist = print_signature_hamming(sig, known_sig)
+            if dist is not None and dist <= 6:
+                return db.query(models.Product).filter(models.Product.id == pid).one_or_none()
+        return None
+
+    def pick_sale_price(title: str, dropship_price: float) -> float:
+        if payload.use_avito_pricing:
+            key = (title or "").strip().lower()
+            if key not in avito_price_cache:
+                scan = avito_market_scan(title, max_pages=payload.avito_max_pages)
+                avito_price_cache[key] = float(scan.get("suggested")) if scan.get("suggested") is not None else None
+            suggested = avito_price_cache.get(key)
+            if suggested and suggested > 0:
+                return float(suggested)
+        return suggest_sale_price(dropship_price)
 
     for src in sources:
         src_url = (src.source_url or "").strip()
@@ -590,7 +617,7 @@ def import_products_from_sources(
                 desc = str(it.get("description") or "").strip()
                 if payload.ai_style_description and not desc:
                     desc = generate_youth_description(title, cat_name, it.get("color"))
-                sale_price = suggest_sale_price(ds_price)
+                sale_price = pick_sale_price(title, ds_price)
                 image_url = str(it.get("image_url") or "").strip() or None
                 if not image_url and "t.me/" in src_url:
                     try:
@@ -635,10 +662,9 @@ def import_products_from_sources(
 
                 # image-based analysis: same print with different colors -> same product, new color variants
                 sig = image_print_signature_from_url(image_url) if image_url else None
-                if sig and sig in signature_product_map and (not p or p.id != signature_product_map[sig]):
-                    same_print_product = db.query(models.Product).filter(models.Product.id == signature_product_map[sig]).one_or_none()
-                    if same_print_product:
-                        p = same_print_product
+                same_print_product = find_product_by_signature(sig)
+                if same_print_product and (not p or p.id != same_print_product.id):
+                    p = same_print_product
                 elif sig and p:
                     signature_product_map[sig] = int(p.id)
 

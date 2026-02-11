@@ -1344,6 +1344,8 @@ export async function importProductsFromSupplierSources(payload: {
   dry_run?: boolean;
   publish_visible?: boolean;
   ai_style_description?: boolean;
+  use_avito_pricing?: boolean;
+  avito_max_pages?: number;
 }) {
   try {
     const res = await axiosInstance.post("/api/admin/supplier-intelligence/import-products", payload);

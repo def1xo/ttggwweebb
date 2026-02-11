@@ -964,6 +964,8 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [importDryRun, setImportDryRun] = useState(true);
   const [importPublishVisible, setImportPublishVisible] = useState(false);
   const [importUseAi, setImportUseAi] = useState(true);
+  const [importUseAvitoPricing, setImportUseAvitoPricing] = useState(true);
+  const [importAvitoPages, setImportAvitoPages] = useState(1);
   const [importMaxItems, setImportMaxItems] = useState(40);
   const [importReport, setImportReport] = useState<any | null>(null);
   const [avitoQuery, setAvitoQuery] = useState("");
@@ -1138,6 +1140,11 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
           <input type="checkbox" checked={importUseAi} onChange={(e) => setImportUseAi(e.target.checked)} />
           AI-style описание для аудитории 15-25
         </label>
+        <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input type="checkbox" checked={importUseAvitoPricing} onChange={(e) => setImportUseAvitoPricing(e.target.checked)} />
+          Использовать Avito для автопрайса
+        </label>
+        <input className="input" type="number" min={1} max={3} value={importAvitoPages} onChange={(e) => setImportAvitoPages(Number(e.target.value || 1))} placeholder="Страниц Avito на товар (1-3)" />
         <input className="input" type="number" min={1} max={200} value={importMaxItems} onChange={(e) => setImportMaxItems(Number(e.target.value || 40))} placeholder="Макс. товаров на источник" />
         <button className="btn btn-primary" onClick={runImportProducts} disabled={items.length === 0}>Запустить импорт товаров</button>
         {importReport ? (

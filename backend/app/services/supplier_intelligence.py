@@ -478,3 +478,16 @@ def avito_market_scan(query: str, max_pages: int = 1, timeout_sec: int = 20) -> 
         "suggested": suggested,
         "errors": errors,
     }
+
+
+def print_signature_hamming(a: str | None, b: str | None) -> int | None:
+    if not a or not b:
+        return None
+    aa = str(a).strip().lower()
+    bb = str(b).strip().lower()
+    if len(aa) != len(bb):
+        return None
+    try:
+        return sum(1 for x, y in zip(aa, bb) if x != y)
+    except Exception:
+        return None
