@@ -165,7 +165,7 @@ def list_products(db: Session = Depends(get_db), admin: models.User = Depends(ge
             "default_image": p.default_image,
             "sizes": sizes,
             "colors": colors,
-            "variants": [{"id": v.id, "price": float(v.price or p.base_price or 0)} for v in (p.variants or [])],
+            "variants": [{"id": v.id, "price": float(v.price or p.base_price or 0), "stock_quantity": int(v.stock_quantity or 0)} for v in (p.variants or [])],
         })
     return {"products": out}
 
@@ -183,6 +183,7 @@ def create_product(
     images: Optional[List[UploadFile]] = File(None),
     sizes: Optional[str] = Form(None),
     color: Optional[str] = Form(None),
+    stock_quantity: Optional[int] = Form(None),
     payload: Optional[dict] = Body(None),
     db: Session = Depends(get_db),
     admin: models.User = Depends(get_current_admin_user),
@@ -197,6 +198,9 @@ def create_product(
         visible = payload.get("visible", True)
         sizes = payload.get("sizes")
         color = payload.get("color")
+        if "stock_quantity" in payload:
+            stock_quantity = payload.get("stock_quantity")
+        stock_quantity = payload.get("stock_quantity")
 
     if not title or not str(title).strip():
         raise HTTPException(400, detail="title required")
@@ -239,6 +243,10 @@ def create_product(
             # non-fatal
             pass
 
+    stock_value = int(stock_quantity) if stock_quantity is not None else 0
+    if stock_value < 0:
+        stock_value = 0
+
     # variants creation: sizes + optional color
     size_list = _parse_sizes(sizes)
     color_objs: List[models.Color] = []
@@ -252,9 +260,9 @@ def create_product(
     if not size_list:
         if color_objs:
             for c_obj in color_objs:
-                db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=c_obj.id))
+                db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=c_obj.id, stock_quantity=stock_value))
         else:
-            db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=None))
+            db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=None, stock_quantity=stock_value))
     else:
         for sz in size_list:
             try:
@@ -263,9 +271,9 @@ def create_product(
                 raise HTTPException(400, detail=f"invalid size: {exc}")
             if color_objs:
                 for c_obj in color_objs:
-                    db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=c_obj.id))
+                    db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=c_obj.id, stock_quantity=stock_value))
             else:
-                db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=None))
+                db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=None, stock_quantity=stock_value))
 
     db.commit()
     db.refresh(p)
@@ -280,6 +288,7 @@ def create_product(
             "category_id": p.category_id,
             "sizes": size_list,
             "colors": [c.name for c in color_objs],
+            "stock_quantity": stock_value,
         },
     }
 
@@ -296,6 +305,7 @@ def update_product(
     images: Optional[List[UploadFile]] = File(None),
     sizes: Optional[str] = Form(None),
     color: Optional[str] = Form(None),
+    stock_quantity: Optional[int] = Form(None),
     payload: Optional[dict] = Body(None),
     db: Session = Depends(get_db),
     admin: models.User = Depends(get_current_admin_user),
@@ -313,6 +323,9 @@ def update_product(
             visible = str(int(bool(payload.get("visible"))))
         sizes = payload.get("sizes")
         color = payload.get("color")
+        if "stock_quantity" in payload:
+            stock_quantity = payload.get("stock_quantity")
+        stock_quantity = payload.get("stock_quantity")
 
     if title is not None:
         p.title = str(title).strip()[:512]
@@ -327,6 +340,17 @@ def update_product(
 
     if description is not None:
         p.description = description
+
+    if stock_quantity is not None:
+        try:
+            sq = int(stock_quantity)
+        except Exception:
+            raise HTTPException(400, detail="invalid stock_quantity")
+        if sq < 0:
+            sq = 0
+        for v in (p.variants or []):
+            v.stock_quantity = sq
+            db.add(v)
 
     if category_id is not None:
         p.category_id = category_id
@@ -398,9 +422,9 @@ def update_product(
                 else:
                     if color_objs:
                         for c_obj in color_objs:
-                            db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=c_obj.id))
+                            db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=c_obj.id, stock_quantity=stock_value))
                     else:
-                        db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=None))
+                        db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=None, stock_quantity=stock_value))
         else:
             # no size list supplied: at least update first variant color/price
             if p.variants:
@@ -412,9 +436,9 @@ def update_product(
             else:
                 if color_objs:
                     for c_obj in color_objs:
-                        db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=c_obj.id))
+                        db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=c_obj.id, stock_quantity=stock_value))
                 else:
-                    db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=None))
+                    db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=None, stock_quantity=stock_value))
 
     db.add(p)
     db.commit()
@@ -433,6 +457,7 @@ def update_product(
             "category_id": p.category_id,
             "sizes": sizes_out,
             "colors": colors_out,
+            "stock_quantity": int((p.variants[0].stock_quantity if p.variants else 0) or 0),
         },
     }
 

@@ -299,14 +299,14 @@ export default function Profile() {
         <div className="section-head__title">Последние заказы</div>
         <Link
           to="/orders"
-          className="link-pill"
+          className="section-link-luxe"
           onClick={() => {
             try {
               hapticSelection();
             } catch {}
           }}
         >
-          Смотреть все
+          Все заказы ↗
         </Link>
       </div>
 
@@ -441,14 +441,14 @@ export default function Profile() {
         <div className="section-head__title">Избранное</div>
         <Link
           to="/favorites"
-          className="link-pill"
+          className="section-link-luxe"
           onClick={() => {
             try {
               hapticSelection();
             } catch {}
           }}
         >
-          Смотреть все
+          Все избранные ↗
         </Link>
       </div>
 
