@@ -318,19 +318,8 @@ select.input { appearance: none; }
 }
 .bottom-nav a:active { transform: scale(0.96); }
 .bottom-nav a.active { transform: translateY(-1px); color: var(--panel); }
-.bottom-nav a.active { background: transparent; }
+.bottom-nav a.active { background: color-mix(in srgb, var(--panel) 12%, transparent); }
 
-.bottom-nav-indicator {
-  position: absolute;
-  left: 0;
-  bottom: 4px;
-  height: 3px;
-  border-radius: 99px;
-  background: color-mix(in srgb, var(--panel) 62%, transparent);
-  opacity: 0.85;
-  transition: transform .22s ease, width .22s ease, opacity .22s ease;
-  pointer-events: none;
-}
 
 .nav-icon {
   width: 18px;
@@ -339,6 +328,7 @@ select.input { appearance: none; }
 }
 
 .bottom-nav a.active .nav-icon { opacity: 1; }
+.bottom-nav a:focus-visible { outline: none; box-shadow: none; }
 
 /* Smooth accordion helper */
 .collapsible-inner { padding: 0; }
@@ -1318,11 +1308,15 @@ img, picture { max-width: 100%; height: auto; display: block; }
 .modal-overlay--product {
   z-index: 140;
   overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
 }
 
 .product-modal-scroll {
-  max-height: calc(var(--vh, 1vh) * 100 - 28px);
+  max-height: calc(var(--vh, 1vh) * 100 - 8px);
   overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
 }
 
 .product-modal__close {
@@ -1353,7 +1347,7 @@ img, picture { max-width: 100%; height: auto; display: block; }
 
 @media (max-width: 760px) {
   .product-modal-scroll {
-    max-height: calc(var(--vh, 1vh) * 100 - 12px);
+    max-height: calc(var(--vh, 1vh) * 100 - 4px);
     border-radius: 16px;
   }
 }

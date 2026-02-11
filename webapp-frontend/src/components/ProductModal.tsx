@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import api from "../services/api";
 import ColorSwatch from "./ColorSwatch";
 
@@ -160,7 +161,7 @@ export default function ProductModal({
     }
   };
 
-  return (
+  return createPortal(
     <div className="modal-overlay modal-overlay--product" role="dialog" aria-modal="true" style={{ alignItems: "flex-start", overflowY: "auto", padding: "calc(10px + env(safe-area-inset-top)) 0 calc(18px + env(safe-area-inset-bottom))" }}>
       <div className="modal card product-modal product-modal-scroll" style={{ maxWidth: 980, width: "min(96vw, 980px)", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -324,6 +325,7 @@ export default function ProductModal({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
