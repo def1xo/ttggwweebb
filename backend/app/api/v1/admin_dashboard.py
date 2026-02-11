@@ -234,15 +234,24 @@ def admin_stats(
     profit = revenue - cost_total
     margin_percent = float((profit / revenue * Decimal("100")) if revenue > 0 else 0)
 
+    revenue_f = float(revenue)
+    cost_f = float(cost_total)
+    profit_f = float(profit)
+
+
     return {
         "range": (range or "month"),
         "series": series,
         "month": {
             "month_start": m_start.isoformat() + "Z",
             "orders_count": len(orders),
-            "revenue": float(revenue),
-            "cost": float(cost_total),
-            "profit": float(profit),
+            # keep both legacy and current keys for frontend compatibility
+            "revenue": revenue_f,
+            "cost": cost_f,
+            "profit": profit_f,
+            "revenue_gross": revenue_f,
+            "cogs_estimated": cost_f,
+            "profit_estimated": profit_f,
             "margin_percent": margin_percent,
         },
     }
@@ -393,3 +402,123 @@ def export_sales_xlsx(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers=headers,
     )
+
+
+@router.get("/ops/needs-attention")
+def admin_ops_needs_attention(
+    low_stock_threshold: int = Query(2, ge=0, le=50),
+    stale_order_hours: int = Query(24, ge=1, le=168),
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(get_current_admin_user),
+):
+    """Operational queue for admins: stale orders + problematic products/stock."""
+    now = _utcnow()
+    stale_cutoff = now - timedelta(hours=stale_order_hours)
+
+    stale_orders = (
+        db.query(models.Order)
+        .filter(models.Order.status == models.OrderStatus.awaiting_payment.value)
+        .filter(models.Order.created_at <= stale_cutoff)
+        .order_by(models.Order.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+
+    products = (
+        db.query(models.Product)
+        .options(selectinload(models.Product.variants))
+        .order_by(models.Product.updated_at.desc().nullslast(), models.Product.created_at.desc())
+        .limit(800)
+        .all()
+    )
+
+    missing_cards = []
+    low_stock = []
+
+    for p in products:
+        variants = list(p.variants or [])
+        has_variants = len(variants) > 0
+        base_price = float(p.base_price or 0)
+        has_description = bool((p.description or "").strip())
+        has_image = bool((p.default_image or "").strip())
+
+        reasons = []
+        if not has_description:
+            reasons.append("no_description")
+        if not has_image:
+            reasons.append("no_image")
+        if base_price <= 0:
+            reasons.append("price_zero")
+        if not has_variants:
+            reasons.append("no_variants")
+
+        if reasons:
+            missing_cards.append(
+                {
+                    "product_id": p.id,
+                    "title": p.title,
+                    "visible": bool(p.visible),
+                    "reasons": reasons,
+                    "updated_at": p.updated_at.isoformat() + "Z" if getattr(p, "updated_at", None) else None,
+                }
+            )
+
+        for v in variants:
+            stock = int(v.stock_quantity or 0)
+            if stock <= low_stock_threshold:
+                low_stock.append(
+                    {
+                        "variant_id": v.id,
+                        "product_id": p.id,
+                        "title": p.title,
+                        "stock_quantity": stock,
+                        "is_out": stock <= 0,
+                    }
+                )
+
+    missing_cards = missing_cards[:limit]
+    low_stock.sort(key=lambda x: (x["stock_quantity"], x["product_id"]))
+    low_stock = low_stock[:limit]
+
+    stale_without_proof = 0
+
+    stale_serialized = [
+        {
+            "order_id": o.id,
+            "created_at": o.created_at.isoformat() + "Z" if getattr(o, "created_at", None) else None,
+            "hours_waiting": round(max(0.0, (now - o.created_at).total_seconds()) / 3600, 1) if getattr(o, "created_at", None) else 0,
+            "total_amount": float(o.total_amount or 0),
+            "fio": o.fio,
+            "phone": o.phone,
+            "has_payment_proof": bool(o.payment_screenshot),
+        }
+        for o in stale_orders
+    ]
+
+    stale_without_proof = sum(1 for o in stale_serialized if not bool(o.get("has_payment_proof")))
+    severity_score = (
+        len(stale_serialized) * 3
+        + len(missing_cards) * 2
+        + len(low_stock) * 1
+    )
+
+    return {
+        "generated_at": now.isoformat() + "Z",
+        "thresholds": {
+            "low_stock_threshold": low_stock_threshold,
+            "stale_order_hours": stale_order_hours,
+        },
+        "counts": {
+            "stale_orders": len(stale_serialized),
+            "stale_orders_without_proof": stale_without_proof,
+            "products_missing_data": len(missing_cards),
+            "low_stock_variants": len(low_stock),
+        },
+        "severity_score": severity_score,
+        "items": {
+            "stale_orders": stale_serialized,
+            "products_missing_data": missing_cards,
+            "low_stock_variants": low_stock,
+        },
+    }
