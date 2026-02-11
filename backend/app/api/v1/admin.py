@@ -37,6 +37,13 @@ def _slug_to_hashtag(raw: str | None) -> str:
     return s or "разное"
 
 
+def _render_catalog_template(template: str, context: dict[str, object]) -> str:
+    out = str(template or "")
+    for key, value in context.items():
+        out = out.replace("{" + key + "}", str(value))
+    return out
+
+
 def _build_order_supply_info(db: Session, order: models.Order) -> list[str]:
     lines: list[str] = []
     order_items = db.query(models.OrderItem).filter(models.OrderItem.order_id == order.id).all()
@@ -116,6 +123,12 @@ class OrderOut(BaseModel):
 
 class NewsManageIn(BaseModel):
     title: str
+    text: str | None = None
+    images: list[str] | None = None
+
+
+class NewsManagePatchIn(BaseModel):
+    title: str | None = None
     text: str | None = None
     images: list[str] | None = None
 
@@ -318,16 +331,19 @@ def admin_create_news(payload: NewsManageIn, db: Session = Depends(get_db), admi
 
 
 @router.patch("/news/{news_id}")
-def admin_patch_news(news_id: int, payload: NewsManageIn, db: Session = Depends(get_db), admin: models.User = Depends(get_current_admin_user)):
+def admin_patch_news(news_id: int, payload: NewsManagePatchIn, db: Session = Depends(get_db), admin: models.User = Depends(get_current_admin_user)):
     item = db.query(models.News).get(news_id)
     if not item:
         raise HTTPException(status_code=404, detail="news not found")
-    title = (payload.title or "").strip()
-    if not title:
-        raise HTTPException(status_code=400, detail="title required")
-    item.title = title
-    item.text = (payload.text or "").strip() or None
-    item.images = (payload.images or []) or None
+    if payload.title is not None:
+        title = (payload.title or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="title required")
+        item.title = title
+    if payload.text is not None:
+        item.text = (payload.text or "").strip() or None
+    if payload.images is not None:
+        item.images = payload.images or None
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -355,18 +371,24 @@ def admin_send_catalog_to_telegram(payload: CatalogTelegramIn, db: Session = Dep
 
     tmpl = (payload.template or "").strip() or "#{category}\n{title}\nцена: {price} ₽"
     sent = 0
+    failed = 0
     for p in products:
         cat = db.query(models.Category).get(p.category_id) if p.category_id else None
-        text = tmpl.format(
-            category=_slug_to_hashtag(cat.slug if cat else None),
-            title=p.title,
-            price=f"{float(p.base_price or 0):.0f}",
-            slug=p.slug or "",
-            id=p.id,
+        text = _render_catalog_template(
+            tmpl,
+            {
+                "category": _slug_to_hashtag(cat.slug if cat else None),
+                "title": p.title,
+                "price": f"{float(p.base_price or 0):.0f}",
+                "slug": p.slug or "",
+                "id": p.id,
+            },
         )
         if _send_admin_telegram_message(text):
             sent += 1
-    return {"ok": sent > 0, "sent": sent, "total": len(products)}
+        else:
+            failed += 1
+    return {"ok": sent > 0, "sent": sent, "failed": failed, "total": len(products)}
 
 
 # ---------- Withdrawals ----------
