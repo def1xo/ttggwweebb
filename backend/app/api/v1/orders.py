@@ -83,6 +83,7 @@ class OrderCreateIn(BaseModel):
     delivery_type: Optional[str] = Field(None, max_length=128)
     delivery_address: Optional[str] = None
     note: Optional[str] = None
+    promo_code: Optional[str] = Field(None, max_length=64)
 
 
 class OrderItemOut(BaseModel):
@@ -153,6 +154,8 @@ def create_order(
     st = _get_cart_state(db, user.id)
     referral_code = (st.referral_code if st else None) or None
     promo_code_str = (st.promo_code if st else None) or None
+    if not promo_code_str and payload.promo_code:
+        promo_code_str = str(payload.promo_code).strip() or None
 
     subtotal = Decimal("0")
     for ci in cart_items:
@@ -166,8 +169,9 @@ def create_order(
 
     # Apply special promo (discount)
     if promo_code_str:
-        promo = db.query(models.PromoCode).filter(models.PromoCode.code == promo_code_str).one_or_none()
-        if promo and getattr(promo, "type", None) == models.PromoType.special:
+        promo = db.query(models.PromoCode).filter(models.PromoCode.code.ilike(promo_code_str)).one_or_none()
+        promo_type = str(getattr(getattr(promo, "type", None), "value", getattr(promo, "type", ""))).lower() if promo else ""
+        if promo and promo_type in {"special", "admin"}:
             # enforce "one promo per life" + pending lock
             if user.promo_used_code:
                 raise HTTPException(status_code=400, detail="promo already used")
@@ -176,7 +180,10 @@ def create_order(
 
             resv = _active_reservation(db, user.id, promo.id)
             if not resv:
-                raise HTTPException(status_code=400, detail="promo reservation expired")
+                # Fallback: if promo came directly in payload (legacy clients / race),
+                # still apply discount instead of dropping to 0 silently.
+                # Pending lock will still be set below for created order.
+                pass
 
             percent = _promo_value_to_percent(_to_decimal(promo.value))
             promo_discount_percent = percent
