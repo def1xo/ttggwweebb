@@ -1,3 +1,4 @@
+import app.api.v1.admin_supplier_intelligence as asi
 import app.services.supplier_intelligence as si
 from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, estimate_market_price, extract_catalog_items, generate_youth_description, map_category, pick_best_offer, print_signature_hamming, suggest_sale_price
 
@@ -110,3 +111,46 @@ def test_download_image_bytes_rejects_non_image_content(monkeypatch):
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "not an image" in str(exc)
+
+
+def test_classify_import_error_codes():
+    assert asi._classify_import_error(RuntimeError("request timeout on supplier")) == asi.ERROR_CODE_NETWORK_TIMEOUT
+    assert asi._classify_import_error(RuntimeError("content is not an image")) == asi.ERROR_CODE_INVALID_IMAGE
+    assert asi._classify_import_error(RuntimeError("parse error on source row")) == asi.ERROR_CODE_PARSE_FAILED
+    assert asi._classify_import_error(RuntimeError("429 too many requests")) == asi.ERROR_CODE_NETWORK_TIMEOUT
+
+
+def test_register_source_error_tracks_error_codes():
+    report = asi._new_source_report(source_id=7, source_url="https://example.com/feed")
+
+    asi._register_source_error(report, RuntimeError("request timeout"))
+    asi._register_source_error(report, RuntimeError("request timeout"))
+    asi._register_source_error(report, RuntimeError("parse failed"))
+
+    assert report.errors == 3
+    assert report.error_codes[asi.ERROR_CODE_NETWORK_TIMEOUT] == 2
+    assert report.error_codes[asi.ERROR_CODE_PARSE_FAILED] == 1
+    assert report.last_error_message == "parse failed"
+
+
+def test_register_source_error_limits_unique_error_samples_and_truncates_message():
+    report = asi._new_source_report(source_id=8, source_url="https://example.com/feed-2")
+
+    asi._register_source_error(report, RuntimeError("first timeout"))
+    asi._register_source_error(report, RuntimeError("second timeout"))
+    asi._register_source_error(report, RuntimeError("third timeout"))
+    asi._register_source_error(report, RuntimeError("fourth timeout"))
+
+    assert len(report.error_samples) == asi.ERROR_SAMPLES_LIMIT
+    assert report.error_samples == ["first timeout", "second timeout", "third timeout"]
+
+    huge = "x" * (asi.ERROR_MESSAGE_MAX_LEN + 50)
+    asi._register_source_error(report, RuntimeError(huge))
+    assert report.last_error_message is not None
+    assert len(report.last_error_message) == asi.ERROR_MESSAGE_MAX_LEN
+    assert report.last_error_message.endswith("...")
+
+
+def test_normalize_error_message_compacts_whitespace():
+    normalized = asi._normalize_error_message(RuntimeError("  too   many\n  spaces\tinside "))
+    assert normalized == "too many spaces inside"
