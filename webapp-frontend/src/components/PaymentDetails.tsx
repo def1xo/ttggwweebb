@@ -51,7 +51,7 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default function PaymentDetails({ amount }: { amount?: number | null }) {
+export default function PaymentDetails({ amount, subtotal, discount }: { amount?: number | null; subtotal?: number | null; discount?: number | null }) {
   const [req, setReq] = useState<Requisites | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -80,6 +80,8 @@ export default function PaymentDetails({ amount }: { amount?: number | null }) {
   const card = req?.card_number || "—";
   const bank = req?.bank_name || "—";
   const amountNum = Number(amount || 0);
+  const subtotalNum = Number(subtotal || 0);
+  const discountNum = Number(discount || 0);
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
@@ -90,6 +92,12 @@ export default function PaymentDetails({ amount }: { amount?: number | null }) {
           <div style={{ marginTop: 4, fontSize: 24, fontWeight: 900 }}>
             {new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(amountNum)}
           </div>
+          {discountNum > 0 ? (
+            <div className="small-muted" style={{ marginTop: 6 }}>
+              Со скидкой: -{new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(discountNum)}
+              {subtotalNum > 0 ? ` от ${new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(subtotalNum)}` : ""}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
