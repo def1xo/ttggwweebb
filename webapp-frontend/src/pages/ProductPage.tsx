@@ -119,6 +119,7 @@ export default function ProductPage() {
         await addCartItem(Number(variantId), 1);
         hapticImpact("light");
         notify("Добавлено в корзину", "success");
+        try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
       } catch {
         notify("Не удалось добавить в корзину", "error");
       }
@@ -164,10 +165,10 @@ export default function ProductPage() {
           </div>
           <button
             type="button"
-            className="btn ghost"
+            className="icon-like-btn"
             onClick={toggleFav}
             aria-label={isFavorite(Number(product?.id)) ? "Убрать из избранного" : "В избранное"}
-            style={{ width: 44, height: 44, padding: 0, lineHeight: 0, display: "grid", placeItems: "center", overflow: "visible" }}
+            style={{ width: 44, height: 44, padding: 0, lineHeight: 0, display: "grid", placeItems: "center", overflow: "visible", color: isFavorite(Number(product?.id)) ? "#ff5b7e" : undefined }}
           >
             <HeartSmall filled={isFavorite(Number(product?.id))} />
           </button>
@@ -257,10 +258,6 @@ export default function ProductPage() {
           <button className="btn btn-primary product-add-btn" onClick={addToCart}>
             Добавить в корзину
           </button>
-          <div className="muted" style={{ fontSize: 12, lineHeight: 1.4 }}>
-            <div>💡 Свайпай по фото, чтобы листать.</div>
-            <div>Доставка 449 ₽, бесплатно от 5 000 ₽.</div>
-          </div>
         </div>
       </div>
     </div>
