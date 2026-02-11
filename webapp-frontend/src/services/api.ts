@@ -1014,7 +1014,7 @@ export async function approveWithdraw(withdrawId: number, approve = true) {
 
 
 
-export async function getAdminOpsNeedsAttention(limit = 10, low_stock_threshold = 2) {
+export async function getAdminOpsNeedsAttention(limit = 10, low_stock_threshold = 2, stale_order_hours = 24) {
   try {
     const candidates = [
       "/api/admin/ops/needs-attention",
@@ -1022,7 +1022,7 @@ export async function getAdminOpsNeedsAttention(limit = 10, low_stock_threshold 
       "/api/v1/admin/ops/needs-attention",
       "/v1/admin/ops/needs-attention",
     ];
-    return await tryCandidates(candidates, { method: "get", params: { limit, low_stock_threshold } });
+    return await tryCandidates(candidates, { method: "get", params: { limit, low_stock_threshold, stale_order_hours } });
   } catch (e) {
     return handleAxiosError(e);
   }

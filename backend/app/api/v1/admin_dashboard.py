@@ -238,6 +238,7 @@ def admin_stats(
     cost_f = float(cost_total)
     profit_f = float(profit)
 
+
     return {
         "range": (range or "month"),
         "series": series,
@@ -406,13 +407,14 @@ def export_sales_xlsx(
 @router.get("/ops/needs-attention")
 def admin_ops_needs_attention(
     low_stock_threshold: int = Query(2, ge=0, le=50),
+    stale_order_hours: int = Query(24, ge=1, le=168),
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
     admin: models.User = Depends(get_current_admin_user),
 ):
     """Operational queue for admins: stale orders + problematic products/stock."""
     now = _utcnow()
-    stale_cutoff = now - timedelta(hours=24)
+    stale_cutoff = now - timedelta(hours=stale_order_hours)
 
     stale_orders = (
         db.query(models.Order)
@@ -479,6 +481,8 @@ def admin_ops_needs_attention(
     low_stock.sort(key=lambda x: (x["stock_quantity"], x["product_id"]))
     low_stock = low_stock[:limit]
 
+    stale_without_proof = 0
+
     stale_serialized = [
         {
             "order_id": o.id,
@@ -492,17 +496,26 @@ def admin_ops_needs_attention(
         for o in stale_orders
     ]
 
+    stale_without_proof = sum(1 for o in stale_serialized if not bool(o.get("has_payment_proof")))
+    severity_score = (
+        len(stale_serialized) * 3
+        + len(missing_cards) * 2
+        + len(low_stock) * 1
+    )
+
     return {
         "generated_at": now.isoformat() + "Z",
         "thresholds": {
             "low_stock_threshold": low_stock_threshold,
-            "stale_order_hours": 24,
+            "stale_order_hours": stale_order_hours,
         },
         "counts": {
             "stale_orders": len(stale_serialized),
+            "stale_orders_without_proof": stale_without_proof,
             "products_missing_data": len(missing_cards),
             "low_stock_variants": len(low_stock),
         },
+        "severity_score": severity_score,
         "items": {
             "stale_orders": stale_serialized,
             "products_missing_data": missing_cards,

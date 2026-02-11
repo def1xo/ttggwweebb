@@ -53,8 +53,11 @@ type AnalyticsTopProduct = {
 
 type OpsNeedsAttention = {
   generated_at: string;
+  thresholds: { low_stock_threshold: number; stale_order_hours: number };
+  severity_score: number;
   counts: {
     stale_orders: number;
+    stale_orders_without_proof: number;
     products_missing_data: number;
     low_stock_variants: number;
   };
@@ -885,6 +888,9 @@ export default function AdminDashboard() {
   const [topProductsErr, setTopProductsErr] = useState<string | null>(null);
   const [opsQueue, setOpsQueue] = useState<OpsNeedsAttention | null>(null);
   const [opsErr, setOpsErr] = useState<string | null>(null);
+  const [opsLimit, setOpsLimit] = useState(8);
+  const [opsLowStockThreshold, setOpsLowStockThreshold] = useState(2);
+  const [opsStaleHours, setOpsStaleHours] = useState(24);
   const [view, setView] = useState<ViewKey>("dashboard");
 
   const loadStats = async (r: RangeKey) => {
@@ -951,7 +957,7 @@ export default function AdminDashboard() {
   const loadOpsQueue = async () => {
     setOpsErr(null);
     try {
-      const res: any = await getAdminOpsNeedsAttention(8, 2);
+      const res: any = await getAdminOpsNeedsAttention(opsLimit, opsLowStockThreshold, opsStaleHours);
       if (res?.counts && res?.items) {
         setOpsQueue(res as OpsNeedsAttention);
         return;
@@ -973,7 +979,7 @@ export default function AdminDashboard() {
     loadFunnel();
     loadTopProducts();
     loadOpsQueue();
-  }, [authed, range]);
+  }, [authed, range, opsLimit, opsLowStockThreshold, opsStaleHours]);
 
   const navButtons = useMemo(
     () =>
@@ -1186,12 +1192,32 @@ export default function AdminDashboard() {
 
 
       <div className="card" style={{ padding: 12, marginTop: 12 }}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Операционная очередь (что требует внимания)</div>
-        {opsErr ? <div style={{ color: "#ff8c8c", marginBottom: 8 }}>{opsErr}</div> : null}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 800 }}>Операционная очередь (что требует внимания)</div>
+          <div className="small-muted">Индекс нагрузки: <b>{opsQueue?.severity_score ?? 0}</b></div>
+        </div>
+        {opsErr ? <div style={{ color: "#ff8c8c", marginTop: 8 }}>{opsErr}</div> : null}
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginTop: 10 }}>
+          <label className="small-muted">Лимит
+            <input className="input" type="number" min={3} max={20} value={opsLimit} onChange={(e) => setOpsLimit(Math.min(20, Math.max(3, Number(e.target.value) || 8)))} />
+          </label>
+          <label className="small-muted">Низкий остаток ≤
+            <input className="input" type="number" min={0} max={20} value={opsLowStockThreshold} onChange={(e) => setOpsLowStockThreshold(Math.min(20, Math.max(0, Number(e.target.value) || 2)))} />
+          </label>
+          <label className="small-muted">Просрочка (часы)
+            <input className="input" type="number" min={1} max={168} value={opsStaleHours} onChange={(e) => setOpsStaleHours(Math.min(168, Math.max(1, Number(e.target.value) || 24)))} />
+          </label>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10, marginTop: 10 }}>
           <div className="card" style={{ padding: 10 }}>
             <div className="small-muted">Просроченные оплаты</div>
             <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.stale_orders ?? 0}</div>
+          </div>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Без чека</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.stale_orders_without_proof ?? 0}</div>
           </div>
           <div className="card" style={{ padding: 10 }}>
             <div className="small-muted">Карточки с проблемами</div>
@@ -1204,6 +1230,19 @@ export default function AdminDashboard() {
         </div>
 
         <div style={{ marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Просроченные заказы</div>
+          {(opsQueue?.items.stale_orders || []).slice(0, 5).map((it) => (
+            <div key={it.order_id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700 }}>Заказ #{it.order_id} • {it.hours_waiting}ч</div>
+                <div className="small-muted">{formatRub(it.total_amount)} {it.fio ? `• ${it.fio}` : ""} {it.has_payment_proof ? "• чек есть" : "• без чека"}</div>
+              </div>
+            </div>
+          ))}
+          {(opsQueue?.items.stale_orders || []).length === 0 ? <div className="small-muted">Нет просроченных заказов</div> : null}
+        </div>
+
+        <div style={{ marginTop: 10 }}>
           <div style={{ fontWeight: 700, marginBottom: 6 }}>Топ проблемных карточек</div>
           {(opsQueue?.items.products_missing_data || []).slice(0, 5).map((it) => (
             <div key={it.product_id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--border)" }}>
@@ -1211,10 +1250,22 @@ export default function AdminDashboard() {
                 <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.title}</div>
                 <div className="small-muted">#{it.product_id} • {it.reasons.join(", ")}</div>
               </div>
-              <a className="btn btn-secondary" href="/admin" style={{ textDecoration: "none", whiteSpace: "nowrap" }}>Открыть</a>
             </div>
           ))}
           {(opsQueue?.items.products_missing_data || []).length === 0 ? <div className="small-muted">Нет критичных карточек 🎉</div> : null}
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Низкие остатки</div>
+          {(opsQueue?.items.low_stock_variants || []).slice(0, 5).map((it) => (
+            <div key={it.variant_id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.title}</div>
+                <div className="small-muted">variant #{it.variant_id} • остаток: {it.stock_quantity} {it.is_out ? "• OUT" : ""}</div>
+              </div>
+            </div>
+          ))}
+          {(opsQueue?.items.low_stock_variants || []).length === 0 ? <div className="small-muted">Критичных остатков нет</div> : null}
         </div>
       </div>
 
