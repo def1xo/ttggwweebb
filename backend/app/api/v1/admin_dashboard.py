@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
+import os
 from typing import Dict, List, Tuple, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+import requests
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, text
 from sqlalchemy.exc import DataError
@@ -27,6 +29,19 @@ CONFIRMED_STATUSES: Tuple[str, ...] = (
     models.OrderStatus.received.value,
 )
 
+
+
+def _send_admin_telegram_message(text: str) -> bool:
+    bot_token = os.getenv("BOT_TOKEN")
+    chat_id = os.getenv("ADMIN_CHAT_ID")
+    if not bot_token or not chat_id:
+        return False
+    try:
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        resp = requests.post(url, data={"chat_id": str(chat_id), "text": text}, timeout=8)
+        return resp.ok
+    except Exception:
+        return False
 
 def _db_enum_values(db: Session, enum_name: str) -> Optional[set]:
     """Return PostgreSQL enum labels for a given enum type name.
@@ -404,9 +419,63 @@ def export_sales_xlsx(
     )
 
 
+@router.post("/export/sales-to-telegram")
+def export_sales_to_telegram(
+    scope: str = Query("month", description="month|week|all"),
+    base_url: str | None = Query(None),
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(get_current_admin_user),
+):
+    scope_norm = (scope or "month").strip().lower()
+    if scope_norm not in {"month", "week", "all", "alltime", "all_time"}:
+        raise HTTPException(status_code=400, detail="invalid scope; use month|week|all")
+    scope_out = "all" if scope_norm in {"alltime", "all_time"} else scope_norm
+
+    origin = (base_url or os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    path = f"/api/admin/export/sales.xlsx?scope={scope_out}"
+    link = f"{origin}{path}" if origin else path
+
+    ok = _send_admin_telegram_message(
+        f"📊 Экспорт продаж готов\nScope: {scope_out}\nСсылка: {link}"
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to send telegram message")
+    return {"ok": True, "link": link, "scope": scope_out}
+
+
+@router.post("/orders/{order_id}/send-proof-to-telegram")
+def send_order_proof_to_telegram(
+    order_id: int,
+    base_url: str | None = Query(None),
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(get_current_admin_user),
+):
+    order = db.query(models.Order).filter(models.Order.id == order_id).one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="order not found")
+    proof = (order.payment_screenshot or "").strip()
+    if not proof:
+        raise HTTPException(status_code=400, detail="order has no payment proof")
+
+    if proof.startswith("/") and base_url:
+        proof_link = f"{base_url.rstrip('/')}{proof}"
+    elif proof.startswith("/") and os.getenv("PUBLIC_BASE_URL"):
+        proof_link = f"{os.getenv('PUBLIC_BASE_URL').rstrip('/')}{proof}"
+    else:
+        proof_link = proof
+
+    ok = _send_admin_telegram_message(
+        f"🧾 Чек по заказу #{order.id}\nСумма: {float(order.total_amount or 0):.0f} ₽\nСсылка: {proof_link}"
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to send telegram message")
+    return {"ok": True, "order_id": order.id, "proof": proof_link}
+
+
 @router.get("/ops/needs-attention")
 def admin_ops_needs_attention(
     low_stock_threshold: int = Query(2, ge=0, le=50),
+    include_low_stock: bool = Query(False),
     stale_order_hours: int = Query(24, ge=1, le=168),
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -464,18 +533,19 @@ def admin_ops_needs_attention(
                 }
             )
 
-        for v in variants:
-            stock = int(v.stock_quantity or 0)
-            if stock <= low_stock_threshold:
-                low_stock.append(
-                    {
-                        "variant_id": v.id,
-                        "product_id": p.id,
-                        "title": p.title,
-                        "stock_quantity": stock,
-                        "is_out": stock <= 0,
-                    }
-                )
+        if include_low_stock:
+            for v in variants:
+                stock = int(v.stock_quantity or 0)
+                if stock <= low_stock_threshold:
+                    low_stock.append(
+                        {
+                            "variant_id": v.id,
+                            "product_id": p.id,
+                            "title": p.title,
+                            "stock_quantity": stock,
+                            "is_out": stock <= 0,
+                        }
+                    )
 
     missing_cards = missing_cards[:limit]
     low_stock.sort(key=lambda x: (x["stock_quantity"], x["product_id"]))
@@ -564,6 +634,7 @@ def admin_ops_needs_attention(
         "generated_at": now.isoformat() + "Z",
         "thresholds": {
             "low_stock_threshold": low_stock_threshold,
+            "include_low_stock": include_low_stock,
             "stale_order_hours": stale_order_hours,
         },
         "counts": {

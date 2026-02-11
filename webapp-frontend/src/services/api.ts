@@ -1014,7 +1014,7 @@ export async function approveWithdraw(withdrawId: number, approve = true) {
 
 
 
-export async function getAdminOpsNeedsAttention(limit = 10, low_stock_threshold = 2, stale_order_hours = 24) {
+export async function getAdminOpsNeedsAttention(limit = 10, low_stock_threshold = 2, stale_order_hours = 24, include_low_stock = false) {
   try {
     const candidates = [
       "/api/admin/ops/needs-attention",
@@ -1022,7 +1022,36 @@ export async function getAdminOpsNeedsAttention(limit = 10, low_stock_threshold 
       "/api/v1/admin/ops/needs-attention",
       "/v1/admin/ops/needs-attention",
     ];
-    return await tryCandidates(candidates, { method: "get", params: { limit, low_stock_threshold, stale_order_hours } });
+    return await tryCandidates(candidates, { method: "get", params: { limit, low_stock_threshold, stale_order_hours, include_low_stock } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+
+export async function sendAdminSalesExportToTelegram(scope: "month" | "week" | "all" = "month", base_url?: string) {
+  try {
+    const candidates = [
+      "/api/admin/export/sales-to-telegram",
+      "/admin/export/sales-to-telegram",
+      "/api/v1/admin/export/sales-to-telegram",
+      "/v1/admin/export/sales-to-telegram",
+    ];
+    return await tryCandidates(candidates, { method: "post", params: { scope, base_url } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function sendOrderProofToTelegram(order_id: number, base_url?: string) {
+  try {
+    const candidates = [
+      `/api/admin/orders/${order_id}/send-proof-to-telegram`,
+      `/admin/orders/${order_id}/send-proof-to-telegram`,
+      `/api/v1/admin/orders/${order_id}/send-proof-to-telegram`,
+      `/v1/admin/orders/${order_id}/send-proof-to-telegram`,
+    ];
+    return await tryCandidates(candidates, { method: "post", params: { base_url } });
   } catch (e) {
     return handleAxiosError(e);
   }

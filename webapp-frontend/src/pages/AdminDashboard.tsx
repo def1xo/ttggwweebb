@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats } from "../services/api";
+import api, { adminLogin, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats, sendAdminSalesExportToTelegram, sendOrderProofToTelegram } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -53,7 +53,7 @@ type AnalyticsTopProduct = {
 
 type OpsNeedsAttention = {
   generated_at: string;
-  thresholds: { low_stock_threshold: number; stale_order_hours: number };
+  thresholds: { low_stock_threshold: number; stale_order_hours: number; include_low_stock?: boolean };
   severity_score: number;
   counts: {
     stale_orders: number;
@@ -230,6 +230,15 @@ function AdminOrdersPanel({ onBack }: { onBack: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
 
+  const sendProofToTelegram = async (orderId: number) => {
+    try {
+      await sendOrderProofToTelegram(orderId, window.location.origin);
+      setActionMsg(`Ссылка на чек заказа #${orderId} отправлена в Telegram ✅`);
+    } catch (e: any) {
+      setActionMsg(e?.message || "Не удалось отправить чек в Telegram");
+    }
+  };
+
   const updateStatus = async (id: number, status: string) => {
     if (!confirm(`Поменять статус заказа #${id} на "${status}"?`)) return;
     try {
@@ -321,9 +330,9 @@ function AdminOrdersPanel({ onBack }: { onBack: () => void }) {
                         <a href={String(o.payment_screenshot)} target="_blank" rel="noreferrer" className="btn ghost">
                           Открыть
                         </a>
-                        <a href={String(o.payment_screenshot)} download className="btn ghost">
-                          Скачать
-                        </a>
+                        <button className="btn ghost" onClick={() => sendProofToTelegram(Number(o.id))}>
+                          В TG
+                        </button>
                       </div>
                     ) : (
                       "—"
@@ -899,6 +908,7 @@ export default function AdminDashboard() {
   const [opsLimit, setOpsLimit] = useState(8);
   const [opsLowStockThreshold, setOpsLowStockThreshold] = useState(2);
   const [opsStaleHours, setOpsStaleHours] = useState(24);
+  const [opsIncludeLowStock, setOpsIncludeLowStock] = useState(false);
   const [view, setView] = useState<ViewKey>("dashboard");
 
   const loadStats = async (r: RangeKey) => {
@@ -965,7 +975,7 @@ export default function AdminDashboard() {
   const loadOpsQueue = async () => {
     setOpsErr(null);
     try {
-      const res: any = await getAdminOpsNeedsAttention(opsLimit, opsLowStockThreshold, opsStaleHours);
+      const res: any = await getAdminOpsNeedsAttention(opsLimit, opsLowStockThreshold, opsStaleHours, opsIncludeLowStock);
       if (res?.counts && res?.items) {
         setOpsQueue(res as OpsNeedsAttention);
         return;
@@ -987,7 +997,7 @@ export default function AdminDashboard() {
     loadFunnel();
     loadTopProducts();
     loadOpsQueue();
-  }, [authed, range, opsLimit, opsLowStockThreshold, opsStaleHours]);
+  }, [authed, range, opsLimit, opsLowStockThreshold, opsStaleHours, opsIncludeLowStock]);
 
   const navButtons = useMemo(
     () =>
@@ -1005,35 +1015,19 @@ export default function AdminDashboard() {
 
   const exportXlsx = async () => {
     try {
-      const resp = await fetch("/api/admin/export/sales.xlsx?scope=month", {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("admin_token") || ""}`,
-          "X-Telegram-Init-Data": sessionStorage.getItem("tg_init_data") || "",
-        },
-      });
-      if (!resp.ok) {
-        if (resp.status === 401) {
-          localStorage.removeItem("admin_token");
-          setAuthed(false);
-          return;
-        }
-        const t = await resp.text();
-        alert(t || "Не удалось экспортировать");
+      const res: any = await sendAdminSalesExportToTelegram("month", window.location.origin);
+      if (res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
         return;
       }
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `sales_${new Date().toISOString().slice(0, 10)}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      alert("Ссылка на Excel отправлена в Telegram-чат администратора ✅");
     } catch (e: any) {
-      alert(e?.message || "Ошибка экспорта");
+      alert(e?.message || "Ошибка отправки экспорта в Telegram");
     }
   };
+
+
 
   if (!authed) {
     return <AdminLoginGate onAuthed={() => setAuthed(true)} />;
@@ -1215,6 +1209,10 @@ export default function AdminDashboard() {
           </label>
           <label className="small-muted">Просрочка (часы)
             <input className="input" type="number" min={1} max={168} value={opsStaleHours} onChange={(e) => setOpsStaleHours(Math.min(168, Math.max(1, Number(e.target.value) || 24)))} />
+          </label>
+          <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" checked={opsIncludeLowStock} onChange={(e) => setOpsIncludeLowStock(e.target.checked)} />
+            Учитывать низкий остаток
           </label>
         </div>
 
