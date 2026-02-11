@@ -14,6 +14,7 @@ from app.db import models
 from app.services.importer_notifications import slugify
 from app.services.supplier_intelligence import (
     SupplierOffer,
+    ensure_min_markup_price,
     estimate_market_price,
     avito_market_scan,
     dominant_color_name_from_url,
@@ -624,11 +625,11 @@ def import_products_from_sources(
         if payload.use_avito_pricing:
             key = (title or "").strip().lower()
             if key not in avito_price_cache:
-                scan = avito_market_scan(title, max_pages=payload.avito_max_pages)
+                scan = avito_market_scan(title, max_pages=payload.avito_max_pages, only_new=True)
                 avito_price_cache[key] = float(scan.get("suggested")) if scan.get("suggested") is not None else None
             suggested = avito_price_cache.get(key)
             if suggested and suggested > 0:
-                return float(suggested)
+                return ensure_min_markup_price(float(suggested), dropship_price)
         return suggest_sale_price(dropship_price)
 
     for src in sources:

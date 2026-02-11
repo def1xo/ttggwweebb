@@ -1,6 +1,6 @@
 import app.api.v1.admin_supplier_intelligence as asi
 import app.services.supplier_intelligence as si
-from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, estimate_market_price, extract_catalog_items, generate_youth_description, map_category, pick_best_offer, print_signature_hamming, suggest_sale_price
+from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, ensure_min_markup_price, estimate_market_price, extract_catalog_items, generate_youth_description, map_category, pick_best_offer, print_signature_hamming, suggest_sale_price
 
 
 def test_estimate_market_price_ignores_fake_outliers():
@@ -199,3 +199,31 @@ def test_fix_common_mojibake_repairs_utf8_latin1_artifacts():
 
 def test_fix_common_mojibake_keeps_clean_text_unchanged():
     assert si._fix_common_mojibake("Цена дроп") == "Цена дроп"
+
+
+def test_ensure_min_markup_price_enforces_40_percent_floor():
+    assert ensure_min_markup_price(1200, dropship_price=1000) == 1400.0
+    assert ensure_min_markup_price(1700, dropship_price=1000) == 1700.0
+
+
+def test_avito_market_scan_appends_new_keyword(monkeypatch):
+    captured = {"urls": []}
+
+    class DummyResp:
+        status_code = 200
+        headers = {"content-type": "text/html"}
+        text = "Цена 4 990 ₽"
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, *args, **kwargs):
+        captured["urls"].append(url)
+        return DummyResp()
+
+    monkeypatch.setattr(si.requests, "get", fake_get)
+
+    result = si.avito_market_scan("худи alpha", max_pages=1, only_new=True)
+
+    assert result["prices"]
+    assert "%D0%BD%D0%BE%D0%B2%D1%8B%D0%B9" in captured["urls"][0]

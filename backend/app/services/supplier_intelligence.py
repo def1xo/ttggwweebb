@@ -410,12 +410,26 @@ def generate_youth_description(title: str, category_name: str | None = None, col
     )
 
 
+MIN_MARKUP_RATIO = 1.40
+DEFAULT_MARKUP_RATIO = 1.55
+
+
+def ensure_min_markup_price(candidate_price: float | None, dropship_price: float, min_markup_ratio: float = MIN_MARKUP_RATIO) -> float:
+    base = max(0.0, float(dropship_price or 0.0))
+    floor = round(base * float(min_markup_ratio), 0) if base > 0 else 0.0
+    candidate = max(0.0, float(candidate_price or 0.0))
+    if candidate <= 0:
+        return float(floor)
+    return float(max(candidate, floor))
+
+
 def suggest_sale_price(dropship_price: float) -> float:
     base = max(0.0, float(dropship_price))
     if base <= 0:
         return 0.0
     # conservative markup for retail target
-    return round(base * 1.55, 0)
+    suggested = round(base * DEFAULT_MARKUP_RATIO, 0)
+    return ensure_min_markup_price(suggested, base)
 
 
 def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: int = 20) -> list[str]:
@@ -529,7 +543,7 @@ def _extract_prices_from_text(text: str) -> list[float]:
     return out
 
 
-def avito_market_scan(query: str, max_pages: int = 1, timeout_sec: int = 20) -> dict[str, Any]:
+def avito_market_scan(query: str, max_pages: int = 1, timeout_sec: int = 20, only_new: bool = True) -> dict[str, Any]:
     """Best-effort scan of Avito search pages (can fail due to anti-bot)."""
     q = (query or "").strip()
     if not q:
@@ -545,7 +559,8 @@ def avito_market_scan(query: str, max_pages: int = 1, timeout_sec: int = 20) -> 
     pages = max(1, min(int(max_pages or 1), 3))
     for page in range(1, pages + 1):
         try:
-            url = f"https://www.avito.ru/rossiya?cd=1&p={page}&q={requests.utils.quote(q)}"
+            q_for_search = f"{q} новый" if only_new and "нов" not in q.lower() else q
+            url = f"https://www.avito.ru/rossiya?cd=1&p={page}&q={requests.utils.quote(q_for_search)}"
             r = _http_get_with_retries(url, timeout_sec=timeout_sec, headers=headers, max_attempts=3)
             txt = r.text or ""
             found = _extract_prices_from_text(txt)
