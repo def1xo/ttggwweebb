@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,6 +28,26 @@ from app.services.supplier_intelligence import (
 )
 
 router = APIRouter(tags=["admin_supplier_intelligence"])
+logger = logging.getLogger(__name__)
+
+ERROR_CODE_NETWORK_TIMEOUT = "network_timeout"
+ERROR_CODE_INVALID_IMAGE = "invalid_image"
+ERROR_CODE_PARSE_FAILED = "parse_failed"
+ERROR_CODE_DB_CONFLICT = "db_conflict"
+ERROR_CODE_UNKNOWN = "unknown"
+
+
+def _classify_import_error(exc: Exception) -> str:
+    if isinstance(exc, IntegrityError):
+        return ERROR_CODE_DB_CONFLICT
+    message = str(exc).lower()
+    if any(token in message for token in ("timeout", "timed out", "connection", "429", "too many requests")):
+        return ERROR_CODE_NETWORK_TIMEOUT
+    if "not an image" in message or "invalid image" in message:
+        return ERROR_CODE_INVALID_IMAGE
+    if "parse" in message:
+        return ERROR_CODE_PARSE_FAILED
+    return ERROR_CODE_UNKNOWN
 
 
 class SupplierSourceIn(BaseModel):
@@ -348,12 +369,32 @@ class ImportProductsIn(BaseModel):
     avito_max_pages: int = Field(default=1, ge=1, le=3)
 
 
+class ImportSourceReport(BaseModel):
+    source_id: int
+    url: str
+    imported: int = 0
+    errors: int = 0
+    error_codes: dict[str, int] = Field(default_factory=dict)
+    last_error_message: str | None = None
+
+
 class ImportProductsOut(BaseModel):
     created_categories: int
     created_products: int
     updated_products: int
     created_variants: int
-    source_reports: list[dict[str, object]] = Field(default_factory=list)
+    source_reports: list[ImportSourceReport] = Field(default_factory=list)
+
+
+def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
+    return ImportSourceReport(source_id=source_id, url=source_url)
+
+
+def _register_source_error(report: ImportSourceReport, exc: Exception) -> None:
+    code = _classify_import_error(exc)
+    report.errors += 1
+    report.last_error_message = str(exc)
+    report.error_codes[code] = int(report.error_codes.get(code) or 0) + 1
 
 
 
@@ -507,7 +548,7 @@ def import_products_from_sources(
     created_products = 0
     updated_products = 0
     created_variants = 0
-    source_reports: list[dict[str, object]] = []
+    source_reports: list[ImportSourceReport] = []
     signature_product_map: dict[str, int] = {}
     avito_price_cache: dict[str, float | None] = {}
 
@@ -579,7 +620,7 @@ def import_products_from_sources(
         src_url = (src.source_url or "").strip()
         if not src_url:
             continue
-        report = {"source_id": int(src.id), "url": src_url, "imported": 0, "errors": 0}
+        report = _new_source_report(source_id=int(src.id), source_url=src_url)
         try:
             preview = fetch_tabular_preview(src_url, max_rows=max(5, payload.max_items_per_source + 1))
             rows = preview.get("rows_preview") or []
@@ -592,8 +633,7 @@ def import_products_from_sources(
                     for i, u in enumerate(imgs)
                 ]
         except Exception as exc:
-            report["errors"] = 1
-            report["error_message"] = str(exc)
+            _register_source_error(report, exc)
             source_reports.append(report)
             continue
 
@@ -714,11 +754,21 @@ def import_products_from_sources(
                         variant.images = [image_url]
                     db.add(variant)
 
-                report["imported"] = int(report.get("imported") or 0) + 1
-            except Exception:
-                report["errors"] = int(report.get("errors") or 0) + 1
+                report.imported += 1
+            except Exception as exc:
+                _register_source_error(report, exc)
 
         source_reports.append(report)
+
+    top_failing_sources = sorted((x for x in source_reports if x.errors > 0), key=lambda x: x.errors, reverse=True)[:5]
+    if top_failing_sources:
+        logger.warning(
+            "supplier import top failures: %s",
+            [
+                {"source_id": x.source_id, "url": x.url, "errors": x.errors, "error_codes": x.error_codes}
+                for x in top_failing_sources
+            ],
+        )
 
     if payload.dry_run:
         db.rollback()
