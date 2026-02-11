@@ -161,6 +161,53 @@ export async function reportClientError(payload: any) {
   }
 }
 
+
+export async function trackAnalyticsEvent(payload: any) {
+  const candidates = [
+    `${API_BASE_URL}/api/logs/analytics-event`,
+    `${API_BASE_URL}/api/v1/logs/analytics-event`,
+    `${API_BASE_URL}/logs/analytics-event`,
+    `/api/logs/analytics-event`,
+    `/logs/analytics-event`,
+  ];
+  try {
+    await tryCandidates(candidates, { method: "post", data: payload, timeout: 5000 });
+  } catch {
+    // silent on purpose: analytics must never break UX
+  }
+}
+
+export async function getAdminAnalyticsFunnel(days = 30) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/logs/analytics-funnel`,
+      `${API_BASE_URL}/api/v1/logs/analytics-funnel`,
+      `${API_BASE_URL}/logs/analytics-funnel`,
+      `/api/logs/analytics-funnel`,
+      `/logs/analytics-funnel`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { days } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+
+export async function getAdminAnalyticsTopProducts(days = 30, limit = 10) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/logs/analytics-top-products`,
+      `${API_BASE_URL}/api/v1/logs/analytics-top-products`,
+      `${API_BASE_URL}/logs/analytics-top-products`,
+      `/api/logs/analytics-top-products`,
+      `/logs/analytics-top-products`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { days, limit } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 axiosInstance.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -408,6 +455,21 @@ export async function clearCart() {
   }
 }
 
+
+export async function getCartRecommendations(limit = 8) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/cart/recommendations`,
+      `${API_BASE_URL}/api/v1/cart/recommendations`,
+      `/api/cart/recommendations`,
+      `/cart/recommendations`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { limit } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function applyCartPromo(code: string) {
   try {
     const candidates = [
@@ -513,6 +575,21 @@ export async function removeFavorite(productId: number | string) {
 export async function getProducts(params?: Record<string, any>) {
   try {
     return await tryCandidates(CANDIDATES.products, { method: "get", params });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+
+export async function getRelatedProducts(productId: number | string, limit = 8) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/products/${productId}/related`,
+      `${API_BASE_URL}/api/v1/products/${productId}/related`,
+      `/api/products/${productId}/related`,
+      `/products/${productId}/related`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { limit } });
   } catch (e) {
     return handleAxiosError(e);
   }
@@ -936,6 +1013,50 @@ export async function approveWithdraw(withdrawId: number, approve = true) {
 }
 
 
+
+export async function getAdminOpsNeedsAttention(limit = 10, low_stock_threshold = 2, stale_order_hours = 24, include_low_stock = false) {
+  try {
+    const candidates = [
+      "/api/admin/ops/needs-attention",
+      "/admin/ops/needs-attention",
+      "/api/v1/admin/ops/needs-attention",
+      "/v1/admin/ops/needs-attention",
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { limit, low_stock_threshold, stale_order_hours, include_low_stock } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+
+export async function sendAdminSalesExportToTelegram(scope: "month" | "week" | "all" = "month", base_url?: string) {
+  try {
+    const candidates = [
+      "/api/admin/export/sales-to-telegram",
+      "/admin/export/sales-to-telegram",
+      "/api/v1/admin/export/sales-to-telegram",
+      "/v1/admin/export/sales-to-telegram",
+    ];
+    return await tryCandidates(candidates, { method: "post", params: { scope, base_url } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function sendOrderProofToTelegram(order_id: number, base_url?: string) {
+  try {
+    const candidates = [
+      `/api/admin/orders/${order_id}/send-proof-to-telegram`,
+      `/admin/orders/${order_id}/send-proof-to-telegram`,
+      `/api/v1/admin/orders/${order_id}/send-proof-to-telegram`,
+      `/v1/admin/orders/${order_id}/send-proof-to-telegram`,
+    ];
+    return await tryCandidates(candidates, { method: "post", params: { base_url } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function getAdminManagers() {
   try {
     const candidates = [
@@ -1029,9 +1150,10 @@ export async function createProduct(payload: any) {
     if (payload?.visible != null) form.append("visible", payload.visible ? "true" : "false");
     if (payload?.sizes) form.append("sizes", String(payload.sizes));
     if (payload?.color) form.append("color", String(payload.color));
-    if (payload?.image instanceof File) form.append("images", payload.image);
+    if (payload?.stock_quantity != null) form.append("stock_quantity", String(payload.stock_quantity));
+    if (payload?.image instanceof File) form.append("image", payload.image);
     if (payload?.images && Array.isArray(payload.images)) payload.images.forEach((f: File) => form.append("images", f));
-    const res = await axiosInstance.post("/api/admin/products", form, { headers: { "Content-Type": "multipart/form-data" } });
+    const res = await axiosInstance.post("/api/admin/products", form);
     return res.data;
   } catch (e) {
     return handleAxiosError(e);
@@ -1048,9 +1170,10 @@ export async function updateProduct(id: number, payload: any) {
     if (payload?.visible != null) form.append("visible", payload.visible ? "true" : "false");
     if (payload?.sizes) form.append("sizes", String(payload.sizes));
     if (payload?.color) form.append("color", String(payload.color));
-    if (payload?.image instanceof File) form.append("images", payload.image);
+    if (payload?.stock_quantity != null) form.append("stock_quantity", String(payload.stock_quantity));
+    if (payload?.image instanceof File) form.append("image", payload.image);
     if (payload?.images && Array.isArray(payload.images)) payload.images.forEach((f: File) => form.append("images", f));
-    const res = await axiosInstance.patch(`/api/admin/products/${id}`, form, { headers: { "Content-Type": "multipart/form-data" } });
+    const res = await axiosInstance.patch(`/api/admin/products/${id}`, form);
     return res.data;
   } catch (e) {
     return handleAxiosError(e);

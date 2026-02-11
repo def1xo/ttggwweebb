@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, getAdminStats } from "../services/api";
+import api, { adminLogin, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats, sendAdminSalesExportToTelegram, sendOrderProofToTelegram } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -21,6 +21,59 @@ type AdminStats = {
   range: RangeKey;
   series: SeriesPoint[];
   month: MonthSummary;
+};
+
+type AnalyticsFunnel = {
+  days: number;
+  counts: {
+    view_product: number;
+    add_to_cart: number;
+    begin_checkout: number;
+    purchase: number;
+  };
+  conversion: {
+    view_to_cart_percent: number;
+    cart_to_checkout_percent: number;
+    checkout_to_purchase_percent: number;
+    view_to_purchase_percent: number;
+  };
+};
+
+
+type AnalyticsTopProduct = {
+  product_id: number;
+  title: string;
+  view_product: number;
+  add_to_cart: number;
+  purchase: number;
+  add_rate_percent: number;
+  purchase_rate_percent: number;
+};
+
+
+type OpsNeedsAttention = {
+  generated_at: string;
+  thresholds: { low_stock_threshold: number; stale_order_hours: number; include_low_stock?: boolean };
+  severity_score: number;
+  counts: {
+    stale_orders: number;
+    stale_orders_without_proof: number;
+    products_missing_data: number;
+    low_stock_variants: number;
+  };
+  items: {
+    stale_orders: Array<{ order_id: number; created_at?: string | null; hours_waiting: number; total_amount: number; fio?: string | null; has_payment_proof: boolean }>;
+    products_missing_data: Array<{ product_id: number; title: string; visible: boolean; reasons: string[] }>;
+    low_stock_variants: Array<{ variant_id: number; product_id: number; title: string; stock_quantity: number; is_out: boolean }>;
+  };
+  queue: Array<{
+    type: "stale_order" | "product_card" | "low_stock" | string;
+    priority: number;
+    title: string;
+    subtitle: string;
+    recommended_action: string;
+    meta?: Record<string, any>;
+  }>;
 };
 
 type ViewKey =
@@ -177,6 +230,18 @@ function AdminOrdersPanel({ onBack }: { onBack: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
 
+  const sendProofToTelegram = async (orderId: number, proofUrl?: string) => {
+    try {
+      await sendOrderProofToTelegram(orderId, window.location.origin);
+      if (proofUrl) {
+        try { window.open(String(proofUrl), "_blank", "noopener,noreferrer"); } catch {}
+      }
+      setActionMsg(`Чек заказа #${orderId}: открыл и отправил ссылку в Telegram ✅`);
+    } catch (e: any) {
+      setActionMsg(e?.message || "Не удалось отправить чек в Telegram");
+    }
+  };
+
   const updateStatus = async (id: number, status: string) => {
     if (!confirm(`Поменять статус заказа #${id} на "${status}"?`)) return;
     try {
@@ -268,9 +333,9 @@ function AdminOrdersPanel({ onBack }: { onBack: () => void }) {
                         <a href={String(o.payment_screenshot)} target="_blank" rel="noreferrer" className="btn ghost">
                           Открыть
                         </a>
-                        <a href={String(o.payment_screenshot)} download className="btn ghost">
+                        <button className="btn ghost" onClick={() => sendProofToTelegram(Number(o.id), String(o.payment_screenshot))}>
                           Скачать
-                        </a>
+                        </button>
                       </div>
                     ) : (
                       "—"
@@ -562,6 +627,13 @@ function mergeDateTimeToIso(datePart: string, timePart: string): string | null {
   return local.toISOString();
 }
 
+function plusDaysLocal(datePart: string, days: number): string {
+  const base = datePart ? new Date(`${datePart}T12:00:00`) : new Date();
+  if (Number.isNaN(base.getTime())) return toLocalDateInput(new Date().toISOString());
+  base.setDate(base.getDate() + days);
+  return toLocalDateInput(base.toISOString());
+}
+
 type DateTimeEditorProps = {
   value?: string | null;
   onChange: (nextIso: string | null) => void;
@@ -583,8 +655,8 @@ function DateTimeEditor({ value, onChange }: DateTimeEditorProps) {
   };
 
   return (
-    <div style={{ display: "grid", gap: 6 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 6 }}>
+    <div className="promo-datetime-editor">
+      <div className="promo-datetime-grid">
         <input
           className="input"
           type="date"
@@ -598,10 +670,15 @@ function DateTimeEditor({ value, onChange }: DateTimeEditorProps) {
           onChange={(e) => apply(datePart, e.target.value)}
         />
       </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      <div className="promo-chip-row">
         <button type="button" className="chip" onClick={() => apply(datePart || toLocalDateInput(new Date().toISOString()), "12:00")}>12:00</button>
         <button type="button" className="chip" onClick={() => apply(datePart || toLocalDateInput(new Date().toISOString()), "18:00")}>18:00</button>
         <button type="button" className="chip" onClick={() => apply(datePart || toLocalDateInput(new Date().toISOString()), "23:59")}>23:59</button>
+      </div>
+      <div className="promo-chip-row">
+        <button type="button" className="chip" onClick={() => apply(plusDaysLocal(datePart, 1), timePart || "23:59")}>+1 день</button>
+        <button type="button" className="chip" onClick={() => apply(plusDaysLocal(datePart, 3), timePart || "23:59")}>+3 дня</button>
+        <button type="button" className="chip" onClick={() => apply(plusDaysLocal(datePart, 7), timePart || "23:59")}>+7 дней</button>
         <button type="button" className="chip" onClick={() => apply("", "")}>Без срока</button>
       </div>
     </div>
@@ -748,7 +825,7 @@ function AdminPromosPanel({ onBack }: { onBack: () => void }) {
 
       <div className="card" style={{ padding: 14, marginBottom: 12 }}>
         <div style={{ fontWeight: 700, marginBottom: 10 }}>Создать</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+        <div className="promo-create-grid">
           <input className="input" placeholder="CODE" value={createForm.code} onChange={(e) => setCreateForm((p) => ({ ...p, code: e.target.value }))} />
           <input className="input" placeholder="Скидка (например 10)" value={createForm.value} onChange={(e) => setCreateForm((p) => ({ ...p, value: e.target.value }))} />
           <input className="input" placeholder="Usage limit (опц.)" value={createForm.usage_limit} onChange={(e) => setCreateForm((p) => ({ ...p, usage_limit: e.target.value }))} />
@@ -762,7 +839,7 @@ function AdminPromosPanel({ onBack }: { onBack: () => void }) {
         </button>
       </div>
 
-      <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+      <div className="card promo-table-wrap" style={{ padding: 0, overflowX: "auto" }}>
         <table className="table" style={{ minWidth: 980 }}>
           <thead>
             <tr>
@@ -826,6 +903,38 @@ function AdminPromosPanel({ onBack }: { onBack: () => void }) {
           </tbody>
         </table>
       </div>
+
+      <div className="promo-mobile-list">
+        {items.length === 0 ? (
+          <div className="card" style={{ padding: 14, color: "var(--muted)" }}>Пусто</div>
+        ) : null}
+        {items.map((p) => (
+          <div key={`mobile_${p.id}`} className="card" style={{ padding: 12, marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 8 }}>
+              <div style={{ fontWeight: 800 }}>#{p.id}</div>
+              <div className="small-muted">исп: {p.used_count ?? 0}</div>
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              <input className="input" value={p.code} onChange={(e) => updateRow(p.id, { code: e.target.value })} placeholder="CODE" />
+              <input className="input" value={String(p.value ?? "")} onChange={(e) => updateRow(p.id, { value: Number(String(e.target.value).replace(",", ".")) })} placeholder="Скидка" />
+              <DateTimeEditor value={p.expires_at || null} onChange={(nextIso) => updateRow(p.id, { expires_at: nextIso })} />
+              <input
+                className="input"
+                value={p.usage_limit == null ? "" : String(p.usage_limit)}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  updateRow(p.id, { usage_limit: v ? Number(v) : null });
+                }}
+                placeholder="Usage limit"
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-primary" onClick={() => patchOne(p)} style={{ flex: 1 }}>Сохранить</button>
+                <button className="btn btn-secondary" onClick={() => del(p.id, p.code)} style={{ flex: 1 }}>Удалить</button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -837,6 +946,16 @@ export default function AdminDashboard() {
   const [loadingStats, setLoadingStats] = useState(false);
   const [statsErr, setStatsErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<SeriesPoint | null>(null);
+  const [funnel, setFunnel] = useState<AnalyticsFunnel | null>(null);
+  const [funnelErr, setFunnelErr] = useState<string | null>(null);
+  const [topProducts, setTopProducts] = useState<AnalyticsTopProduct[]>([]);
+  const [topProductsErr, setTopProductsErr] = useState<string | null>(null);
+  const [opsQueue, setOpsQueue] = useState<OpsNeedsAttention | null>(null);
+  const [opsErr, setOpsErr] = useState<string | null>(null);
+  const [opsLimit, setOpsLimit] = useState(8);
+  const [opsLowStockThreshold, setOpsLowStockThreshold] = useState(2);
+  const [opsStaleHours, setOpsStaleHours] = useState(24);
+  const [opsIncludeLowStock, setOpsIncludeLowStock] = useState(false);
   const [view, setView] = useState<ViewKey>("dashboard");
 
   const loadStats = async (r: RangeKey) => {
@@ -866,10 +985,66 @@ export default function AdminDashboard() {
     }
   };
 
+  const loadFunnel = async () => {
+    setFunnelErr(null);
+    try {
+      const res: any = await getAdminAnalyticsFunnel(30);
+      if (res?.counts && res?.conversion) {
+        setFunnel(res as AnalyticsFunnel);
+        return;
+      }
+      if (res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
+        return;
+      }
+      setFunnelErr(res?.detail || "Не удалось загрузить воронку");
+    } catch (e: any) {
+      setFunnelErr(e?.message || "Не удалось загрузить воронку");
+    }
+  };
+
+  const loadTopProducts = async () => {
+    setTopProductsErr(null);
+    try {
+      const res: any = await getAdminAnalyticsTopProducts(30, 8);
+      const items = Array.isArray(res?.items) ? res.items : [];
+      setTopProducts(items as AnalyticsTopProduct[]);
+      if (!Array.isArray(res?.items) && res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
+      }
+    } catch (e: any) {
+      setTopProductsErr(e?.message || "Не удалось загрузить топ товаров");
+    }
+  };
+
+  const loadOpsQueue = async () => {
+    setOpsErr(null);
+    try {
+      const res: any = await getAdminOpsNeedsAttention(opsLimit, opsLowStockThreshold, opsStaleHours, opsIncludeLowStock);
+      if (res?.counts && res?.items) {
+        setOpsQueue(res as OpsNeedsAttention);
+        return;
+      }
+      if (res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
+        return;
+      }
+      setOpsErr(res?.detail || "Не удалось загрузить операционную очередь");
+    } catch (e: any) {
+      setOpsErr(e?.message || "Не удалось загрузить операционную очередь");
+    }
+  };
+
   useEffect(() => {
     if (!authed) return;
     loadStats(range);
-  }, [authed, range]);
+    loadFunnel();
+    loadTopProducts();
+    loadOpsQueue();
+  }, [authed, range, opsLimit, opsLowStockThreshold, opsStaleHours, opsIncludeLowStock]);
 
   const navButtons = useMemo(
     () =>
@@ -887,35 +1062,19 @@ export default function AdminDashboard() {
 
   const exportXlsx = async () => {
     try {
-      const resp = await fetch("/api/admin/export/sales.xlsx?scope=month", {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("admin_token") || ""}`,
-          "X-Telegram-Init-Data": sessionStorage.getItem("tg_init_data") || "",
-        },
-      });
-      if (!resp.ok) {
-        if (resp.status === 401) {
-          localStorage.removeItem("admin_token");
-          setAuthed(false);
-          return;
-        }
-        const t = await resp.text();
-        alert(t || "Не удалось экспортировать");
+      const res: any = await sendAdminSalesExportToTelegram("month", window.location.origin);
+      if (res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
         return;
       }
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `sales_${new Date().toISOString().slice(0, 10)}.xlsx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      alert("Ссылка на Excel отправлена в Telegram-чат администратора ✅");
     } catch (e: any) {
-      alert(e?.message || "Ошибка экспорта");
+      alert(e?.message || "Ошибка отправки экспорта в Telegram");
     }
   };
+
+
 
   if (!authed) {
     return <AdminLoginGate onAuthed={() => setAuthed(true)} />;
@@ -1027,6 +1186,161 @@ export default function AdminDashboard() {
         <div className="card" style={{ padding: 12 }}>
           <div style={{ color: "var(--muted)", fontSize: 12 }}>Маржа (оценка)</div>
           <div style={{ fontSize: 20, fontWeight: 800 }}>{(stats?.month.margin_percent ?? 0).toFixed(1)}%</div>
+        </div>
+      </div>
+
+
+      <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Воронка продаж (30 дней)</div>
+        {funnelErr ? <div style={{ color: "#ff8c8c", marginBottom: 8 }}>{funnelErr}</div> : null}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Просмотры товара</div><div style={{ fontWeight: 800 }}>{funnel?.counts.view_product ?? 0}</div></div>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Добавления в корзину</div><div style={{ fontWeight: 800 }}>{funnel?.counts.add_to_cart ?? 0}</div></div>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Начали оформление</div><div style={{ fontWeight: 800 }}>{funnel?.counts.begin_checkout ?? 0}</div></div>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Покупки</div><div style={{ fontWeight: 800 }}>{funnel?.counts.purchase ?? 0}</div></div>
+        </div>
+        <div style={{ marginTop: 10, color: "var(--muted)", fontSize: 13 }}>
+          CR view→cart: <b>{(funnel?.conversion.view_to_cart_percent ?? 0).toFixed(2)}%</b> • cart→checkout: <b>{(funnel?.conversion.cart_to_checkout_percent ?? 0).toFixed(2)}%</b> • checkout→purchase: <b>{(funnel?.conversion.checkout_to_purchase_percent ?? 0).toFixed(2)}%</b>
+        </div>
+      </div>
+
+
+      <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Топ товаров по аналитике (30 дней)</div>
+        {topProductsErr ? <div style={{ color: "#ff8c8c", marginBottom: 8 }}>{topProductsErr}</div> : null}
+        {topProducts.length === 0 ? (
+          <div className="small-muted">Пока недостаточно данных.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "6px 4px" }}>Товар</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>Просм.</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>В корз.</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>Покупки</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>CR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topProducts.map((it) => (
+                  <tr key={it.product_id} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td style={{ padding: "6px 4px" }}>{it.title}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px" }}>{it.view_product}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px" }}>{it.add_to_cart}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px" }}>{it.purchase}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px", fontWeight: 700 }}>{Number(it.purchase_rate_percent || 0).toFixed(2)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+
+
+      <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 800 }}>Операционная очередь (что требует внимания)</div>
+          <div className="small-muted">Индекс нагрузки: <b>{opsQueue?.severity_score ?? 0}</b></div>
+        </div>
+        {opsErr ? <div style={{ color: "#ff8c8c", marginTop: 8 }}>{opsErr}</div> : null}
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginTop: 10 }}>
+          <label className="small-muted">Лимит
+            <input className="input" type="number" min={3} max={20} value={opsLimit} onChange={(e) => setOpsLimit(Math.min(20, Math.max(3, Number(e.target.value) || 8)))} />
+          </label>
+          <label className="small-muted">Низкий остаток ≤
+            <input className="input" type="number" min={0} max={20} value={opsLowStockThreshold} onChange={(e) => setOpsLowStockThreshold(Math.min(20, Math.max(0, Number(e.target.value) || 2)))} />
+          </label>
+          <label className="small-muted">Просрочка (часы)
+            <input className="input" type="number" min={1} max={168} value={opsStaleHours} onChange={(e) => setOpsStaleHours(Math.min(168, Math.max(1, Number(e.target.value) || 24)))} />
+          </label>
+          <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" checked={opsIncludeLowStock} onChange={(e) => setOpsIncludeLowStock(e.target.checked)} />
+            Учитывать низкий остаток
+          </label>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10, marginTop: 10 }}>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Просроченные оплаты</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.stale_orders ?? 0}</div>
+          </div>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Без чека</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.stale_orders_without_proof ?? 0}</div>
+          </div>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Карточки с проблемами</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.products_missing_data ?? 0}</div>
+          </div>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Низкий остаток</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.low_stock_variants ?? 0}</div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <div style={{ fontWeight: 700 }}>Приоритетные задачи</div>
+            <div className="small-muted">по убыванию приоритета</div>
+          </div>
+          {(opsQueue?.queue || []).slice(0, 8).map((task, idx) => (
+            <div key={`${task.type}_${idx}`} className="card" style={{ padding: 10, marginBottom: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "start" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700 }}>{task.title}</div>
+                  <div className="small-muted" style={{ marginTop: 4 }}>{task.subtitle}</div>
+                  <div style={{ marginTop: 6, fontSize: 13 }}>
+                    👉 {task.recommended_action}
+                  </div>
+                </div>
+                <div className="chip chip-sm" style={{ whiteSpace: "nowrap" }}>prio {task.priority}</div>
+              </div>
+            </div>
+          ))}
+          {(opsQueue?.queue || []).length === 0 ? <div className="small-muted">Очередь пока пустая</div> : null}
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Просроченные заказы</div>
+          {(opsQueue?.items.stale_orders || []).slice(0, 5).map((it) => (
+            <div key={it.order_id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700 }}>Заказ #{it.order_id} • {it.hours_waiting}ч</div>
+                <div className="small-muted">{formatRub(it.total_amount)} {it.fio ? `• ${it.fio}` : ""} {it.has_payment_proof ? "• чек есть" : "• без чека"}</div>
+              </div>
+            </div>
+          ))}
+          {(opsQueue?.items.stale_orders || []).length === 0 ? <div className="small-muted">Нет просроченных заказов</div> : null}
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Топ проблемных карточек</div>
+          {(opsQueue?.items.products_missing_data || []).slice(0, 5).map((it) => (
+            <div key={it.product_id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.title}</div>
+                <div className="small-muted">#{it.product_id} • {it.reasons.join(", ")}</div>
+              </div>
+            </div>
+          ))}
+          {(opsQueue?.items.products_missing_data || []).length === 0 ? <div className="small-muted">Нет критичных карточек 🎉</div> : null}
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Низкие остатки</div>
+          {(opsQueue?.items.low_stock_variants || []).slice(0, 5).map((it) => (
+            <div key={it.variant_id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.title}</div>
+                <div className="small-muted">variant #{it.variant_id} • остаток: {it.stock_quantity} {it.is_out ? "• OUT" : ""}</div>
+              </div>
+            </div>
+          ))}
+          {(opsQueue?.items.low_stock_variants || []).length === 0 ? <div className="small-muted">Критичных остатков нет</div> : null}
         </div>
       </div>
 

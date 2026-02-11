@@ -5,11 +5,12 @@ type Props = {
   onChange: (v: string) => void;
   placeholder?: string;
   hint?: string;
+  fixedTop?: boolean;
 };
 
-const StickySearch: React.FC<Props> = ({ value, onChange, placeholder = "Поиск…", hint }) => {
+const StickySearch: React.FC<Props> = ({ value, onChange, placeholder = "Поиск…", hint, fixedTop = false }) => {
   return (
-    <div className="sticky-search" role="search" aria-label="Поиск">
+    <div className={`sticky-search${fixedTop ? " sticky-search--fixed-top" : ""}`} role="search" aria-label="Поиск">
       <div className="searchbar">
         <svg
           className="icon"

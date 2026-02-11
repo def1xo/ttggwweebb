@@ -7,13 +7,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  addCartItem,
   applyCartPromo,
   clearCart,
   createOrder,
   deleteCartItem,
   getCart,
+  getCartRecommendations,
   removeCartPromo,
   setCartItem,
+  trackAnalyticsEvent,
 } from "../services/api";
 import { useToast } from "../contexts/ToastContext";
 
@@ -67,6 +70,16 @@ function toIsoDateTime(ts?: string | null) {
   }
 }
 
+function pickCardImage(product: any): string | null {
+  const imgs = (product?.images || product?.image_urls || product?.imageUrls || []) as any[];
+  return (
+    (Array.isArray(imgs) && imgs.length ? (imgs[0]?.url || imgs[0]) : null) ||
+    product?.default_image ||
+    product?.image ||
+    null
+  );
+}
+
 export default function Cart() {
   const nav = useNavigate();
   const { notify } = useToast();
@@ -84,6 +97,8 @@ export default function Cart() {
   const [pvz, setPvz] = useState("");
   const [note, setNote] = useState("");
   const [placing, setPlacing] = useState(false);
+  const [related, setRelated] = useState<any[]>([]);
+  const [relatedLoading, setRelatedLoading] = useState(false);
 
   const reqIdRef = useRef(0);
 
@@ -149,6 +164,45 @@ export default function Cart() {
   const promoApplied = useMemo(() => {
     return cart?.promo?.code ? String(cart.promo.code) : "";
   }, [cart?.promo]);
+
+  useEffect(() => {
+    (async () => {
+      if (!items.length) {
+        setRelated([]);
+        return;
+      }
+      setRelatedLoading(true);
+      try {
+        const res: any = await getCartRecommendations(8);
+        const data = (res as any)?.data ?? res;
+        const out = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+        setRelated(out.slice(0, 8));
+      } finally {
+        setRelatedLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items.map((x) => `${x.product_id}:${x.quantity}`).join('|')]);
+
+  async function onAddRelated(product: any) {
+    const variants = Array.isArray(product?.variants) ? product.variants : [];
+    const variantId = Number(product?.default_variant_id || variants?.[0]?.id || product?.id || 0);
+    if (!Number.isFinite(variantId) || variantId <= 0) return;
+    try {
+      await addCartItem(variantId, 1);
+      notify("Добавлено в корзину", "success");
+      trackAnalyticsEvent({
+        event: "add_to_cart",
+        product_id: Number(product?.id || 0) || null,
+        variant_id: variantId,
+        source: "cart_related",
+      });
+      try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
+      await load(true);
+    } catch (e: any) {
+      notify(e?.response?.data?.detail || e?.message || "Не удалось добавить товар", "error");
+    }
+  }
 
 
   async function changeQty(variant_id: number, nextQty: number) {
@@ -238,6 +292,15 @@ export default function Cart() {
         promo_code: promoApplied || promo.trim() || undefined,
       };
 
+      trackAnalyticsEvent({
+        event: "begin_checkout",
+        source: "cart_page",
+        items_count: items.length,
+        subtotal,
+        discount,
+        total,
+      });
+
       const res: any = await createOrder(payload);
       const data = (res as any)?.data ?? res;
       if (data?.status && data?.status >= 400) {
@@ -247,6 +310,13 @@ export default function Cart() {
       }
       const orderId = data?.id;
       notify("Заказ создан ✅", "success");
+      trackAnalyticsEvent({
+        event: "purchase",
+        source: "cart_page",
+        order_id: Number(orderId || 0) || null,
+        items_count: items.length,
+        total: payableTotal,
+      });
       // move to success page (there payment requisites + proof upload)
       try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
       if (orderId) nav(`/order/success/${orderId}`);
@@ -434,6 +504,42 @@ export default function Cart() {
             <label className="small-muted">Комментарий (опционально)</label>
             <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Например: просьба проверить замеры" style={{ marginTop: 6, marginBottom: 8 }} />
           </div>
+
+          {relatedLoading ? (
+            <div className="card" style={{ marginTop: 12, padding: 12 }}>
+              <div className="small-muted">Подбираем сопутствующие товары…</div>
+            </div>
+          ) : null}
+
+          {!relatedLoading && related.length > 0 ? (
+            <div className="card" style={{ marginTop: 12, padding: 12 }}>
+              <div style={{ fontWeight: 900, marginBottom: 8 }}>С этим берут</div>
+              <div className="related-row">
+                {related.map((p: any) => {
+                  const pid = Number(p?.id);
+                  const title = String(p?.title || p?.name || "Товар");
+                  const image = pickCardImage(p);
+                  const price = Number(p?.price ?? p?.base_price ?? 0);
+                  return (
+                    <div key={pid} className="related-item">
+                      <Link to={`/product/${pid}`} style={{ textDecoration: "none", color: "inherit" }}>
+                        <div className="related-thumb">{image ? <img src={String(image)} alt={title} /> : null}</div>
+                        <div className="related-title">{title}</div>
+                      </Link>
+                      <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <div className="small-muted" style={{ fontWeight: 700 }}>
+                          {Number.isFinite(price) && price > 0 ? `${Math.round(price).toLocaleString("ru-RU")} ₽` : "—"}
+                        </div>
+                        <button className="btn btn-sm" onClick={() => onAddRelated(p)} disabled={placing || loading || refreshing}>
+                          + В корзину
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
 
           <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
             <button className="btn full-width-on-mobile" onClick={onPlaceOrder} disabled={placing || loading || refreshing}>
