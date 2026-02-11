@@ -16,6 +16,7 @@ import {
   getCartRecommendations,
   removeCartPromo,
   setCartItem,
+  trackAnalyticsEvent,
 } from "../services/api";
 import { useToast } from "../contexts/ToastContext";
 
@@ -190,6 +191,12 @@ export default function Cart() {
     try {
       await addCartItem(variantId, 1);
       notify("Добавлено в корзину", "success");
+      trackAnalyticsEvent({
+        event: "add_to_cart",
+        product_id: Number(product?.id || 0) || null,
+        variant_id: variantId,
+        source: "cart_related",
+      });
       try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
       await load(true);
     } catch (e: any) {
@@ -285,6 +292,15 @@ export default function Cart() {
         promo_code: promoApplied || promo.trim() || undefined,
       };
 
+      trackAnalyticsEvent({
+        event: "begin_checkout",
+        source: "cart_page",
+        items_count: items.length,
+        subtotal,
+        discount,
+        total,
+      });
+
       const res: any = await createOrder(payload);
       const data = (res as any)?.data ?? res;
       if (data?.status && data?.status >= 400) {
@@ -294,6 +310,13 @@ export default function Cart() {
       }
       const orderId = data?.id;
       notify("Заказ создан ✅", "success");
+      trackAnalyticsEvent({
+        event: "purchase",
+        source: "cart_page",
+        order_id: Number(orderId || 0) || null,
+        items_count: items.length,
+        total: payableTotal,
+      });
       // move to success page (there payment requisites + proof upload)
       try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
       if (orderId) nav(`/order/success/${orderId}`);

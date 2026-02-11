@@ -161,6 +161,37 @@ export async function reportClientError(payload: any) {
   }
 }
 
+
+export async function trackAnalyticsEvent(payload: any) {
+  const candidates = [
+    `${API_BASE_URL}/api/logs/analytics-event`,
+    `${API_BASE_URL}/api/v1/logs/analytics-event`,
+    `${API_BASE_URL}/logs/analytics-event`,
+    `/api/logs/analytics-event`,
+    `/logs/analytics-event`,
+  ];
+  try {
+    await tryCandidates(candidates, { method: "post", data: payload, timeout: 5000 });
+  } catch {
+    // silent on purpose: analytics must never break UX
+  }
+}
+
+export async function getAdminAnalyticsFunnel(days = 30) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/logs/analytics-funnel`,
+      `${API_BASE_URL}/api/v1/logs/analytics-funnel`,
+      `${API_BASE_URL}/logs/analytics-funnel`,
+      `/api/logs/analytics-funnel`,
+      `/logs/analytics-funnel`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { days } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 axiosInstance.interceptors.response.use(
   (response) => response,
   async (error) => {

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
-import api, { addCartItem, getRelatedProducts } from "../services/api";
+import api, { addCartItem, getRelatedProducts, trackAnalyticsEvent } from "../services/api";
 import ColorSwatch from "../components/ColorSwatch";
 import { useToast } from "../contexts/ToastContext";
 import { useFavorites } from "../contexts/FavoritesContext";
@@ -77,6 +77,17 @@ export default function ProductPage() {
     })();
   }, [product?.id, product?.category_id]);
 
+  useEffect(() => {
+    if (!product?.id) return;
+    trackAnalyticsEvent({
+      event: "view_product",
+      product_id: Number(product.id),
+      category_id: Number(product?.category_id || 0) || null,
+      source: "product_page",
+    });
+  }, [product?.id, product?.category_id]);
+
+
   const images: string[] = useMemo(() => {
     if (!product) return [];
     const imgs = (product.images || product.image_urls || []) as any[];
@@ -145,6 +156,12 @@ export default function ProductPage() {
         await addCartItem(Number(variantId), 1);
         hapticImpact("light");
         notify("Добавлено в корзину", "success");
+        trackAnalyticsEvent({
+          event: "add_to_cart",
+          product_id: Number(product?.id || 0) || null,
+          variant_id: Number(variantId),
+          source: "product_page_main_cta",
+        });
         try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
       } catch {
         notify("Не удалось добавить в корзину", "error");
@@ -170,6 +187,12 @@ export default function ProductPage() {
     try {
       await addCartItem(variantId, 1);
       notify("Товар добавлен в корзину", "success");
+      trackAnalyticsEvent({
+        event: "add_to_cart",
+        product_id: Number(item?.id || 0) || null,
+        variant_id: variantId,
+        source: "product_page_related",
+      });
       try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
       hapticImpact("light");
     } catch {

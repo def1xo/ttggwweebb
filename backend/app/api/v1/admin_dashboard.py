@@ -234,15 +234,23 @@ def admin_stats(
     profit = revenue - cost_total
     margin_percent = float((profit / revenue * Decimal("100")) if revenue > 0 else 0)
 
+    revenue_f = float(revenue)
+    cost_f = float(cost_total)
+    profit_f = float(profit)
+
     return {
         "range": (range or "month"),
         "series": series,
         "month": {
             "month_start": m_start.isoformat() + "Z",
             "orders_count": len(orders),
-            "revenue": float(revenue),
-            "cost": float(cost_total),
-            "profit": float(profit),
+            # keep both legacy and current keys for frontend compatibility
+            "revenue": revenue_f,
+            "cost": cost_f,
+            "profit": profit_f,
+            "revenue_gross": revenue_f,
+            "cogs_estimated": cost_f,
+            "profit_estimated": profit_f,
             "margin_percent": margin_percent,
         },
     }
