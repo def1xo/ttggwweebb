@@ -4,12 +4,57 @@ import csv
 import io
 import re
 import statistics
+import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any, Iterable, Optional
 from urllib.parse import parse_qs, urlparse
 
 import requests
+
+
+def _safe_timeout(timeout_sec: int | float) -> tuple[float, float]:
+    t = max(1.0, float(timeout_sec or 20))
+    # split connect/read timeout to fail fast on bad endpoints
+    return (min(5.0, t), max(1.0, t))
+
+
+def _http_get_with_retries(
+    url: str,
+    *,
+    timeout_sec: int = 20,
+    headers: dict[str, str] | None = None,
+    max_attempts: int = 3,
+    backoff_sec: float = 0.35,
+) -> requests.Response:
+    last_exc: Exception | None = None
+    for attempt in range(1, max(1, int(max_attempts)) + 1):
+        try:
+            resp = requests.get(url, timeout=_safe_timeout(timeout_sec), headers=headers)
+            # retry on transient server/rate-limit responses
+            if resp.status_code in {429, 500, 502, 503, 504} and attempt < max_attempts:
+                time.sleep(backoff_sec * attempt)
+                continue
+            resp.raise_for_status()
+            return resp
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= max_attempts:
+                break
+            time.sleep(backoff_sec * attempt)
+    raise RuntimeError(f"request failed after retries for {url}") from last_exc
+
+
+def _download_image_bytes(url: str, timeout_sec: int = 20, max_bytes: int = 6_000_000) -> bytes:
+    headers = {"User-Agent": "defshop-intel-bot/1.0"}
+    r = _http_get_with_retries(url, timeout_sec=timeout_sec, headers=headers, max_attempts=3)
+    content_type = (r.headers.get("content-type") or "").lower()
+    if content_type and "image" not in content_type:
+        raise RuntimeError("url is not an image resource")
+    data = r.content or b""
+    if len(data) > int(max_bytes):
+        raise RuntimeError("image is too large for analysis")
+    return data
 
 
 CATEGORY_RULES: dict[str, tuple[str, ...]] = {
@@ -105,8 +150,7 @@ def fetch_tabular_preview(url: str, timeout_sec: int = 20, max_rows: int = 25) -
     fetch_url = _normalize_google_sheet_csv(url) if kind == "google_sheet" else url
 
     headers = {"User-Agent": "defshop-intel-bot/1.0"}
-    resp = requests.get(fetch_url, timeout=timeout_sec, headers=headers)
-    resp.raise_for_status()
+    resp = _http_get_with_retries(fetch_url, timeout_sec=timeout_sec, headers=headers, max_attempts=3)
 
     ct = (resp.headers.get("content-type") or "").lower()
     body = resp.text
@@ -325,8 +369,7 @@ def suggest_sale_price(dropship_price: float) -> float:
 
 def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: int = 20) -> list[str]:
     headers = {"User-Agent": "defshop-intel-bot/1.0"}
-    r = requests.get(url, timeout=timeout_sec, headers=headers)
-    r.raise_for_status()
+    r = _http_get_with_retries(url, timeout_sec=timeout_sec, headers=headers, max_attempts=3)
     html = r.text or ""
 
     urls: list[str] = []
@@ -364,10 +407,7 @@ def _load_image_for_analysis(image_bytes: bytes):
 
 def image_print_signature_from_url(url: str, timeout_sec: int = 20) -> str | None:
     try:
-        headers = {"User-Agent": "defshop-intel-bot/1.0"}
-        r = requests.get(url, timeout=timeout_sec, headers=headers)
-        r.raise_for_status()
-        img = _load_image_for_analysis(r.content)
+        img = _load_image_for_analysis(_download_image_bytes(url, timeout_sec=timeout_sec))
 
         # simple average hash 8x8
         gray = img.convert("L").resize((8, 8))
@@ -387,10 +427,7 @@ def image_print_signature_from_url(url: str, timeout_sec: int = 20) -> str | Non
 
 def dominant_color_name_from_url(url: str, timeout_sec: int = 20) -> str | None:
     try:
-        headers = {"User-Agent": "defshop-intel-bot/1.0"}
-        r = requests.get(url, timeout=timeout_sec, headers=headers)
-        r.raise_for_status()
-        img = _load_image_for_analysis(r.content)
+        img = _load_image_for_analysis(_download_image_bytes(url, timeout_sec=timeout_sec))
 
         small = img.resize((64, 64))
         rs = gs = bs = 0
@@ -458,10 +495,7 @@ def avito_market_scan(query: str, max_pages: int = 1, timeout_sec: int = 20) -> 
     for page in range(1, pages + 1):
         try:
             url = f"https://www.avito.ru/rossiya?cd=1&p={page}&q={requests.utils.quote(q)}"
-            r = requests.get(url, timeout=timeout_sec, headers=headers)
-            if r.status_code >= 400:
-                errors.append(f"page {page}: status {r.status_code}")
-                continue
+            r = _http_get_with_retries(url, timeout_sec=timeout_sec, headers=headers, max_attempts=3)
             txt = r.text or ""
             found = _extract_prices_from_text(txt)
             prices.extend(found)

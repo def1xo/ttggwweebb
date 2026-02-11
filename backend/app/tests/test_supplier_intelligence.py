@@ -1,3 +1,4 @@
+import app.services.supplier_intelligence as si
 from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, estimate_market_price, extract_catalog_items, generate_youth_description, map_category, pick_best_offer, print_signature_hamming, suggest_sale_price
 
 
@@ -65,3 +66,47 @@ def test_extract_catalog_items_skips_non_positive_price_rows():
     ]
     items = extract_catalog_items(rows)
     assert [it["title"] for it in items] == ["Худи Beta"]
+
+
+def test_http_get_with_retries_retries_on_429(monkeypatch):
+    calls = {"n": 0}
+
+    class DummyResp:
+        def __init__(self, code: int):
+            self.status_code = code
+            self.headers = {"content-type": "text/html"}
+            self.text = "ok"
+            self.content = b"ok"
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"status={self.status_code}")
+
+    def fake_get(*args, **kwargs):
+        calls["n"] += 1
+        return DummyResp(429 if calls["n"] == 1 else 200)
+
+    monkeypatch.setattr(si.requests, "get", fake_get)
+    monkeypatch.setattr(si.time, "sleep", lambda *_: None)
+
+    resp = si._http_get_with_retries("https://example.com", max_attempts=3)
+    assert resp.status_code == 200
+    assert calls["n"] == 2
+
+
+def test_download_image_bytes_rejects_non_image_content(monkeypatch):
+    class DummyResp:
+        status_code = 200
+        headers = {"content-type": "text/html"}
+        content = b"<html></html>"
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(si, "_http_get_with_retries", lambda *a, **k: DummyResp())
+
+    try:
+        si._download_image_bytes("https://example.com/not-image")
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "not an image" in str(exc)
