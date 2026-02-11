@@ -209,6 +209,8 @@ def create_order(
             referral_code = payload_code
 
     if discount == Decimal("0") and referral_code:
+        if user.promo_used_code:
+            raise HTTPException(status_code=400, detail="promo already used")
         owner = _resolve_referral(db, referral_code)
         if owner and owner.id != user.id:
             promo_discount_percent = REFERRAL_DISCOUNT_PERCENT
@@ -278,6 +280,13 @@ def create_order(
                 resv.order_id = order.id
                 resv.expires_at = None
                 db.add(resv)
+
+    if promo_kind == "referral" and referral_code:
+        user.promo_used_code = referral_code
+        user.promo_used_at = _now()
+        user.promo_pending_code = None
+        user.promo_pending_order_id = None
+        db.add(user)
 
     # clear cart + state
     db.query(models.CartItem).filter(models.CartItem.user_id == user.id).delete()

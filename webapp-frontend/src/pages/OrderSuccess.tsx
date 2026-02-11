@@ -184,7 +184,7 @@ export default function OrderSuccess() {
       </div>
 
       <div style={{ marginTop: 12 }}>
-        <PaymentDetails amount={payableAmount} />
+        <PaymentDetails amount={payableAmount} subtotal={subtotalAmount} discount={discountAmount} />
       </div>
 
       <div className="card" style={{ padding: 14, marginTop: 12 }}>

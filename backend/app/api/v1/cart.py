@@ -338,18 +338,8 @@ def apply_promo(payload: ApplyPromoIn, db: Session = Depends(get_db), user: mode
 
     st = _get_or_create_state(db, user.id)
 
-    # enforce one discount promo per life
+    # enforce one promo per user lifetime (including referral)
     if user.promo_used_code:
-        # referral codes are still allowed, discount promos are not
-        owner = _resolve_referral_owner(db, code)
-        if owner:
-            st.referral_code = code
-            if st.promo_code:
-                _release_reservation(db, user.id, st.promo_code)
-            st.promo_code = None
-            db.add(st)
-            db.commit()
-            return _calc_cart(db, user)
         raise HTTPException(status_code=400, detail="promo already used")
 
     # prevent switching promos while pending
@@ -358,7 +348,7 @@ def apply_promo(payload: ApplyPromoIn, db: Session = Depends(get_db), user: mode
 
     # referral code
     owner = _resolve_referral_owner(db, code)
-    if owner:
+    if owner and owner.id != user.id:
         st.referral_code = code
         if st.promo_code:
             _release_reservation(db, user.id, st.promo_code)

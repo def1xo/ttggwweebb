@@ -935,6 +935,24 @@ img, picture { max-width: 100%; height: auto; display: block; }
 
 
 /* Product grids */
+.catalog-tools {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 920px) {
+  .catalog-tools {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .catalog-tools {
+    grid-template-columns: 1fr;
+  }
+}
+
 .grid-products{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
 @media (max-width:520px){.grid-products{grid-template-columns:1fr;}}
 
