@@ -15,12 +15,12 @@ function pickPrice(p: ProductAny): number {
   return Number.isFinite(v) ? v : 0;
 }
 
-function extractValues(products: ProductAny[], key: "size" | "color"): string[] {
+function extractValues(products: ProductAny[]): string[] {
   const set = new Set<string>();
   for (const p of products) {
     const variants = Array.isArray(p?.variants) ? p.variants : [];
     for (const v of variants) {
-      const raw = key === "size" ? (v?.size?.name ?? v?.size) : (v?.color?.name ?? v?.color);
+      const raw = v?.size?.name ?? v?.size;
       const value = String(raw ?? "").trim();
       if (value) set.add(value);
     }
@@ -97,7 +97,6 @@ export default function CategoryView() {
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("popular");
   const [sizeFilter, setSizeFilter] = useState("all");
-  const [colorFilter, setColorFilter] = useState("all");
   const [priceFilter, setPriceFilter] = useState<"all" | "up_to_5000" | "5000_10000" | "from_10000">("all");
 
   useEffect(() => {
@@ -125,8 +124,7 @@ export default function CategoryView() {
     })();
   }, [id]);
 
-  const sizeOptions = useMemo(() => extractValues(products, "size"), [products]);
-  const colorOptions = useMemo(() => extractValues(products, "color"), [products]);
+  const sizeOptions = useMemo(() => extractValues(products), [products]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -137,7 +135,6 @@ export default function CategoryView() {
 
       const variants = Array.isArray(p?.variants) ? p.variants : [];
       const sizeOk = sizeFilter === "all" || variants.some((v: any) => String(v?.size?.name ?? v?.size ?? "").trim() === sizeFilter);
-      const colorOk = colorFilter === "all" || variants.some((v: any) => String(v?.color?.name ?? v?.color ?? "").trim() === colorFilter);
 
       const price = pickPrice(p);
       const priceOk =
@@ -146,7 +143,7 @@ export default function CategoryView() {
         || (priceFilter === "5000_10000" && price > 5000 && price <= 10000)
         || (priceFilter === "from_10000" && price > 10000);
 
-      return titleOk && sizeOk && colorOk && priceOk;
+      return titleOk && sizeOk && priceOk;
     });
 
     out = out.slice().sort((a, b) => {
@@ -161,7 +158,7 @@ export default function CategoryView() {
     });
 
     return out;
-  }, [products, query, sizeFilter, colorFilter, priceFilter, sortMode]);
+  }, [products, query, sizeFilter, priceFilter, sortMode]);
 
   const hint = query
     ? `Найдено: ${filtered.length} / ${products.length}`
@@ -169,7 +166,7 @@ export default function CategoryView() {
     ? `Товаров: ${products.length}`
     : "";
 
-  const hasCustomFilters = sortMode !== "popular" || sizeFilter !== "all" || colorFilter !== "all" || priceFilter !== "all";
+  const hasCustomFilters = sortMode !== "popular" || sizeFilter !== "all" || priceFilter !== "all";
 
   return (
     <div className="container" style={{ paddingTop: 12 }}>
@@ -186,44 +183,40 @@ export default function CategoryView() {
         <StickySearch value={query} onChange={setQuery} placeholder="Поиск по товарам…" hint={hint} fixedTop />
       </div>
 
-      <div className="catalog-tools" style={{ marginBottom: 12 }}>
-        <CustomSelect
-          label="Сортировка"
-          value={sortMode}
-          onChange={(v) => setSortMode(v as SortMode)}
-          options={[
-            { value: "popular", label: "По умолчанию" },
-            { value: "price_asc", label: "Цена: по возрастанию" },
-            { value: "price_desc", label: "Цена: по убыванию" },
-            { value: "title_asc", label: "Название: А-Я" },
-          ]}
-        />
+      <div className="catalog-filter-panel" style={{ marginBottom: 12 }}>
+        <div className="catalog-filter-panel__title">Фильтры и сортировка</div>
+        <div className="catalog-tools">
+          <CustomSelect
+            label="Сортировка"
+            value={sortMode}
+            onChange={(v) => setSortMode(v as SortMode)}
+            options={[
+              { value: "popular", label: "По умолчанию" },
+              { value: "price_asc", label: "Цена: по возрастанию" },
+              { value: "price_desc", label: "Цена: по убыванию" },
+              { value: "title_asc", label: "Название: А-Я" },
+            ]}
+          />
 
-        <CustomSelect
-          label="Размер"
-          value={sizeFilter}
-          onChange={setSizeFilter}
-          options={[{ value: "all", label: "Все" }, ...sizeOptions.map((size) => ({ value: size, label: size }))]}
-        />
+          <CustomSelect
+            label="Размер"
+            value={sizeFilter}
+            onChange={setSizeFilter}
+            options={[{ value: "all", label: "Все" }, ...sizeOptions.map((size) => ({ value: size, label: size }))]}
+          />
 
-        <CustomSelect
-          label="Цвет"
-          value={colorFilter}
-          onChange={setColorFilter}
-          options={[{ value: "all", label: "Все" }, ...colorOptions.map((color) => ({ value: color, label: color }))]}
-        />
-
-        <CustomSelect
-          label="Цена"
-          value={priceFilter}
-          onChange={(v) => setPriceFilter(v as any)}
-          options={[
-            { value: "all", label: "Любая" },
-            { value: "up_to_5000", label: "до 5 000 ₽" },
-            { value: "5000_10000", label: "5 001 — 10 000 ₽" },
-            { value: "from_10000", label: "от 10 001 ₽" },
-          ]}
-        />
+          <CustomSelect
+            label="Цена"
+            value={priceFilter}
+            onChange={(v) => setPriceFilter(v as any)}
+            options={[
+              { value: "all", label: "Любая" },
+              { value: "up_to_5000", label: "до 5 000 ₽" },
+              { value: "5000_10000", label: "5 001 — 10 000 ₽" },
+              { value: "from_10000", label: "от 10 001 ₽" },
+            ]}
+          />
+        </div>
       </div>
 
       {hasCustomFilters ? (
@@ -234,7 +227,6 @@ export default function CategoryView() {
             onClick={() => {
               setSortMode("popular");
               setSizeFilter("all");
-              setColorFilter("all");
               setPriceFilter("all");
             }}
           >

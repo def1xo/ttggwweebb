@@ -31,6 +31,11 @@ def _create_index_pg(conn, name: str, table: str, expr: str) -> None:
     conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table}({expr})"))
 
 
+
+def _create_unique_index_pg(conn, name: str, table: str, expr: str) -> None:
+    conn.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table}({expr})"))
+
+
 def _add_enum_value_pg(conn, enum_name: str, value: str) -> None:
     # Postgres doesn't support ADD VALUE IF NOT EXISTS on all versions, so we check first.
     q = text(
@@ -151,6 +156,30 @@ def ensure_columns(engine) -> None:
 
             if _is_postgres(engine):
                 _create_index_pg(conn, "ix_orders_promo_code", "orders", "promo_code")
+
+
+
+    # ---------- supplier_sources ----------
+    if "supplier_sources" in tables:
+        cols = {c["name"] for c in insp.get_columns("supplier_sources")}
+        with engine.begin() as conn:
+            if "active" not in cols:
+                if _is_postgres(engine):
+                    _add_column_pg(conn, "supplier_sources", "active", "BOOLEAN NOT NULL DEFAULT TRUE")
+                else:
+                    conn.execute(text("ALTER TABLE supplier_sources ADD COLUMN active BOOLEAN DEFAULT 1"))
+            if _is_postgres(engine):
+                _create_index_pg(conn, "ix_supplier_sources_active", "supplier_sources", "active")
+
+    # ---------- product_variants dedupe guard ----------
+    if _is_postgres(engine) and "product_variants" in tables:
+        with engine.begin() as conn:
+            _create_unique_index_pg(
+                conn,
+                "uq_product_variants_product_size_color",
+                "product_variants",
+                "product_id, size_id, color_id",
+            )
 
     # ---------- cart_items unique ----------
     if _is_postgres(engine) and "cart_items" in tables:
