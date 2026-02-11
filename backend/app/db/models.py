@@ -472,6 +472,20 @@ class OrderSale(Base):
     manager = relationship("User", foreign_keys=[manager_id])
 
 
+class SupplierSource(Base):
+    __tablename__ = "supplier_sources"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source_url = Column(String(2000), nullable=False, unique=True)
+    supplier_name = Column(String(255), nullable=True)
+    manager_name = Column(String(255), nullable=True)
+    manager_contact = Column(String(255), nullable=True)
+    note = Column(Text, nullable=True)
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ---- Indexes for performance ----
 Index("ix_products_slug", Product.slug)
 Index("ix_categories_name", Category.name)
