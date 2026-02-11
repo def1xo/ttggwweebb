@@ -1,6 +1,4 @@
-﻿import pytest
 from app.services.importer_notifications import parse_and_save_post
-from app.db.session import SessionLocal
 from app.db import models
 
 def test_import_with_hashtags_creates_visible_product(tmp_db):  # tmp_db is fixture to provide DB session
