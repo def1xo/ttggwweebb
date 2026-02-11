@@ -161,6 +161,53 @@ export async function reportClientError(payload: any) {
   }
 }
 
+
+export async function trackAnalyticsEvent(payload: any) {
+  const candidates = [
+    `${API_BASE_URL}/api/logs/analytics-event`,
+    `${API_BASE_URL}/api/v1/logs/analytics-event`,
+    `${API_BASE_URL}/logs/analytics-event`,
+    `/api/logs/analytics-event`,
+    `/logs/analytics-event`,
+  ];
+  try {
+    await tryCandidates(candidates, { method: "post", data: payload, timeout: 5000 });
+  } catch {
+    // silent on purpose: analytics must never break UX
+  }
+}
+
+export async function getAdminAnalyticsFunnel(days = 30) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/logs/analytics-funnel`,
+      `${API_BASE_URL}/api/v1/logs/analytics-funnel`,
+      `${API_BASE_URL}/logs/analytics-funnel`,
+      `/api/logs/analytics-funnel`,
+      `/logs/analytics-funnel`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { days } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+
+export async function getAdminAnalyticsTopProducts(days = 30, limit = 10) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/logs/analytics-top-products`,
+      `${API_BASE_URL}/api/v1/logs/analytics-top-products`,
+      `${API_BASE_URL}/logs/analytics-top-products`,
+      `/api/logs/analytics-top-products`,
+      `/logs/analytics-top-products`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { days, limit } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 axiosInstance.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -408,6 +455,21 @@ export async function clearCart() {
   }
 }
 
+
+export async function getCartRecommendations(limit = 8) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/cart/recommendations`,
+      `${API_BASE_URL}/api/v1/cart/recommendations`,
+      `/api/cart/recommendations`,
+      `/cart/recommendations`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { limit } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function applyCartPromo(code: string) {
   try {
     const candidates = [
@@ -513,6 +575,21 @@ export async function removeFavorite(productId: number | string) {
 export async function getProducts(params?: Record<string, any>) {
   try {
     return await tryCandidates(CANDIDATES.products, { method: "get", params });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+
+export async function getRelatedProducts(productId: number | string, limit = 8) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/products/${productId}/related`,
+      `${API_BASE_URL}/api/v1/products/${productId}/related`,
+      `/api/products/${productId}/related`,
+      `/products/${productId}/related`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { limit } });
   } catch (e) {
     return handleAxiosError(e);
   }
