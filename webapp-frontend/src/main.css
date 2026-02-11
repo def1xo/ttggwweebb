@@ -314,22 +314,17 @@ select.input { appearance: none; }
   min-width: 70px;
   font-size: 12px;
   line-height: 1;
-  transition: transform .18s ease, background .18s ease, color .18s ease;
+  background: transparent;
+  -webkit-tap-highlight-color: transparent;
+  transition: color .16s ease, opacity .16s ease;
 }
-.bottom-nav a:active { transform: scale(0.96); }
-.bottom-nav a.active { transform: translateY(-2px); }
-.bottom-nav a.active { background: var(--panel); color: var(--bg); }
-
-.bottom-nav-indicator {
-  position: absolute;
-  left: 0;
-  bottom: 4px;
-  height: 3px;
-  border-radius: 99px;
-  background: var(--ring);
-  opacity: 0.85;
-  transition: transform .22s ease, width .22s ease, opacity .22s ease;
-  pointer-events: none;
+.bottom-nav a:active,
+.bottom-nav a.active {
+  transform: none;
+  background: transparent;
+}
+.bottom-nav a.active {
+  color: color-mix(in srgb, var(--panel) 96%, transparent);
 }
 
 .nav-icon {
@@ -339,6 +334,9 @@ select.input { appearance: none; }
 }
 
 .bottom-nav a.active .nav-icon { opacity: 1; }
+.bottom-nav a.active span { font-weight: 800; }
+.bottom-nav a:focus,
+.bottom-nav a:focus-visible { outline: none !important; box-shadow: none !important; }
 
 /* Smooth accordion helper */
 .collapsible-inner { padding: 0; }
@@ -600,7 +598,7 @@ img, picture { max-width: 100%; height: auto; display: block; }
 /* безопасный отступ снизу чтобы BottomNav не перекрывал контент */
 .container {
   box-sizing: border-box;
-  padding-bottom: 96px;
+  padding-bottom: calc(112px + env(safe-area-inset-bottom));
 }
 
 /* карточки центрируем и не даём им вылазить */
@@ -624,16 +622,7 @@ img, picture { max-width: 100%; height: auto; display: block; }
   padding-bottom: 8px;
 }
 
-/* BottomNav safe area */
-.bottom-nav {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 12px;
-  display: flex;
-  justify-content: center;
-  z-index: 999;
-}
+/* BottomNav safe area: uses the main .bottom-nav block above */
 
 /* чтобы внутренние панели не занимали весь экран на мобильных */
 .panel-title {
@@ -833,6 +822,7 @@ img, picture { max-width: 100%; height: auto; display: block; }
   position: relative;
   transition: transform 120ms ease, box-shadow 180ms ease;
   will-change: transform;
+  overflow: hidden;
 }
 .product-card:hover {
   transform: translateY(-2px);
@@ -840,6 +830,7 @@ img, picture { max-width: 100%; height: auto; display: block; }
 }
 @media (hover: none) {
   .product-card:hover { transform: none; }
+  .product-card:active { transform: none; }
 }
 .product-card:active { transform: scale(0.99); }
 
@@ -1296,5 +1287,66 @@ img, picture { max-width: 100%; height: auto; display: block; }
   }
   .bottom-nav-inner {
     background: rgba(8, 8, 8, 0.96);
+  }
+}
+
+
+@media (max-width: 640px) {
+  .product-card .quick-add {
+    left: 10px;
+    right: 10px;
+  }
+
+  .product-card .quick-add button {
+    width: 100%;
+    height: 44px;
+  }
+}
+
+
+.modal-overlay--product {
+  z-index: 140;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+.product-modal-scroll {
+  max-height: calc(var(--vh, 1vh) * 100 - 8px);
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+.product-modal__close {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  padding: 0;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.icon-like-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  color: var(--panel);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  place-items: center;
+}
+
+.icon-like-btn:active {
+  transform: scale(0.97);
+}
+
+@media (max-width: 760px) {
+  .product-modal-scroll {
+    max-height: calc(var(--vh, 1vh) * 100 - 4px);
+    border-radius: 16px;
   }
 }
