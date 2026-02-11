@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 
-from app.api.dependencies import get_current_admin_user
+from app.api.dependencies import get_current_admin_user, get_db
+from app.db import models
 from app.services.supplier_intelligence import (
     SupplierOffer,
     estimate_market_price,
@@ -13,6 +15,83 @@ from app.services.supplier_intelligence import (
 )
 
 router = APIRouter(tags=["admin_supplier_intelligence"])
+
+
+class SupplierSourceIn(BaseModel):
+    source_url: str = Field(min_length=5, max_length=2000)
+    supplier_name: str | None = Field(default=None, max_length=255)
+    manager_name: str | None = Field(default=None, max_length=255)
+    manager_contact: str | None = Field(default=None, max_length=255)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class SupplierSourceOut(BaseModel):
+    id: int
+    source_url: str
+    supplier_name: str | None = None
+    manager_name: str | None = None
+    manager_contact: str | None = None
+    note: str | None = None
+    active: bool
+
+
+@router.get("/supplier-intelligence/sources", response_model=list[SupplierSourceOut])
+def list_supplier_sources(_admin=Depends(get_current_admin_user), db: Session = Depends(get_db)):
+    items = (
+        db.query(models.SupplierSource)
+        .order_by(models.SupplierSource.active.desc(), models.SupplierSource.id.desc())
+        .all()
+    )
+    return [
+        SupplierSourceOut(
+            id=int(x.id),
+            source_url=str(x.source_url),
+            supplier_name=getattr(x, "supplier_name", None),
+            manager_name=getattr(x, "manager_name", None),
+            manager_contact=getattr(x, "manager_contact", None),
+            note=getattr(x, "note", None),
+            active=bool(getattr(x, "active", True)),
+        )
+        for x in items
+    ]
+
+
+@router.post("/supplier-intelligence/sources", response_model=SupplierSourceOut)
+def create_supplier_source(payload: SupplierSourceIn, _admin=Depends(get_current_admin_user), db: Session = Depends(get_db)):
+    source_url = payload.source_url.strip()
+    if not source_url:
+        raise HTTPException(status_code=400, detail="source_url is required")
+
+    item = models.SupplierSource(
+        source_url=source_url,
+        supplier_name=(payload.supplier_name or "").strip() or None,
+        manager_name=(payload.manager_name or "").strip() or None,
+        manager_contact=(payload.manager_contact or "").strip() or None,
+        note=(payload.note or "").strip() or None,
+        active=True,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return SupplierSourceOut(
+        id=int(item.id),
+        source_url=str(item.source_url),
+        supplier_name=getattr(item, "supplier_name", None),
+        manager_name=getattr(item, "manager_name", None),
+        manager_contact=getattr(item, "manager_contact", None),
+        note=getattr(item, "note", None),
+        active=bool(getattr(item, "active", True)),
+    )
+
+
+@router.delete("/supplier-intelligence/sources/{source_id}")
+def delete_supplier_source(source_id: int, _admin=Depends(get_current_admin_user), db: Session = Depends(get_db)):
+    item = db.query(models.SupplierSource).filter(models.SupplierSource.id == int(source_id)).one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="source not found")
+    db.delete(item)
+    db.commit()
+    return {"ok": True}
 
 
 class AnalyzeLinksIn(BaseModel):
@@ -40,7 +119,7 @@ def analyze_supplier_links(payload: AnalyzeLinksIn, _admin=Depends(get_current_a
         try:
             data = fetch_tabular_preview(url)
             rows = data.get("rows_preview") or []
-            sample_titles = []
+            sample_titles: list[str] = []
             for r in rows[:8]:
                 if r:
                     sample_titles.append(str(r[0]))

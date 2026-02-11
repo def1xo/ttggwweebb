@@ -1241,6 +1241,49 @@ export async function deleteAdminCategory(id: number) {
   return deleteCategory(id);
 }
 
+export async function getAdminSupplierSources() {
+  try {
+    const res = await axiosInstance.get("/api/admin/supplier-intelligence/sources");
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function createAdminSupplierSource(payload: {
+  source_url: string;
+  supplier_name?: string;
+  manager_name?: string;
+  manager_contact?: string;
+  note?: string;
+}) {
+  try {
+    const res = await axiosInstance.post("/api/admin/supplier-intelligence/sources", payload);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function deleteAdminSupplierSource(id: number) {
+  try {
+    const res = await axiosInstance.delete(`/api/admin/supplier-intelligence/sources/${id}`);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function analyzeSupplierLinks(links: string[]) {
+  try {
+    const res = await axiosInstance.post("/api/admin/supplier-intelligence/analyze-links", { links });
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+
 export async function getRecommendations(limitRecent = 10, resultCount = 4) {
   try {
     const candidates = CANDIDATES.recommendations.map((u) => `${u}?limit_recent=${limitRecent}&result_count=${resultCount}`);
@@ -1319,6 +1362,10 @@ api.deleteProduct = deleteProduct;
 api.createCategory = createCategory;
 api.deleteCategory = deleteCategory;
 api.getRecommendations = getRecommendations;
+api.getAdminSupplierSources = getAdminSupplierSources;
+api.createAdminSupplierSource = createAdminSupplierSource;
+api.deleteAdminSupplierSource = deleteAdminSupplierSource;
+api.analyzeSupplierLinks = analyzeSupplierLinks;
 api.reportClientError = reportClientError;
 
 export default api;

@@ -1,4 +1,4 @@
-from app.services.supplier_intelligence import estimate_market_price, map_category, pick_best_offer, SupplierOffer
+from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, estimate_market_price, map_category, pick_best_offer
 
 
 def test_estimate_market_price_ignores_fake_outliers():
@@ -22,3 +22,7 @@ def test_pick_best_offer_prefers_exact_color_and_size_then_price():
     best = pick_best_offer(offers, desired_color="black", desired_size="M")
     assert best is not None
     assert best.supplier == "B"
+
+
+def test_detect_source_kind_google_sheet():
+    assert detect_source_kind("https://docs.google.com/spreadsheets/d/abc/edit") == "google_sheet"
