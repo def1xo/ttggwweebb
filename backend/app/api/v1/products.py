@@ -2,6 +2,7 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
 from fastapi import Path, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from decimal import Decimal
 
 from app.api.dependencies import get_db, get_current_admin_user
@@ -118,6 +119,102 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
             for v in p.variants
         ],
     }
+
+
+@router.get("/{product_id}/related")
+def get_related_products(
+    product_id: int = Path(...),
+    limit: int = Query(8, ge=1, le=24),
+    db: Session = Depends(get_db),
+):
+    p = db.query(models.Product).get(product_id)
+    if not p or not p.visible:
+        raise HTTPException(status_code=404, detail="product not found")
+
+    # 1) co-purchase candidates from historical orders
+    source_variant_ids = [v.id for v in (p.variants or [])]
+    ranked_product_ids: List[int] = []
+
+    if source_variant_ids:
+        order_ids_q = (
+            db.query(models.OrderItem.order_id)
+            .filter(models.OrderItem.variant_id.in_(source_variant_ids))
+            .distinct()
+        )
+        order_ids = [row[0] for row in order_ids_q.all()]
+
+        if order_ids:
+            rows = (
+                db.query(
+                    models.ProductVariant.product_id,
+                    func.sum(models.OrderItem.quantity).label("score"),
+                )
+                .join(models.OrderItem, models.OrderItem.variant_id == models.ProductVariant.id)
+                .filter(models.OrderItem.order_id.in_(order_ids))
+                .filter(models.ProductVariant.product_id != p.id)
+                .group_by(models.ProductVariant.product_id)
+                .order_by(func.sum(models.OrderItem.quantity).desc())
+                .limit(limit * 3)
+                .all()
+            )
+            ranked_product_ids = [int(r[0]) for r in rows if r and r[0]]
+
+    # 2) materialize co-purchase products preserving rank
+    selected: List[models.Product] = []
+    selected_ids = set()
+    if ranked_product_ids:
+        candidates = (
+            db.query(models.Product)
+            .filter(models.Product.visible == True, models.Product.id.in_(ranked_product_ids))
+            .all()
+        )
+        by_id = {x.id: x for x in candidates}
+        for pid in ranked_product_ids:
+            x = by_id.get(pid)
+            if not x:
+                continue
+            selected.append(x)
+            selected_ids.add(x.id)
+            if len(selected) >= limit:
+                break
+
+    # 3) fallback to same-category newest if not enough
+    if len(selected) < limit:
+        q = db.query(models.Product).filter(models.Product.visible == True, models.Product.id != p.id)
+        if p.category_id:
+            q = q.filter(models.Product.category_id == p.category_id)
+        fallback = q.order_by(models.Product.created_at.desc()).limit(limit * 3).all()
+        for x in fallback:
+            if x.id in selected_ids:
+                continue
+            selected.append(x)
+            selected_ids.add(x.id)
+            if len(selected) >= limit:
+                break
+
+    result = []
+    for rp in selected[:limit]:
+        img_urls = []
+        try:
+            img_urls = [im.url for im in sorted((rp.images or []), key=lambda x: (x.sort or 0, x.id))]
+        except Exception:
+            img_urls = []
+
+        result.append(
+            {
+                "id": rp.id,
+                "name": rp.title,
+                "title": rp.title,
+                "slug": rp.slug,
+                "base_price": float(rp.base_price or 0),
+                "price": float(rp.base_price or 0),
+                "default_image": rp.default_image,
+                "images": img_urls,
+                "category_id": rp.category_id,
+            }
+        )
+
+    return {"items": result, "total": len(result)}
 
 
 # Admin endpoints for product images/files (multipart)
