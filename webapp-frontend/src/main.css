@@ -1010,22 +1010,24 @@ img, picture { max-width: 100%; height: auto; display: block; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 12px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in oklab, var(--accent) 14%, var(--border));
-  background: color-mix(in srgb, var(--bg) 90%, var(--panel) 10%);
-  color: color-mix(in srgb, var(--panel) 88%, transparent);
+  padding: 4px 0;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  color: color-mix(in srgb, var(--panel) 78%, var(--muted) 22%);
   text-decoration: none;
-  font-weight: 800;
-  letter-spacing: 0.01em;
-  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-size: 11px;
   text-transform: uppercase;
-  transition: transform 120ms ease, border-color 160ms ease, color 160ms ease;
+  transition: transform 120ms ease, color 160ms ease, opacity 160ms ease;
+  opacity: 0.9;
 }
 
 .section-link-luxe:hover {
   transform: translateY(-1px);
-  border-color: color-mix(in oklab, var(--accent) 20%, var(--border));
+  color: var(--panel);
+  opacity: 1;
 }
 
 .section-link-luxe:active {
