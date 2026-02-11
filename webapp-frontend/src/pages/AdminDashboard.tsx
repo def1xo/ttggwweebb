@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, getAdminStats } from "../services/api";
+import api, { adminLogin, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -21,6 +21,48 @@ type AdminStats = {
   range: RangeKey;
   series: SeriesPoint[];
   month: MonthSummary;
+};
+
+type AnalyticsFunnel = {
+  days: number;
+  counts: {
+    view_product: number;
+    add_to_cart: number;
+    begin_checkout: number;
+    purchase: number;
+  };
+  conversion: {
+    view_to_cart_percent: number;
+    cart_to_checkout_percent: number;
+    checkout_to_purchase_percent: number;
+    view_to_purchase_percent: number;
+  };
+};
+
+
+type AnalyticsTopProduct = {
+  product_id: number;
+  title: string;
+  view_product: number;
+  add_to_cart: number;
+  purchase: number;
+  add_rate_percent: number;
+  purchase_rate_percent: number;
+};
+
+
+type OpsNeedsAttention = {
+  generated_at: string;
+  counts: {
+    stale_orders: number;
+    products_missing_data: number;
+    low_stock_variants: number;
+  };
+  items: {
+    stale_orders: Array<{ order_id: number; created_at?: string | null; hours_waiting: number; total_amount: number; fio?: string | null; has_payment_proof: boolean }>;
+    products_missing_data: Array<{ product_id: number; title: string; visible: boolean; reasons: string[] }>;
+    low_stock_variants: Array<{ variant_id: number; product_id: number; title: string; stock_quantity: number; is_out: boolean }>;
+  };
 };
 
 type ViewKey =
@@ -837,6 +879,12 @@ export default function AdminDashboard() {
   const [loadingStats, setLoadingStats] = useState(false);
   const [statsErr, setStatsErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<SeriesPoint | null>(null);
+  const [funnel, setFunnel] = useState<AnalyticsFunnel | null>(null);
+  const [funnelErr, setFunnelErr] = useState<string | null>(null);
+  const [topProducts, setTopProducts] = useState<AnalyticsTopProduct[]>([]);
+  const [topProductsErr, setTopProductsErr] = useState<string | null>(null);
+  const [opsQueue, setOpsQueue] = useState<OpsNeedsAttention | null>(null);
+  const [opsErr, setOpsErr] = useState<string | null>(null);
   const [view, setView] = useState<ViewKey>("dashboard");
 
   const loadStats = async (r: RangeKey) => {
@@ -866,9 +914,65 @@ export default function AdminDashboard() {
     }
   };
 
+  const loadFunnel = async () => {
+    setFunnelErr(null);
+    try {
+      const res: any = await getAdminAnalyticsFunnel(30);
+      if (res?.counts && res?.conversion) {
+        setFunnel(res as AnalyticsFunnel);
+        return;
+      }
+      if (res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
+        return;
+      }
+      setFunnelErr(res?.detail || "Не удалось загрузить воронку");
+    } catch (e: any) {
+      setFunnelErr(e?.message || "Не удалось загрузить воронку");
+    }
+  };
+
+  const loadTopProducts = async () => {
+    setTopProductsErr(null);
+    try {
+      const res: any = await getAdminAnalyticsTopProducts(30, 8);
+      const items = Array.isArray(res?.items) ? res.items : [];
+      setTopProducts(items as AnalyticsTopProduct[]);
+      if (!Array.isArray(res?.items) && res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
+      }
+    } catch (e: any) {
+      setTopProductsErr(e?.message || "Не удалось загрузить топ товаров");
+    }
+  };
+
+  const loadOpsQueue = async () => {
+    setOpsErr(null);
+    try {
+      const res: any = await getAdminOpsNeedsAttention(8, 2);
+      if (res?.counts && res?.items) {
+        setOpsQueue(res as OpsNeedsAttention);
+        return;
+      }
+      if (res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
+        return;
+      }
+      setOpsErr(res?.detail || "Не удалось загрузить операционную очередь");
+    } catch (e: any) {
+      setOpsErr(e?.message || "Не удалось загрузить операционную очередь");
+    }
+  };
+
   useEffect(() => {
     if (!authed) return;
     loadStats(range);
+    loadFunnel();
+    loadTopProducts();
+    loadOpsQueue();
   }, [authed, range]);
 
   const navButtons = useMemo(
@@ -1027,6 +1131,90 @@ export default function AdminDashboard() {
         <div className="card" style={{ padding: 12 }}>
           <div style={{ color: "var(--muted)", fontSize: 12 }}>Маржа (оценка)</div>
           <div style={{ fontSize: 20, fontWeight: 800 }}>{(stats?.month.margin_percent ?? 0).toFixed(1)}%</div>
+        </div>
+      </div>
+
+
+      <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Воронка продаж (30 дней)</div>
+        {funnelErr ? <div style={{ color: "#ff8c8c", marginBottom: 8 }}>{funnelErr}</div> : null}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Просмотры товара</div><div style={{ fontWeight: 800 }}>{funnel?.counts.view_product ?? 0}</div></div>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Добавления в корзину</div><div style={{ fontWeight: 800 }}>{funnel?.counts.add_to_cart ?? 0}</div></div>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Начали оформление</div><div style={{ fontWeight: 800 }}>{funnel?.counts.begin_checkout ?? 0}</div></div>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Покупки</div><div style={{ fontWeight: 800 }}>{funnel?.counts.purchase ?? 0}</div></div>
+        </div>
+        <div style={{ marginTop: 10, color: "var(--muted)", fontSize: 13 }}>
+          CR view→cart: <b>{(funnel?.conversion.view_to_cart_percent ?? 0).toFixed(2)}%</b> • cart→checkout: <b>{(funnel?.conversion.cart_to_checkout_percent ?? 0).toFixed(2)}%</b> • checkout→purchase: <b>{(funnel?.conversion.checkout_to_purchase_percent ?? 0).toFixed(2)}%</b>
+        </div>
+      </div>
+
+
+      <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Топ товаров по аналитике (30 дней)</div>
+        {topProductsErr ? <div style={{ color: "#ff8c8c", marginBottom: 8 }}>{topProductsErr}</div> : null}
+        {topProducts.length === 0 ? (
+          <div className="small-muted">Пока недостаточно данных.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "6px 4px" }}>Товар</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>Просм.</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>В корз.</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>Покупки</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>CR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topProducts.map((it) => (
+                  <tr key={it.product_id} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td style={{ padding: "6px 4px" }}>{it.title}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px" }}>{it.view_product}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px" }}>{it.add_to_cart}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px" }}>{it.purchase}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px", fontWeight: 700 }}>{Number(it.purchase_rate_percent || 0).toFixed(2)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+
+
+      <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Операционная очередь (что требует внимания)</div>
+        {opsErr ? <div style={{ color: "#ff8c8c", marginBottom: 8 }}>{opsErr}</div> : null}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Просроченные оплаты</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.stale_orders ?? 0}</div>
+          </div>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Карточки с проблемами</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.products_missing_data ?? 0}</div>
+          </div>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Низкий остаток</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.low_stock_variants ?? 0}</div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Топ проблемных карточек</div>
+          {(opsQueue?.items.products_missing_data || []).slice(0, 5).map((it) => (
+            <div key={it.product_id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.title}</div>
+                <div className="small-muted">#{it.product_id} • {it.reasons.join(", ")}</div>
+              </div>
+              <a className="btn btn-secondary" href="/admin" style={{ textDecoration: "none", whiteSpace: "nowrap" }}>Открыть</a>
+            </div>
+          ))}
+          {(opsQueue?.items.products_missing_data || []).length === 0 ? <div className="small-muted">Нет критичных карточек 🎉</div> : null}
         </div>
       </div>
 
