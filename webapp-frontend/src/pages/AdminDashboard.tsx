@@ -627,6 +627,13 @@ function mergeDateTimeToIso(datePart: string, timePart: string): string | null {
   return local.toISOString();
 }
 
+function plusDaysLocal(datePart: string, days: number): string {
+  const base = datePart ? new Date(`${datePart}T12:00:00`) : new Date();
+  if (Number.isNaN(base.getTime())) return toLocalDateInput(new Date().toISOString());
+  base.setDate(base.getDate() + days);
+  return toLocalDateInput(base.toISOString());
+}
+
 type DateTimeEditorProps = {
   value?: string | null;
   onChange: (nextIso: string | null) => void;
@@ -648,8 +655,8 @@ function DateTimeEditor({ value, onChange }: DateTimeEditorProps) {
   };
 
   return (
-    <div style={{ display: "grid", gap: 6 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 120px", gap: 6 }}>
+    <div className="promo-datetime-editor">
+      <div className="promo-datetime-grid">
         <input
           className="input"
           type="date"
@@ -663,10 +670,15 @@ function DateTimeEditor({ value, onChange }: DateTimeEditorProps) {
           onChange={(e) => apply(datePart, e.target.value)}
         />
       </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      <div className="promo-chip-row">
         <button type="button" className="chip" onClick={() => apply(datePart || toLocalDateInput(new Date().toISOString()), "12:00")}>12:00</button>
         <button type="button" className="chip" onClick={() => apply(datePart || toLocalDateInput(new Date().toISOString()), "18:00")}>18:00</button>
         <button type="button" className="chip" onClick={() => apply(datePart || toLocalDateInput(new Date().toISOString()), "23:59")}>23:59</button>
+      </div>
+      <div className="promo-chip-row">
+        <button type="button" className="chip" onClick={() => apply(plusDaysLocal(datePart, 1), timePart || "23:59")}>+1 день</button>
+        <button type="button" className="chip" onClick={() => apply(plusDaysLocal(datePart, 3), timePart || "23:59")}>+3 дня</button>
+        <button type="button" className="chip" onClick={() => apply(plusDaysLocal(datePart, 7), timePart || "23:59")}>+7 дней</button>
         <button type="button" className="chip" onClick={() => apply("", "")}>Без срока</button>
       </div>
     </div>
@@ -813,7 +825,7 @@ function AdminPromosPanel({ onBack }: { onBack: () => void }) {
 
       <div className="card" style={{ padding: 14, marginBottom: 12 }}>
         <div style={{ fontWeight: 700, marginBottom: 10 }}>Создать</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+        <div className="promo-create-grid">
           <input className="input" placeholder="CODE" value={createForm.code} onChange={(e) => setCreateForm((p) => ({ ...p, code: e.target.value }))} />
           <input className="input" placeholder="Скидка (например 10)" value={createForm.value} onChange={(e) => setCreateForm((p) => ({ ...p, value: e.target.value }))} />
           <input className="input" placeholder="Usage limit (опц.)" value={createForm.usage_limit} onChange={(e) => setCreateForm((p) => ({ ...p, usage_limit: e.target.value }))} />
@@ -827,7 +839,7 @@ function AdminPromosPanel({ onBack }: { onBack: () => void }) {
         </button>
       </div>
 
-      <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+      <div className="card promo-table-wrap" style={{ padding: 0, overflowX: "auto" }}>
         <table className="table" style={{ minWidth: 980 }}>
           <thead>
             <tr>
@@ -890,6 +902,38 @@ function AdminPromosPanel({ onBack }: { onBack: () => void }) {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="promo-mobile-list">
+        {items.length === 0 ? (
+          <div className="card" style={{ padding: 14, color: "var(--muted)" }}>Пусто</div>
+        ) : null}
+        {items.map((p) => (
+          <div key={`mobile_${p.id}`} className="card" style={{ padding: 12, marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 8 }}>
+              <div style={{ fontWeight: 800 }}>#{p.id}</div>
+              <div className="small-muted">исп: {p.used_count ?? 0}</div>
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              <input className="input" value={p.code} onChange={(e) => updateRow(p.id, { code: e.target.value })} placeholder="CODE" />
+              <input className="input" value={String(p.value ?? "")} onChange={(e) => updateRow(p.id, { value: Number(String(e.target.value).replace(",", ".")) })} placeholder="Скидка" />
+              <DateTimeEditor value={p.expires_at || null} onChange={(nextIso) => updateRow(p.id, { expires_at: nextIso })} />
+              <input
+                className="input"
+                value={p.usage_limit == null ? "" : String(p.usage_limit)}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  updateRow(p.id, { usage_limit: v ? Number(v) : null });
+                }}
+                placeholder="Usage limit"
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-primary" onClick={() => patchOne(p)} style={{ flex: 1 }}>Сохранить</button>
+                <button className="btn btn-secondary" onClick={() => del(p.id, p.code)} style={{ flex: 1 }}>Удалить</button>
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

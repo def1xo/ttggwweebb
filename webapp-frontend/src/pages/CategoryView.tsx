@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import api from "../services/api";
 import ProductCard from "../components/ProductCard";
@@ -7,6 +7,8 @@ import StickySearch from "../components/StickySearch";
 type SortMode = "popular" | "price_asc" | "price_desc" | "title_asc";
 
 type ProductAny = any;
+
+type Option = { value: string; label: string };
 
 function pickPrice(p: ProductAny): number {
   const v = Number(p?.price ?? p?.base_price ?? p?.min_price ?? 0);
@@ -24,6 +26,67 @@ function extractValues(products: ProductAny[], key: "size" | "color"): string[] 
     }
   }
   return Array.from(set).sort((a, b) => a.localeCompare(b, "ru"));
+}
+
+function CustomSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: Option[];
+  onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onPointerDown = (e: MouseEvent) => {
+      if (!rootRef.current) return;
+      if (!rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, []);
+
+  const selected = options.find((o) => o.value === value) || options[0];
+
+  return (
+    <div className="custom-select" ref={rootRef}>
+      <button
+        type="button"
+        className="custom-select-trigger"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="small-muted">{label}</span>
+        <span>{selected?.label || "—"}</span>
+      </button>
+      {open ? (
+        <div className="custom-select-menu" role="listbox" aria-label={label}>
+          {options.map((opt) => {
+            const active = opt.value === value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                className="custom-select-option"
+                data-active={active ? "true" : "false"}
+                onClick={() => {
+                  onChange(opt.value);
+                  setOpen(false);
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 export default function CategoryView() {
@@ -106,6 +169,8 @@ export default function CategoryView() {
     ? `Товаров: ${products.length}`
     : "";
 
+  const hasCustomFilters = sortMode !== "popular" || sizeFilter !== "all" || colorFilter !== "all" || priceFilter !== "all";
+
   return (
     <div className="container" style={{ paddingTop: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -117,37 +182,66 @@ export default function CategoryView() {
         </h1>
       </div>
 
-      <StickySearch value={query} onChange={setQuery} placeholder="Поиск по товарам…" hint={hint} />
+      <div className="catalog-search-top">
+        <StickySearch value={query} onChange={setQuery} placeholder="Поиск по товарам…" hint={hint} fixedTop />
+      </div>
 
       <div className="catalog-tools" style={{ marginBottom: 12 }}>
-        <select className="input" value={sortMode} onChange={(e) => setSortMode(e.target.value as SortMode)}>
-          <option value="popular">Сортировка: по умолчанию</option>
-          <option value="price_asc">Цена: по возрастанию</option>
-          <option value="price_desc">Цена: по убыванию</option>
-          <option value="title_asc">Название: А-Я</option>
-        </select>
+        <CustomSelect
+          label="Сортировка"
+          value={sortMode}
+          onChange={(v) => setSortMode(v as SortMode)}
+          options={[
+            { value: "popular", label: "По умолчанию" },
+            { value: "price_asc", label: "Цена: по возрастанию" },
+            { value: "price_desc", label: "Цена: по убыванию" },
+            { value: "title_asc", label: "Название: А-Я" },
+          ]}
+        />
 
-        <select className="input" value={sizeFilter} onChange={(e) => setSizeFilter(e.target.value)}>
-          <option value="all">Размер: все</option>
-          {sizeOptions.map((size) => (
-            <option key={size} value={size}>{size}</option>
-          ))}
-        </select>
+        <CustomSelect
+          label="Размер"
+          value={sizeFilter}
+          onChange={setSizeFilter}
+          options={[{ value: "all", label: "Все" }, ...sizeOptions.map((size) => ({ value: size, label: size }))]}
+        />
 
-        <select className="input" value={colorFilter} onChange={(e) => setColorFilter(e.target.value)}>
-          <option value="all">Цвет: все</option>
-          {colorOptions.map((color) => (
-            <option key={color} value={color}>{color}</option>
-          ))}
-        </select>
+        <CustomSelect
+          label="Цвет"
+          value={colorFilter}
+          onChange={setColorFilter}
+          options={[{ value: "all", label: "Все" }, ...colorOptions.map((color) => ({ value: color, label: color }))]}
+        />
 
-        <select className="input" value={priceFilter} onChange={(e) => setPriceFilter(e.target.value as any)}>
-          <option value="all">Цена: любая</option>
-          <option value="up_to_5000">до 5 000 ₽</option>
-          <option value="5000_10000">5 001 — 10 000 ₽</option>
-          <option value="from_10000">от 10 001 ₽</option>
-        </select>
+        <CustomSelect
+          label="Цена"
+          value={priceFilter}
+          onChange={(v) => setPriceFilter(v as any)}
+          options={[
+            { value: "all", label: "Любая" },
+            { value: "up_to_5000", label: "до 5 000 ₽" },
+            { value: "5000_10000", label: "5 001 — 10 000 ₽" },
+            { value: "from_10000", label: "от 10 001 ₽" },
+          ]}
+        />
       </div>
+
+      {hasCustomFilters ? (
+        <div style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <div className="small-muted">Фильтры применены</div>
+          <button
+            className="btn ghost"
+            onClick={() => {
+              setSortMode("popular");
+              setSizeFilter("all");
+              setColorFilter("all");
+              setPriceFilter("all");
+            }}
+          >
+            Сбросить всё
+          </button>
+        </div>
+      ) : null}
 
       <div className="grid-products">
         {filtered.map((p) => (

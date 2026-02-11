@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
+from app.services.telegram_webapp import get_bot_token
 
 router = APIRouter(tags=["admin_dashboard"])
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ CONFIRMED_STATUSES: Tuple[str, ...] = (
 
 
 def _send_admin_telegram_message(text: str) -> bool:
-    bot_token = os.getenv("BOT_TOKEN")
+    bot_token = get_bot_token()
     chat_id = os.getenv("ADMIN_CHAT_ID")
     if not bot_token or not chat_id:
         return False

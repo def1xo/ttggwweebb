@@ -1460,3 +1460,115 @@ img, picture { max-width: 100%; height: auto; display: block; }
   height: 22px;
   display: block;
 }
+
+.catalog-search-top {
+  position: sticky;
+  top: calc(var(--header-h) + 2px);
+  z-index: 48;
+  background: var(--bg);
+  padding-top: 8px;
+}
+
+.sticky-search.sticky-search--fixed-top {
+  position: static;
+  top: auto;
+  margin: 0 0 12px;
+  z-index: auto;
+}
+
+.custom-select {
+  position: relative;
+}
+
+.custom-select-trigger {
+  width: 100%;
+  min-height: 52px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--panel);
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 10px 12px;
+  font-weight: 700;
+}
+
+.custom-select-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+  z-index: 65;
+  box-shadow: 0 12px 26px rgba(0,0,0,0.35);
+  max-height: min(54vh, 320px);
+  overflow-y: auto;
+}
+
+.custom-select-option {
+  min-height: 40px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--panel);
+  text-align: left;
+  padding: 8px 10px;
+  font-weight: 600;
+}
+
+.custom-select-option[data-active="true"] {
+  border-color: var(--ring);
+  background: color-mix(in srgb, var(--surface) 86%, var(--accent) 14%);
+}
+
+.promo-datetime-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.promo-datetime-grid {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 6px;
+}
+
+.promo-chip-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.promo-create-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.promo-mobile-list {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  .promo-create-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .promo-datetime-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .promo-table-wrap {
+    display: none;
+  }
+
+  .promo-mobile-list {
+    display: block;
+    margin-top: 10px;
+  }
+}
