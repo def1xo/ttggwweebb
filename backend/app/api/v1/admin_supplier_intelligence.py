@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -395,6 +396,25 @@ def _register_source_error(report: ImportSourceReport, exc: Exception) -> None:
     report.errors += 1
     report.last_error_message = str(exc)
     report.error_codes[code] = int(report.error_codes.get(code) or 0) + 1
+
+
+def _new_source_report(source_id: int, source_url: str) -> dict[str, object]:
+    return {
+        "source_id": source_id,
+        "url": source_url,
+        "imported": 0,
+        "errors": 0,
+        "error_codes": {},
+    }
+
+
+def _register_source_error(report: dict[str, object], exc: Exception) -> None:
+    code = _classify_import_error(exc)
+    report["errors"] = int(report.get("errors") or 0) + 1
+    report.setdefault("last_error_message", str(exc))
+    error_codes = dict(report.get("error_codes") or {})
+    error_codes[code] = int(error_codes.get(code) or 0) + 1
+    report["error_codes"] = error_codes
 
 
 
