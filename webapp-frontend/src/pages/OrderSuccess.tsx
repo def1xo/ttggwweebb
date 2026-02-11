@@ -79,6 +79,29 @@ export default function OrderSuccess() {
 
   const paymentUrl = (order as any)?.payment_screenshot ? String((order as any).payment_screenshot) : null;
 
+  const subtotalAmount = Number(
+    (order as any)?.subtotal_amount ??
+    (order as any)?.subtotal ??
+    0
+  );
+  const rawDiscountAmount = Number(
+    (order as any)?.discount_amount ??
+    (order as any)?.discount ??
+    0
+  );
+  const deliveryAmount = Number(
+    (order as any)?.delivery_price ??
+    (order as any)?.delivery ??
+    0
+  );
+  const payableAmount = Number(
+    (order as any)?.total_amount ??
+    (order as any)?.total ??
+    Math.max(0, subtotalAmount - rawDiscountAmount + deliveryAmount)
+  );
+  const inferredDiscount = Math.max(0, subtotalAmount + deliveryAmount - payableAmount);
+  const discountAmount = rawDiscountAmount > 0 ? rawDiscountAmount : inferredDiscount;
+
   return (
     <div className="container" style={{ paddingTop: 12, paddingBottom: 150 }}>
       <div className="card" style={{ padding: 14 }}>
@@ -122,8 +145,31 @@ export default function OrderSuccess() {
         ) : null}
       </div>
 
+
+      <div className="card" style={{ padding: 14, marginTop: 12 }}>
+        <div style={{ fontWeight: 900, marginBottom: 10 }}>Детали оплаты</div>
+        <div style={{ display: "grid", gap: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+            <span className="small-muted">Товары</span>
+            <span>{new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(subtotalAmount)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+            <span className="small-muted">Скидка</span>
+            <span>-{new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(discountAmount)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+            <span className="small-muted">Доставка</span>
+            <span>{deliveryAmount > 0 ? new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(deliveryAmount) : "Бесплатно"}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontWeight: 900 }}>
+            <span>К оплате</span>
+            <span>{new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(payableAmount)}</span>
+          </div>
+        </div>
+      </div>
+
       <div style={{ marginTop: 12 }}>
-        <PaymentDetails amount={Number((order as any)?.total_amount || (order as any)?.total || 0)} />
+        <PaymentDetails amount={payableAmount} />
       </div>
 
       <div className="card" style={{ padding: 14, marginTop: 12 }}>

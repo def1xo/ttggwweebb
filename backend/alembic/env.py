@@ -1,8 +1,10 @@
 import os
+import time
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+from sqlalchemy.exc import OperationalError
 
 config = context.config
 
@@ -47,15 +49,33 @@ def run_migrations_online() -> None:
         future=True,
     )
 
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            compare_type=True,
-        )
+    # Docker compose run may start DB container but Postgres can still be warming up.
+    # Retry connection a few times to avoid transient "connection refused" failures.
+    retries = int(os.getenv("ALEMBIC_DB_CONNECT_RETRIES", "30"))
+    delay_s = float(os.getenv("ALEMBIC_DB_CONNECT_DELAY", "1"))
+    last_error = None
 
-        with context.begin_transaction():
-            context.run_migrations()
+    for attempt in range(1, retries + 1):
+        try:
+            with connectable.connect() as connection:
+                context.configure(
+                    connection=connection,
+                    target_metadata=target_metadata,
+                    compare_type=True,
+                )
+
+                with context.begin_transaction():
+                    context.run_migrations()
+                return
+        except OperationalError as exc:
+            last_error = exc
+            if attempt >= retries:
+                raise
+            print(f"[alembic] DB is not ready yet (attempt {attempt}/{retries}), retrying in {delay_s:.1f}s...")
+            time.sleep(delay_s)
+
+    if last_error:
+        raise last_error
 
 
 if context.is_offline_mode():

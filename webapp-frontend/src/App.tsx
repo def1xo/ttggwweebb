@@ -48,14 +48,20 @@ export default function App() {
       const p = loc.pathname || "/";
       const roots = new Set(["/", "/catalog", "/cart", "/profile", "/news", "/orders", "/favorites", "/manager", "/assistant", "/admin"]);
       const showBack = !roots.has(p);
+      const onBack = () => {
+        try { nav(-1); } catch { window.history.back(); }
+      };
+
       if (showBack) {
         tg.BackButton.show();
-        tg.BackButton.onClick(() => {
-          try { nav(-1); } catch { window.history.back(); }
-        });
+        tg.BackButton.onClick(onBack);
       } else {
         tg.BackButton.hide();
       }
+
+      return () => {
+        try { tg.BackButton.offClick(onBack); } catch {}
+      };
     } catch {}
   }, [loc.pathname, nav]);
 

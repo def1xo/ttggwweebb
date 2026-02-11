@@ -83,6 +83,7 @@ class OrderCreateIn(BaseModel):
     delivery_type: Optional[str] = Field(None, max_length=128)
     delivery_address: Optional[str] = None
     note: Optional[str] = None
+    promo_code: Optional[str] = Field(None, max_length=64)
 
 
 class OrderItemOut(BaseModel):
@@ -153,6 +154,9 @@ def create_order(
     st = _get_cart_state(db, user.id)
     referral_code = (st.referral_code if st else None) or None
     promo_code_str = (st.promo_code if st else None) or None
+    payload_code = str(payload.promo_code).strip() if payload.promo_code else None
+    if not promo_code_str and payload_code:
+        promo_code_str = payload_code
 
     subtotal = Decimal("0")
     for ci in cart_items:
@@ -166,8 +170,9 @@ def create_order(
 
     # Apply special promo (discount)
     if promo_code_str:
-        promo = db.query(models.PromoCode).filter(models.PromoCode.code == promo_code_str).one_or_none()
-        if promo and getattr(promo, "type", None) == models.PromoType.special:
+        promo = db.query(models.PromoCode).filter(models.PromoCode.code.ilike(promo_code_str)).one_or_none()
+        promo_type = str(getattr(getattr(promo, "type", None), "value", getattr(promo, "type", ""))).lower() if promo else ""
+        if promo and promo_type in {"special", "admin"}:
             # enforce "one promo per life" + pending lock
             if user.promo_used_code:
                 raise HTTPException(status_code=400, detail="promo already used")
@@ -176,7 +181,10 @@ def create_order(
 
             resv = _active_reservation(db, user.id, promo.id)
             if not resv:
-                raise HTTPException(status_code=400, detail="promo reservation expired")
+                # Fallback: if promo came directly in payload (legacy clients / race),
+                # still apply discount instead of dropping to 0 silently.
+                # Pending lock will still be set below for created order.
+                pass
 
             percent = _promo_value_to_percent(_to_decimal(promo.value))
             promo_discount_percent = percent
@@ -187,8 +195,19 @@ def create_order(
             # if promo is invalid for discount, ignore
             promo_code_str = None
 
+    # If code is not a special promo, treat it as potential referral code fallback.
+    if promo_code_str and not referral_code:
+        owner = _resolve_referral(db, promo_code_str)
+        if owner and owner.id != user.id:
+            referral_code = promo_code_str
 
     # Apply referral promo discount (5%) if no special promo is active
+    if discount == Decimal("0") and not referral_code and payload_code:
+        # fallback for clients where cart state wasn't persisted but code was sent in payload
+        owner = _resolve_referral(db, payload_code)
+        if owner and owner.id != user.id:
+            referral_code = payload_code
+
     if discount == Decimal("0") and referral_code:
         owner = _resolve_referral(db, referral_code)
         if owner and owner.id != user.id:
