@@ -13,6 +13,7 @@ const S3_REGION = process.env.S3_REGION || process.env.AWS_REGION || 'us-east-1'
 const AWS_ACCESS_KEY_ID = process.env.AWS_ACCESS_KEY_ID;
 const AWS_SECRET_ACCESS_KEY = process.env.AWS_SECRET_ACCESS_KEY;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID; // optional
+const IMPORTER_API_KEY = process.env.IMPORTER_API_KEY || process.env.BACKEND_IMPORTER_KEY || '';
 
 function deriveBackendBase(url) {
   try {
@@ -60,7 +61,6 @@ const USE_S3 = Boolean(S3_BUCKET);
 if (!USE_S3) {
   console.warn('S3 is not configured. Media will be uploaded to backend /api/uploads (local storage).');
 }
-
 let s3 = null;
 if (USE_S3) {
   const s3Config = { region: S3_REGION };
@@ -71,6 +71,43 @@ if (USE_S3) {
     };
   }
   s3 = new S3Client(s3Config);
+}
+
+
+function buildImporterCandidates(url) {
+  const raw = String(url || '').trim().replace(/\/+$/, '');
+  if (!raw) return [];
+  if (/\/importer\/channel_post$/i.test(raw)) return [raw];
+  const base = deriveBackendBase(raw);
+  const candidates = [
+    `${base}/api/v1/importer/channel_post`,
+    `${base}/api/importer/channel_post`,
+    `${base}/importer/channel_post`,
+  ];
+  if (/\/api\//i.test(raw)) candidates.unshift(raw);
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+const IMPORTER_CANDIDATES = buildImporterCandidates(BACKEND_URL);
+console.log('Importer endpoints:', IMPORTER_CANDIDATES.join(', '));
+
+async function postToBackendImporter(payload) {
+  if (!IMPORTER_CANDIDATES.length) throw new Error('No backend importer endpoint configured');
+  const headers = {};
+  if (IMPORTER_API_KEY) headers['X-Importer-Key'] = IMPORTER_API_KEY;
+  let lastErr = null;
+  for (const endpoint of IMPORTER_CANDIDATES) {
+    try {
+      const res = await axios.post(endpoint, payload, { timeout: 20000, headers });
+      return { endpoint, res };
+    } catch (err) {
+      lastErr = err;
+      const status = err?.response?.status;
+      if (status === 404 || status === 405) continue;
+      throw err;
+    }
+  }
+  throw lastErr || new Error('No importer endpoint accepted request');
 }
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -176,8 +213,8 @@ async function handleChannelPost(ctx) {
     };
 
     try {
-      await axios.post(BACKEND_URL, payload, { timeout: 20000 });
-      console.log(`Imported post ${message_id} from chat ${chat_id}`);
+      const { endpoint } = await postToBackendImporter(payload);
+      console.log(`Imported post ${message_id} from chat ${chat_id} -> ${endpoint}`);
     } catch (err) {
       console.error('Failed to POST to backend:', err && err.message ? err.message : err);
       if (ADMIN_CHAT_ID) {

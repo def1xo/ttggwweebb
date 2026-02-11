@@ -7,6 +7,7 @@ from typing import List, Optional, Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
 
 from app.api.dependencies import get_db, get_current_user
 from app.db import models
@@ -57,6 +58,16 @@ class CartAddItemIn(BaseModel):
 
 class ApplyPromoIn(BaseModel):
     code: str
+
+
+class RelatedProductOut(BaseModel):
+    id: int
+    title: str
+    price: Decimal
+    default_image: Optional[str] = None
+    images: List[str] = []
+    category_id: Optional[int] = None
+
 
 
 # ----- helpers -----
@@ -338,27 +349,17 @@ def apply_promo(payload: ApplyPromoIn, db: Session = Depends(get_db), user: mode
 
     st = _get_or_create_state(db, user.id)
 
-    # enforce one discount promo per life
-    if user.promo_used_code:
-        # referral codes are still allowed, discount promos are not
-        owner = _resolve_referral_owner(db, code)
-        if owner:
-            st.referral_code = code
-            if st.promo_code:
-                _release_reservation(db, user.id, st.promo_code)
-            st.promo_code = None
-            db.add(st)
-            db.commit()
-            return _calc_cart(db, user)
-        raise HTTPException(status_code=400, detail="promo already used")
-
+    # one-time restriction is referral-only; special promos can be applied repeatedly per business rules
     # prevent switching promos while pending
     if user.promo_pending_code and user.promo_pending_code.strip() and user.promo_pending_code.strip().lower() != code.lower():
         raise HTTPException(status_code=400, detail="you already have a pending promo for another order")
 
     # referral code
     owner = _resolve_referral_owner(db, code)
-    if owner:
+    if owner and owner.id != user.id:
+        # referral promo is one-time per user
+        if user.promo_used_code:
+            raise HTTPException(status_code=400, detail="referral promo already used")
         st.referral_code = code
         if st.promo_code:
             _release_reservation(db, user.id, st.promo_code)
@@ -408,3 +409,118 @@ def remove_promo(db: Session = Depends(get_db), user: models.User = Depends(get_
     db.add(st)
     db.commit()
     return _calc_cart(db, user)
+
+
+@router.get("/recommendations", response_model=List[RelatedProductOut])
+def cart_recommendations(
+    limit: int = 8,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    cart_items = (
+        db.query(models.CartItem)
+        .options(joinedload(models.CartItem.variant))
+        .filter(models.CartItem.user_id == user.id)
+        .all()
+    )
+    if not cart_items:
+        return []
+
+    in_cart_product_ids = {
+        int(ci.variant.product_id)
+        for ci in cart_items
+        if getattr(ci, "variant", None) and getattr(ci.variant, "product_id", None)
+    }
+    seed_variant_ids = [
+        int(ci.variant_id)
+        for ci in cart_items
+        if getattr(ci, "variant_id", None)
+    ]
+
+    ranked_product_ids: List[int] = []
+    if seed_variant_ids:
+        order_ids_q = (
+            db.query(models.OrderItem.order_id)
+            .filter(models.OrderItem.variant_id.in_(seed_variant_ids))
+            .distinct()
+        )
+        order_ids = [row[0] for row in order_ids_q.all()]
+        if order_ids:
+            rows = (
+                db.query(
+                    models.ProductVariant.product_id,
+                    func.sum(models.OrderItem.quantity).label("score"),
+                )
+                .join(models.OrderItem, models.OrderItem.variant_id == models.ProductVariant.id)
+                .filter(models.OrderItem.order_id.in_(order_ids))
+                .filter(~models.ProductVariant.product_id.in_(list(in_cart_product_ids)))
+                .group_by(models.ProductVariant.product_id)
+                .order_by(func.sum(models.OrderItem.quantity).desc())
+                .limit(limit * 4)
+                .all()
+            )
+            ranked_product_ids = [int(r[0]) for r in rows if r and r[0]]
+
+    selected: List[models.Product] = []
+    selected_ids = set()
+
+    if ranked_product_ids:
+        candidates = (
+            db.query(models.Product)
+            .filter(models.Product.visible == True, models.Product.id.in_(ranked_product_ids))
+            .all()
+        )
+        by_id = {x.id: x for x in candidates}
+        for pid in ranked_product_ids:
+            x = by_id.get(pid)
+            if not x or x.id in selected_ids:
+                continue
+            selected.append(x)
+            selected_ids.add(x.id)
+            if len(selected) >= limit:
+                break
+
+    if len(selected) < limit:
+        category_ids = {
+            int(ci.variant.product.category_id)
+            for ci in cart_items
+            if getattr(ci, "variant", None)
+            and getattr(ci.variant, "product", None)
+            and getattr(ci.variant.product, "category_id", None)
+        }
+        if category_ids:
+            fallback = (
+                db.query(models.Product)
+                .filter(models.Product.visible == True)
+                .filter(models.Product.category_id.in_(list(category_ids)))
+                .filter(~models.Product.id.in_(list(in_cart_product_ids)))
+                .order_by(models.Product.created_at.desc())
+                .limit(limit * 5)
+                .all()
+            )
+            for x in fallback:
+                if x.id in selected_ids:
+                    continue
+                selected.append(x)
+                selected_ids.add(x.id)
+                if len(selected) >= limit:
+                    break
+
+    out: List[RelatedProductOut] = []
+    for p in selected[:limit]:
+        img_urls = []
+        try:
+            img_urls = [im.url for im in sorted((p.images or []), key=lambda x: (x.sort or 0, x.id))]
+        except Exception:
+            img_urls = []
+        out.append(
+            RelatedProductOut(
+                id=p.id,
+                title=p.title,
+                price=Decimal(str(p.base_price or 0)).quantize(Decimal("0.01")),
+                default_image=p.default_image,
+                images=img_urls,
+                category_id=p.category_id,
+            )
+        )
+    return out
