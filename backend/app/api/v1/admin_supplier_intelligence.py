@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 import logging
 
@@ -41,7 +42,7 @@ def _classify_import_error(exc: Exception) -> str:
     if isinstance(exc, IntegrityError):
         return ERROR_CODE_DB_CONFLICT
     message = str(exc).lower()
-    if "timeout" in message:
+    if any(token in message for token in ("timeout", "timed out", "connection", "429", "too many requests")):
         return ERROR_CODE_NETWORK_TIMEOUT
     if "not an image" in message or "invalid image" in message:
         return ERROR_CODE_INVALID_IMAGE
@@ -369,12 +370,32 @@ class ImportProductsIn(BaseModel):
     avito_max_pages: int = Field(default=1, ge=1, le=3)
 
 
+class ImportSourceReport(BaseModel):
+    source_id: int
+    url: str
+    imported: int = 0
+    errors: int = 0
+    error_codes: dict[str, int] = Field(default_factory=dict)
+    last_error_message: str | None = None
+
+
 class ImportProductsOut(BaseModel):
     created_categories: int
     created_products: int
     updated_products: int
     created_variants: int
-    source_reports: list[dict[str, object]] = Field(default_factory=list)
+    source_reports: list[ImportSourceReport] = Field(default_factory=list)
+
+
+def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
+    return ImportSourceReport(source_id=source_id, url=source_url)
+
+
+def _register_source_error(report: ImportSourceReport, exc: Exception) -> None:
+    code = _classify_import_error(exc)
+    report.errors += 1
+    report.last_error_message = str(exc)
+    report.error_codes[code] = int(report.error_codes.get(code) or 0) + 1
 
 
 def _new_source_report(source_id: int, source_url: str) -> dict[str, object]:
@@ -547,7 +568,7 @@ def import_products_from_sources(
     created_products = 0
     updated_products = 0
     created_variants = 0
-    source_reports: list[dict[str, object]] = []
+    source_reports: list[ImportSourceReport] = []
     signature_product_map: dict[str, int] = {}
     avito_price_cache: dict[str, float | None] = {}
 
@@ -753,19 +774,21 @@ def import_products_from_sources(
                         variant.images = [image_url]
                     db.add(variant)
 
-                report["imported"] = int(report.get("imported") or 0) + 1
+                report.imported += 1
             except Exception as exc:
                 _register_source_error(report, exc)
 
         source_reports.append(report)
 
-    top_failing_sources = sorted(
-        [x for x in source_reports if int(x.get("errors") or 0) > 0],
-        key=lambda x: int(x.get("errors") or 0),
-        reverse=True,
-    )[:5]
+    top_failing_sources = sorted((x for x in source_reports if x.errors > 0), key=lambda x: x.errors, reverse=True)[:5]
     if top_failing_sources:
-        logger.warning("supplier import top failures: %s", top_failing_sources)
+        logger.warning(
+            "supplier import top failures: %s",
+            [
+                {"source_id": x.source_id, "url": x.url, "errors": x.errors, "error_codes": x.error_codes}
+                for x in top_failing_sources
+            ],
+        )
 
     if payload.dry_run:
         db.rollback()

@@ -117,6 +117,7 @@ def test_classify_import_error_codes():
     assert asi._classify_import_error(RuntimeError("request timeout on supplier")) == asi.ERROR_CODE_NETWORK_TIMEOUT
     assert asi._classify_import_error(RuntimeError("content is not an image")) == asi.ERROR_CODE_INVALID_IMAGE
     assert asi._classify_import_error(RuntimeError("parse error on source row")) == asi.ERROR_CODE_PARSE_FAILED
+    assert asi._classify_import_error(RuntimeError("429 too many requests")) == asi.ERROR_CODE_NETWORK_TIMEOUT
 
 
 def test_register_source_error_tracks_error_codes():
@@ -126,7 +127,7 @@ def test_register_source_error_tracks_error_codes():
     asi._register_source_error(report, RuntimeError("request timeout"))
     asi._register_source_error(report, RuntimeError("parse failed"))
 
-    assert report["errors"] == 3
-    assert report["error_codes"][asi.ERROR_CODE_NETWORK_TIMEOUT] == 2
-    assert report["error_codes"][asi.ERROR_CODE_PARSE_FAILED] == 1
-    assert "last_error_message" in report
+    assert report.errors == 3
+    assert report.error_codes[asi.ERROR_CODE_NETWORK_TIMEOUT] == 2
+    assert report.error_codes[asi.ERROR_CODE_PARSE_FAILED] == 1
+    assert report.last_error_message == "parse failed"
