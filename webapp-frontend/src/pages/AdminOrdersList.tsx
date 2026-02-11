@@ -37,13 +37,14 @@ export default function AdminOrdersList(): JSX.Element {
       if (statusFilter) params.status = statusFilter;
       const res = await api.get("/api/admin/orders", { params });
       const arr: any[] = (res as any).data || [];
-      setOrders(arr.map((o: any) => ({
+      const mapped = arr.map((o: any) => ({
         id: Number(o.id),
         user_id: Number(o.user_id ?? o.user?.id ?? 0),
         total: String(o.total_amount ?? o.total ?? o.totalAmount ?? 0),
         status: normStatus(o.status),
         created_at: String(o.created_at ?? o.createdAt ?? ""),
-      })));
+      }));
+      setOrders(statusFilter ? mapped : mapped.filter((o) => o.status !== "received"));
     } catch (err: any) {
       console.error(err);
       setMessage(err?.response?.data?.detail || "Ошибка при загрузке заказов");
@@ -64,7 +65,7 @@ export default function AdminOrdersList(): JSX.Element {
     }
   }
 
-async function confirmPayment(orderId: number) {
+  async function confirmPayment(orderId: number) {
     if (!confirm(`Подтвердить оплату заказа #${orderId}?`)) return;
     try {
       await api.post(`/api/admin/orders/${orderId}/confirm_payment`, {});
@@ -165,6 +166,13 @@ async function confirmPayment(orderId: number) {
                       title="Отправить"
                     >
                       Отправлено
+                    </button>
+                    <button
+                      onClick={() => changeStatus(o.id, "delivered")}
+                      className="px-2 py-1 border rounded text-sm hover:bg-gray-50"
+                      title="Доставлено в пункт выдачи"
+                    >
+                      Доставлено
                     </button>
                     <button
                       onClick={() => changeStatus(o.id, "received")}

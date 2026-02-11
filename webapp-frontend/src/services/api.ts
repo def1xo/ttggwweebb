@@ -228,6 +228,7 @@ axiosInstance.interceptors.response.use(
         return Promise.reject(error);
       }
       const status = error?.response?.status;
+      const silentError = String(error?.config?.headers?.["X-Silent-Error"] || error?.config?.headers?.["x-silent-error"] || "") === "1";
       if (status === 401) {
         originalRequest._retry = true;
         const adminReq = isAdminRequest(originalRequest);
@@ -255,13 +256,13 @@ axiosInstance.interceptors.response.use(
       }
 
       // Friendly UX: show a short toast for common network/auth errors.
-      if (status === 401) {
+      if (!silentError && status === 401) {
         emitToast("Нужна авторизация. Перезайдите в WebApp.", "error");
-      } else if (status === 403) {
+      } else if (!silentError && status === 403) {
         emitToast("Недостаточно прав для этого действия.", "error");
-      } else if (status >= 500) {
+      } else if (!silentError && status >= 500) {
         emitToast("Сервер временно недоступен. Попробуйте позже.", "error");
-      } else if (!status) {
+      } else if (!silentError && !status) {
         emitToast("Нет соединения с сервером.", "error");
       }
       const info = {
@@ -281,7 +282,9 @@ axiosInstance.interceptors.response.use(
       const serverMsg = formatApiErrorMessage(raw);
 
       const msg = serverMsg || (status === 0 ? "Сеть недоступна" : "Ошибка запроса");
-      emitToast(msg, "error");
+      if (!silentError) {
+        emitToast(msg, "error");
+      }
     } catch (e) {
       console.error("AXIOS INTERCEPTOR FAILURE", e);
     }
@@ -300,6 +303,7 @@ function handleAxiosError(err: any): never {
 }
 
 async function tryCandidates<T = any>(candidates: string[], config: AxiosRequestConfig = {}): Promise<T> {
+  let lastError: any = null;
   for (const cand of candidates) {
     try {
       const isAbsolute = /^https?:\/\//i.test(cand);
@@ -307,17 +311,19 @@ async function tryCandidates<T = any>(candidates: string[], config: AxiosRequest
       const url = cand;
       const method = (config.method || "get").toLowerCase();
       let res;
+      const headers = { ...(config.headers || {}), "X-Silent-Error": "1" };
       if (method === "get" || method === "delete") {
-        res = await client.request({ url, method, params: config.params, headers: config.headers, timeout: config.timeout ?? 20000 });
+        res = await client.request({ url, method, params: config.params, headers, timeout: config.timeout ?? 20000 });
       } else {
-        res = await client.request({ url, method, data: config.data, params: config.params, headers: config.headers, timeout: config.timeout ?? 20000 });
+        res = await client.request({ url, method, data: config.data, params: config.params, headers, timeout: config.timeout ?? 20000 });
       }
       if (res && res.status >= 200 && res.status < 300) {
         return res.data;
       }
     } catch (err: any) {
+      lastError = err;
       const status = err?.response?.status;
-      if (status === 404 || status === 400 || !err?.response) {
+      if (status === 404 || status === 405 || status === 400 || !err?.response) {
         continue;
       }
       if (candidates.indexOf(cand) < candidates.length - 1) {
@@ -325,6 +331,9 @@ async function tryCandidates<T = any>(candidates: string[], config: AxiosRequest
       }
       return Promise.reject(err);
     }
+  }
+  if (lastError) {
+    return Promise.reject(lastError);
   }
   throw new Error("No backend endpoint responded (tried multiple candidates).");
 }
