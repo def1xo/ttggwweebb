@@ -163,6 +163,20 @@ export default function ProductPage() {
     })();
   };
 
+  const addRelatedToCart = async (item: any) => {
+    const variants = Array.isArray(item?.variants) ? item.variants : [];
+    const variantId = Number(item?.default_variant_id || variants?.[0]?.id || item?.id || 0);
+    if (!Number.isFinite(variantId) || variantId <= 0) return;
+    try {
+      await addCartItem(variantId, 1);
+      notify("Товар добавлен в корзину", "success");
+      try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
+      hapticImpact("light");
+    } catch {
+      notify("Не удалось добавить товар", "error");
+    }
+  };
+
   if (!product) {
     return (
       <div className="container" style={{ paddingTop: 12 }}>
@@ -297,13 +311,20 @@ export default function ProductPage() {
               const pPrice = Number(p?.price ?? p?.base_price ?? 0);
               const img = pickImage(p);
               return (
-                <Link key={pid} to={`/product/${pid}`} className="related-item" style={{ textDecoration: "none", color: "inherit" }}>
-                  <div className="related-thumb">{img ? <img src={img} alt={pTitle} /> : null}</div>
-                  <div className="related-title">{pTitle}</div>
-                  <div className="small-muted" style={{ marginTop: 4, fontWeight: 700 }}>
-                    {Number.isFinite(pPrice) && pPrice > 0 ? `${pPrice.toLocaleString("ru-RU")} ₽` : "—"}
+                <div key={pid} className="related-item">
+                  <Link to={`/product/${pid}`} style={{ textDecoration: "none", color: "inherit" }}>
+                    <div className="related-thumb">{img ? <img src={img} alt={pTitle} /> : null}</div>
+                    <div className="related-title">{pTitle}</div>
+                  </Link>
+                  <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <div className="small-muted" style={{ fontWeight: 700 }}>
+                      {Number.isFinite(pPrice) && pPrice > 0 ? `${pPrice.toLocaleString("ru-RU")} ₽` : "—"}
+                    </div>
+                    <button className="btn btn-sm" type="button" onClick={() => addRelatedToCart(p)}>
+                      + В корзину
+                    </button>
                   </div>
-                </Link>
+                </div>
               );
             })}
           </div>
