@@ -980,6 +980,23 @@ img, picture { max-width: 100%; height: auto; display: block; }
 
 
 /* Product grids */
+
+.catalog-filter-panel {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  padding: 10px;
+}
+
+.catalog-filter-panel__title {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
 .catalog-tools {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
