@@ -192,6 +192,22 @@ export async function getAdminAnalyticsFunnel(days = 30) {
   }
 }
 
+
+export async function getAdminAnalyticsTopProducts(days = 30, limit = 10) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/logs/analytics-top-products`,
+      `${API_BASE_URL}/api/v1/logs/analytics-top-products`,
+      `${API_BASE_URL}/logs/analytics-top-products`,
+      `/api/logs/analytics-top-products`,
+      `/logs/analytics-top-products`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { days, limit } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 axiosInstance.interceptors.response.use(
   (response) => response,
   async (error) => {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, getAdminAnalyticsFunnel, getAdminStats } from "../services/api";
+import api, { adminLogin, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminStats } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -37,6 +37,17 @@ type AnalyticsFunnel = {
     checkout_to_purchase_percent: number;
     view_to_purchase_percent: number;
   };
+};
+
+
+type AnalyticsTopProduct = {
+  product_id: number;
+  title: string;
+  view_product: number;
+  add_to_cart: number;
+  purchase: number;
+  add_rate_percent: number;
+  purchase_rate_percent: number;
 };
 
 type ViewKey =
@@ -855,6 +866,8 @@ export default function AdminDashboard() {
   const [selected, setSelected] = useState<SeriesPoint | null>(null);
   const [funnel, setFunnel] = useState<AnalyticsFunnel | null>(null);
   const [funnelErr, setFunnelErr] = useState<string | null>(null);
+  const [topProducts, setTopProducts] = useState<AnalyticsTopProduct[]>([]);
+  const [topProductsErr, setTopProductsErr] = useState<string | null>(null);
   const [view, setView] = useState<ViewKey>("dashboard");
 
   const loadStats = async (r: RangeKey) => {
@@ -903,10 +916,26 @@ export default function AdminDashboard() {
     }
   };
 
+  const loadTopProducts = async () => {
+    setTopProductsErr(null);
+    try {
+      const res: any = await getAdminAnalyticsTopProducts(30, 8);
+      const items = Array.isArray(res?.items) ? res.items : [];
+      setTopProducts(items as AnalyticsTopProduct[]);
+      if (!Array.isArray(res?.items) && res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
+      }
+    } catch (e: any) {
+      setTopProductsErr(e?.message || "Не удалось загрузить топ товаров");
+    }
+  };
+
   useEffect(() => {
     if (!authed) return;
     loadStats(range);
     loadFunnel();
+    loadTopProducts();
   }, [authed, range]);
 
   const navButtons = useMemo(
@@ -1081,6 +1110,40 @@ export default function AdminDashboard() {
         <div style={{ marginTop: 10, color: "var(--muted)", fontSize: 13 }}>
           CR view→cart: <b>{(funnel?.conversion.view_to_cart_percent ?? 0).toFixed(2)}%</b> • cart→checkout: <b>{(funnel?.conversion.cart_to_checkout_percent ?? 0).toFixed(2)}%</b> • checkout→purchase: <b>{(funnel?.conversion.checkout_to_purchase_percent ?? 0).toFixed(2)}%</b>
         </div>
+      </div>
+
+
+      <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Топ товаров по аналитике (30 дней)</div>
+        {topProductsErr ? <div style={{ color: "#ff8c8c", marginBottom: 8 }}>{topProductsErr}</div> : null}
+        {topProducts.length === 0 ? (
+          <div className="small-muted">Пока недостаточно данных.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "6px 4px" }}>Товар</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>Просм.</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>В корз.</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>Покупки</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>CR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topProducts.map((it) => (
+                  <tr key={it.product_id} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td style={{ padding: "6px 4px" }}>{it.title}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px" }}>{it.view_product}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px" }}>{it.add_to_cart}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px" }}>{it.purchase}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px", fontWeight: 700 }}>{Number(it.purchase_rate_percent || 0).toFixed(2)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       <button className="btn btn-primary" style={{ width: "100%", marginTop: 12 }} onClick={exportXlsx}>
