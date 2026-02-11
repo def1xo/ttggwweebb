@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -27,6 +28,26 @@ from app.services.supplier_intelligence import (
 )
 
 router = APIRouter(tags=["admin_supplier_intelligence"])
+logger = logging.getLogger(__name__)
+
+ERROR_CODE_NETWORK_TIMEOUT = "network_timeout"
+ERROR_CODE_INVALID_IMAGE = "invalid_image"
+ERROR_CODE_PARSE_FAILED = "parse_failed"
+ERROR_CODE_DB_CONFLICT = "db_conflict"
+ERROR_CODE_UNKNOWN = "unknown"
+
+
+def _classify_import_error(exc: Exception) -> str:
+    if isinstance(exc, IntegrityError):
+        return ERROR_CODE_DB_CONFLICT
+    message = str(exc).lower()
+    if "timeout" in message:
+        return ERROR_CODE_NETWORK_TIMEOUT
+    if "not an image" in message or "invalid image" in message:
+        return ERROR_CODE_INVALID_IMAGE
+    if "parse" in message:
+        return ERROR_CODE_PARSE_FAILED
+    return ERROR_CODE_UNKNOWN
 
 
 class SupplierSourceIn(BaseModel):
@@ -356,6 +377,25 @@ class ImportProductsOut(BaseModel):
     source_reports: list[dict[str, object]] = Field(default_factory=list)
 
 
+def _new_source_report(source_id: int, source_url: str) -> dict[str, object]:
+    return {
+        "source_id": source_id,
+        "url": source_url,
+        "imported": 0,
+        "errors": 0,
+        "error_codes": {},
+    }
+
+
+def _register_source_error(report: dict[str, object], exc: Exception) -> None:
+    code = _classify_import_error(exc)
+    report["errors"] = int(report.get("errors") or 0) + 1
+    report.setdefault("last_error_message", str(exc))
+    error_codes = dict(report.get("error_codes") or {})
+    error_codes[code] = int(error_codes.get(code) or 0) + 1
+    report["error_codes"] = error_codes
+
+
 
 
 class AvitoMarketScanIn(BaseModel):
@@ -579,7 +619,7 @@ def import_products_from_sources(
         src_url = (src.source_url or "").strip()
         if not src_url:
             continue
-        report = {"source_id": int(src.id), "url": src_url, "imported": 0, "errors": 0}
+        report = _new_source_report(source_id=int(src.id), source_url=src_url)
         try:
             preview = fetch_tabular_preview(src_url, max_rows=max(5, payload.max_items_per_source + 1))
             rows = preview.get("rows_preview") or []
@@ -592,8 +632,7 @@ def import_products_from_sources(
                     for i, u in enumerate(imgs)
                 ]
         except Exception as exc:
-            report["errors"] = 1
-            report["error_message"] = str(exc)
+            _register_source_error(report, exc)
             source_reports.append(report)
             continue
 
@@ -715,10 +754,18 @@ def import_products_from_sources(
                     db.add(variant)
 
                 report["imported"] = int(report.get("imported") or 0) + 1
-            except Exception:
-                report["errors"] = int(report.get("errors") or 0) + 1
+            except Exception as exc:
+                _register_source_error(report, exc)
 
         source_reports.append(report)
+
+    top_failing_sources = sorted(
+        [x for x in source_reports if int(x.get("errors") or 0) > 0],
+        key=lambda x: int(x.get("errors") or 0),
+        reverse=True,
+    )[:5]
+    if top_failing_sources:
+        logger.warning("supplier import top failures: %s", top_failing_sources)
 
     if payload.dry_run:
         db.rollback()
