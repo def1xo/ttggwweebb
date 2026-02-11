@@ -207,7 +207,8 @@ function AdminOrdersPanel({ onBack }: { onBack: () => void }) {
       if (statusFilter) params.status = statusFilter;
       const res: any = await api.getAdminOrders(params);
       if (Array.isArray(res)) {
-        setItems(res);
+        const nextItems = statusFilter ? res : res.filter((o: any) => normStatus(o?.status) !== "received");
+        setItems(nextItems);
         setLoading(false);
         return;
       }
@@ -349,8 +350,8 @@ function AdminOrdersPanel({ onBack }: { onBack: () => void }) {
                     ) : null}
                     <button className="btn btn-secondary" onClick={() => updateStatus(o.id, "processing")}>В работе</button>
                     <button className="btn btn-secondary" onClick={() => updateStatus(o.id, "sent")}>Отправлено</button>
-                    <button className="btn btn-secondary" onClick={() => updateStatus(o.id, "received")}>Получено</button>
                     <button className="btn btn-secondary" onClick={() => updateStatus(o.id, "delivered")}>Доставлено</button>
+                    <button className="btn btn-secondary" onClick={() => updateStatus(o.id, "received")}>Получено</button>
                     <button className="btn btn-secondary" onClick={() => updateStatus(o.id, "cancelled")}>Отмена</button>
                   </td>
                 </tr>
@@ -715,7 +716,8 @@ function AdminPromosPanel({ onBack }: { onBack: () => void }) {
         return;
       }
       if (Array.isArray(res)) {
-        setItems(res);
+        const nextItems = statusFilter ? res : res.filter((o: any) => normStatus(o?.status) !== "received");
+        setItems(nextItems);
         setLoading(false);
         return;
       }
