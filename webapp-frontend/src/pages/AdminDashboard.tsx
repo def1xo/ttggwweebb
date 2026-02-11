@@ -1086,6 +1086,92 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
     }
   };
 
+  const runImportProducts = async () => {
+    const sourceIds = items
+      .map((x) => Number(x?.id))
+      .filter((x) => Number.isFinite(x) && x > 0);
+    if (!sourceIds.length) {
+      setMsg("Нет источников для импорта");
+      return;
+    }
+
+    try {
+      setImportReport(null);
+      const payload = {
+        source_ids: sourceIds,
+        max_items_per_source: Math.max(1, Math.min(200, Number(importMaxItems) || 40)),
+        dry_run: Boolean(importDryRun),
+        publish_visible: Boolean(importPublishVisible),
+        ai_style_description: Boolean(importUseAi),
+        use_avito_pricing: Boolean(importUseAvitoPricing),
+        avito_max_pages: Math.max(1, Math.min(3, Number(importAvitoPages) || 1)),
+      };
+      const res: any = await importProductsFromSupplierSources(payload);
+      setImportReport(res || null);
+      setMsg(importDryRun ? "Dry-run импорт завершён ✅" : "Импорт товаров завершён ✅");
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось запустить импорт товаров");
+    }
+  };
+
+  const runAvitoScan = async () => {
+    const query = avitoQuery.trim();
+    if (!query) {
+      setMsg("Введите запрос для Avito");
+      return;
+    }
+    try {
+      const res: any = await avitoMarketScan({
+        query,
+        max_pages: Math.max(1, Math.min(3, Number(importAvitoPages) || 1)),
+      });
+      setAvitoResult(res || null);
+      setMsg("Avito скан завершён ✅");
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось выполнить Avito скан");
+    }
+  };
+
+  const runTgMediaPreview = async () => {
+    const urls = items
+      .map((x) => String(x?.source_url || "").trim())
+      .filter((url) => url && /(?:t\.me\/|telegram\.me\/)/i.test(url));
+    if (!urls.length) {
+      setMsg("Нет Telegram-источников для подгрузки фото");
+      setTgMediaResult([]);
+      setImageAnalysisResult([]);
+      return;
+    }
+
+    try {
+      const mediaRes: any = await telegramMediaPreview(urls);
+      const media = Array.isArray(mediaRes) ? mediaRes : [];
+      setTgMediaResult(media);
+
+      const imageUrls = Array.from(
+        new Set(
+          media
+            .flatMap((x: any) => (Array.isArray(x?.image_urls) ? x.image_urls : []))
+            .map((x: any) => String(x || "").trim())
+            .filter(Boolean),
+        ),
+      ).slice(0, 50);
+
+      if (!imageUrls.length) {
+        setImageAnalysisResult([]);
+        setMsg("Фото в TG-источниках не найдены");
+        return;
+      }
+
+      const analysisRes: any = await analyzeImages(imageUrls);
+      setImageAnalysisResult(Array.isArray(analysisRes) ? analysisRes : []);
+      setMsg("Фото из TGК загружены и проанализированы ✅");
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось получить/проанализировать фото из Telegram");
+    }
+  };
+
+
   return (
     <div className="container" style={{ paddingTop: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
