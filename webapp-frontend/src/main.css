@@ -314,12 +314,18 @@ select.input { appearance: none; }
   min-width: 70px;
   font-size: 12px;
   line-height: 1;
-  transition: transform .18s ease, background .18s ease, color .18s ease;
+  background: transparent;
+  -webkit-tap-highlight-color: transparent;
+  transition: color .16s ease, opacity .16s ease;
 }
-.bottom-nav a:active { transform: scale(0.96); }
-.bottom-nav a.active { transform: translateY(-1px); color: var(--panel); }
-.bottom-nav a.active { background: transparent; }
-
+.bottom-nav a:active,
+.bottom-nav a.active {
+  transform: none;
+  background: transparent;
+}
+.bottom-nav a.active {
+  color: color-mix(in srgb, var(--panel) 96%, transparent);
+}
 
 .nav-icon {
   width: 18px;
@@ -329,7 +335,8 @@ select.input { appearance: none; }
 
 .bottom-nav a.active .nav-icon { opacity: 1; }
 .bottom-nav a.active span { font-weight: 800; }
-.bottom-nav a:focus-visible { outline: none; box-shadow: none; }
+.bottom-nav a:focus,
+.bottom-nav a:focus-visible { outline: none !important; box-shadow: none !important; }
 
 /* Smooth accordion helper */
 .collapsible-inner { padding: 0; }
@@ -615,16 +622,7 @@ img, picture { max-width: 100%; height: auto; display: block; }
   padding-bottom: 8px;
 }
 
-/* BottomNav safe area */
-.bottom-nav {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: var(--nav-bottom-offset);
-  display: flex;
-  justify-content: center;
-  z-index: 999;
-}
+/* BottomNav safe area: uses the main .bottom-nav block above */
 
 /* чтобы внутренние панели не занимали весь экран на мобильных */
 .panel-title {
