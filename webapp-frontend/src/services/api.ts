@@ -1013,6 +1013,21 @@ export async function approveWithdraw(withdrawId: number, approve = true) {
 }
 
 
+
+export async function getAdminOpsNeedsAttention(limit = 10, low_stock_threshold = 2) {
+  try {
+    const candidates = [
+      "/api/admin/ops/needs-attention",
+      "/admin/ops/needs-attention",
+      "/api/v1/admin/ops/needs-attention",
+      "/v1/admin/ops/needs-attention",
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { limit, low_stock_threshold } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function getAdminManagers() {
   try {
     const candidates = [

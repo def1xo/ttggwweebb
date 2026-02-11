@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminStats } from "../services/api";
+import api, { adminLogin, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -48,6 +48,21 @@ type AnalyticsTopProduct = {
   purchase: number;
   add_rate_percent: number;
   purchase_rate_percent: number;
+};
+
+
+type OpsNeedsAttention = {
+  generated_at: string;
+  counts: {
+    stale_orders: number;
+    products_missing_data: number;
+    low_stock_variants: number;
+  };
+  items: {
+    stale_orders: Array<{ order_id: number; created_at?: string | null; hours_waiting: number; total_amount: number; fio?: string | null; has_payment_proof: boolean }>;
+    products_missing_data: Array<{ product_id: number; title: string; visible: boolean; reasons: string[] }>;
+    low_stock_variants: Array<{ variant_id: number; product_id: number; title: string; stock_quantity: number; is_out: boolean }>;
+  };
 };
 
 type ViewKey =
@@ -868,6 +883,8 @@ export default function AdminDashboard() {
   const [funnelErr, setFunnelErr] = useState<string | null>(null);
   const [topProducts, setTopProducts] = useState<AnalyticsTopProduct[]>([]);
   const [topProductsErr, setTopProductsErr] = useState<string | null>(null);
+  const [opsQueue, setOpsQueue] = useState<OpsNeedsAttention | null>(null);
+  const [opsErr, setOpsErr] = useState<string | null>(null);
   const [view, setView] = useState<ViewKey>("dashboard");
 
   const loadStats = async (r: RangeKey) => {
@@ -931,11 +948,31 @@ export default function AdminDashboard() {
     }
   };
 
+  const loadOpsQueue = async () => {
+    setOpsErr(null);
+    try {
+      const res: any = await getAdminOpsNeedsAttention(8, 2);
+      if (res?.counts && res?.items) {
+        setOpsQueue(res as OpsNeedsAttention);
+        return;
+      }
+      if (res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
+        return;
+      }
+      setOpsErr(res?.detail || "Не удалось загрузить операционную очередь");
+    } catch (e: any) {
+      setOpsErr(e?.message || "Не удалось загрузить операционную очередь");
+    }
+  };
+
   useEffect(() => {
     if (!authed) return;
     loadStats(range);
     loadFunnel();
     loadTopProducts();
+    loadOpsQueue();
   }, [authed, range]);
 
   const navButtons = useMemo(
@@ -1144,6 +1181,41 @@ export default function AdminDashboard() {
             </table>
           </div>
         )}
+      </div>
+
+
+
+      <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Операционная очередь (что требует внимания)</div>
+        {opsErr ? <div style={{ color: "#ff8c8c", marginBottom: 8 }}>{opsErr}</div> : null}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Просроченные оплаты</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.stale_orders ?? 0}</div>
+          </div>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Карточки с проблемами</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.products_missing_data ?? 0}</div>
+          </div>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Низкий остаток</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.low_stock_variants ?? 0}</div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Топ проблемных карточек</div>
+          {(opsQueue?.items.products_missing_data || []).slice(0, 5).map((it) => (
+            <div key={it.product_id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.title}</div>
+                <div className="small-muted">#{it.product_id} • {it.reasons.join(", ")}</div>
+              </div>
+              <a className="btn btn-secondary" href="/admin" style={{ textDecoration: "none", whiteSpace: "nowrap" }}>Открыть</a>
+            </div>
+          ))}
+          {(opsQueue?.items.products_missing_data || []).length === 0 ? <div className="small-muted">Нет критичных карточек 🎉</div> : null}
+        </div>
       </div>
 
       <button className="btn btn-primary" style={{ width: "100%", marginTop: 12 }} onClick={exportXlsx}>
