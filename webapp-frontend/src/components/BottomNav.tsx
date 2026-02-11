@@ -1,5 +1,5 @@
 // src/components/BottomNav.tsx
-import React, { useEffect, useRef, useState } from "react";
+import React from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Icon } from "./Icons";
 import { hapticSelection } from "../utils/tg";
@@ -7,9 +7,6 @@ import { hapticSelection } from "../utils/tg";
 export default function BottomNav() {
   const loc = useLocation();
   const path = loc.pathname || "/";
-
-  const innerRef = useRef<HTMLDivElement | null>(null);
-  const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null);
 
   let role = "";
   try {
@@ -28,36 +25,9 @@ export default function BottomNav() {
     { to: "/manager", label: "Панель", icon: "briefcase", show: !isAdmin && isManager },
   ];
 
-  useEffect(() => {
-    const el = innerRef.current;
-    if (!el) return;
-    const a = el.querySelector("a.active") as HTMLElement | null;
-    if (!a) {
-      setIndicator(null);
-      return;
-    }
-    try {
-      const rInner = el.getBoundingClientRect();
-      const rA = a.getBoundingClientRect();
-      const left = rA.left - rInner.left;
-      const width = rA.width;
-      setIndicator({ left, width });
-    } catch {
-      setIndicator(null);
-    }
-  }, [path, isAdmin, isManager]);
-
   return (
     <div className="bottom-nav" role="navigation" aria-label="Bottom navigation">
-      <div className="bottom-nav-inner" ref={innerRef}>
-        {indicator ? (
-          <div
-            className="bottom-nav-indicator"
-            style={{ transform: `translateX(${indicator.left}px)`, width: indicator.width }}
-            aria-hidden
-          />
-        ) : null}
-
+      <div className="bottom-nav-inner">
         {items
           .filter((x) => x.show === undefined || x.show)
           .map((it) => (

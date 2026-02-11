@@ -31,6 +31,23 @@ import "./main.css";
   } catch {}
 })();
 
+
+(function bindViewportHeightVar() {
+  const apply = () => {
+    try {
+      const h = window.visualViewport?.height || window.innerHeight || 0;
+      if (h > 0) {
+        document.documentElement.style.setProperty("--vh", `${h * 0.01}px`);
+      }
+    } catch {}
+  };
+
+  apply();
+  window.addEventListener("resize", apply, { passive: true });
+  window.addEventListener("orientationchange", apply, { passive: true });
+  try { window.visualViewport?.addEventListener("resize", apply, { passive: true } as any); } catch {}
+})();
+
 (function installGlobalErrorOverlay() {
   if (typeof window === "undefined") return;
   try {
