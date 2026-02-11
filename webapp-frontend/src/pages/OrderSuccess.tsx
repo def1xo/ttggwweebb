@@ -14,8 +14,8 @@ const STEPS: Step[] = [
   { key: "paid", label: "Чек загружен" },
   { key: "processing", label: "В обработке" },
   { key: "sent", label: "Отправлен" },
-  { key: "received", label: "Получен" },
   { key: "delivered", label: "Доставлен" },
+  { key: "received", label: "Получен" },
 ];
 
 function normalizeStatus(s: any): string {
