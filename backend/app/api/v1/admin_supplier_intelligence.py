@@ -690,9 +690,21 @@ def import_products_from_sources(
                         stock_quantity=max(0, stock_qty),
                         images=[image_url] if image_url else None,
                     )
-                    db.add(variant)
-                    db.flush()
-                    created_variants += 1
+                    try:
+                        with db.begin_nested():
+                            db.add(variant)
+                            db.flush()
+                        created_variants += 1
+                    except IntegrityError:
+                        variant = (
+                            db.query(models.ProductVariant)
+                            .filter(models.ProductVariant.product_id == p.id)
+                            .filter(models.ProductVariant.size_id == (size.id if size else None))
+                            .filter(models.ProductVariant.color_id == (color.id if color else None))
+                            .one_or_none()
+                        )
+                        if variant is None:
+                            raise
                 else:
                     if float(variant.price or 0) <= 0 and sale_price > 0:
                         variant.price = Decimal(str(sale_price))

@@ -172,6 +172,10 @@ class Size(Base):
 
 class ProductVariant(Base):
     __tablename__ = "product_variants"
+    __table_args__ = (
+        UniqueConstraint("product_id", "size_id", "color_id", name="uq_product_variants_product_size_color"),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
     size_id = Column(Integer, ForeignKey("sizes.id"), nullable=True)

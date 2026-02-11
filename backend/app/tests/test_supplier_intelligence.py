@@ -51,3 +51,17 @@ def test_suggest_sale_price_markup():
 
 def test_print_signature_hamming_distance():
     assert print_signature_hamming("aaaa", "aaab") == 1
+
+
+def test_print_signature_hamming_returns_none_for_different_lengths():
+    assert print_signature_hamming("aaaa", "aaa") is None
+
+
+def test_extract_catalog_items_skips_non_positive_price_rows():
+    rows = [
+        ["Товар", "Дроп цена", "Цвет"],
+        ["Худи Alpha", "0", "Черный"],
+        ["Худи Beta", "1990", "Белый"],
+    ]
+    items = extract_catalog_items(rows)
+    assert [it["title"] for it in items] == ["Худи Beta"]

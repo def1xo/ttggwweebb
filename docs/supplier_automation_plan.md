@@ -11,7 +11,17 @@
 
 Admin endpoints:
 
+- `GET /api/admin/supplier-intelligence/sources`
+- `POST /api/admin/supplier-intelligence/sources`
+- `POST /api/admin/supplier-intelligence/sources/bulk-upsert`
+- `PATCH /api/admin/supplier-intelligence/sources/{source_id}`
+- `DELETE /api/admin/supplier-intelligence/sources/{source_id}`
 - `POST /api/admin/supplier-intelligence/analyze-links`
+- `POST /api/admin/supplier-intelligence/analyze-sources`
+- `POST /api/admin/supplier-intelligence/import-products`
+- `POST /api/admin/supplier-intelligence/avito-market-scan`
+- `POST /api/admin/supplier-intelligence/telegram-media-preview`
+- `POST /api/admin/supplier-intelligence/analyze-images`
 - `POST /api/admin/supplier-intelligence/best-offer`
 - `POST /api/admin/supplier-intelligence/estimate-market-price`
 
@@ -21,13 +31,13 @@ Admin endpoints:
 - **Локально и бесплатно**: `Ollama` + open-weight модель (например, `qwen2.5:7b-instruct`) для генерации описаний.
 - **Гибрид**: если LLM недоступна — fallback на шаблонные описания.
 
-## Что делать следующим шагом
+## Что делать следующим шагом (по порядку, чтобы без сбоев)
 
-1. Добавить таблицу источников поставщиков в БД + UI в админке.
-2. Добавить планировщик (Celery beat) для авто-синка по расписанию.
-3. Интегрировать ingest Telegram-каналов поставщиков (с учётом уже существующего telethon importer).
-4. Добавить модуль сбора рыночной цены по внешним источникам (Avito с legal-safe режимом и rate-limit).
-5. Авто-генерация описания + dedupe по фото/названию.
+1. **База и идемпотентность**: добавить/проконтролировать уникальные ограничения на варианты (`product_id + size_id + color_id`), чтобы повторный импорт не плодил дубли.
+2. **Фоновый импорт**: вынести `import-products` в celery job + статус выполнения в БД (долгие источники не должны держать HTTP-запрос).
+3. **Устойчивый HTTP-слой**: retries + backoff + ограничение частоты на Avito/TG и image-download.
+4. **Планировщик (Celery beat)** для авто-синка по расписанию.
+5. **Улучшенный dedupe**: multi-image consensus и хранение сигнатур, чтобы одинаковые принты из разных источников матчились стабильнее.
 
 ## Важный момент про Avito
 
