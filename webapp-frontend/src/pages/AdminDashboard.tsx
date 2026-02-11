@@ -230,10 +230,13 @@ function AdminOrdersPanel({ onBack }: { onBack: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
 
-  const sendProofToTelegram = async (orderId: number) => {
+  const sendProofToTelegram = async (orderId: number, proofUrl?: string) => {
     try {
       await sendOrderProofToTelegram(orderId, window.location.origin);
-      setActionMsg(`Ссылка на чек заказа #${orderId} отправлена в Telegram ✅`);
+      if (proofUrl) {
+        try { window.open(String(proofUrl), "_blank", "noopener,noreferrer"); } catch {}
+      }
+      setActionMsg(`Чек заказа #${orderId}: открыл и отправил ссылку в Telegram ✅`);
     } catch (e: any) {
       setActionMsg(e?.message || "Не удалось отправить чек в Telegram");
     }
@@ -330,8 +333,8 @@ function AdminOrdersPanel({ onBack }: { onBack: () => void }) {
                         <a href={String(o.payment_screenshot)} target="_blank" rel="noreferrer" className="btn ghost">
                           Открыть
                         </a>
-                        <button className="btn ghost" onClick={() => sendProofToTelegram(Number(o.id))}>
-                          В TG
+                        <button className="btn ghost" onClick={() => sendProofToTelegram(Number(o.id), String(o.payment_screenshot))}>
+                          Скачать
                         </button>
                       </div>
                     ) : (
