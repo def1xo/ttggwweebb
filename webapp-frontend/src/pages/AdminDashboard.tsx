@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, analyzeImages, analyzeStoredSources, avitoMarketScan, bulkUpsertAdminSupplierSources, createAdminSupplierSource, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, importProductsFromSupplierSources, patchAdminSupplierSource, sendAdminSalesExportToTelegram, sendOrderProofToTelegram, telegramMediaPreview } from "../services/api";
+import api, { adminLogin, analyzeImages, analyzeStoredSources, avitoMarketScan, bulkUpsertAdminSupplierSources, createAdminNews, createAdminSupplierSource, deleteAdminNews, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminNews, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, importProductsFromSupplierSources, patchAdminNews, patchAdminSupplierSource, sendAdminCatalogToTelegram, sendAdminSalesExportToTelegram, sendOrderProofToTelegram, telegramMediaPreview } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -98,7 +98,8 @@ type ViewKey =
   | "managers"
   | "payment"
   | "promos"
-  | "suppliers";
+  | "suppliers"
+  | "news";
 
 function formatRub(n: number) {
   const v = Number.isFinite(n) ? n : 0;
@@ -1355,6 +1356,148 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
 }
 
 
+
+
+function AdminNewsAndCatalogPanel({ onBack }: { onBack: () => void }) {
+  const [items, setItems] = useState<any[]>([]);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [title, setTitle] = useState("");
+  const [textBody, setTextBody] = useState("");
+  const [imagesRaw, setImagesRaw] = useState("");
+  const [catalogTemplate, setCatalogTemplate] = useState("#{category}\n{title}\nцена: {price} ₽");
+  const [catalogLimit, setCatalogLimit] = useState(100);
+
+  const load = async () => {
+    try {
+      const res: any = await getAdminNews(200);
+      setItems(Array.isArray(res) ? res : []);
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось загрузить новости");
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const resetForm = () => {
+    setEditingId(null);
+    setTitle("");
+    setTextBody("");
+    setImagesRaw("");
+  };
+
+  const saveNews = async () => {
+    if (!title.trim()) {
+      setMsg("У новости должен быть заголовок");
+      return;
+    }
+    const images = imagesRaw
+      .split(/\n|,|;/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const payload = { title: title.trim(), text: textBody.trim() || undefined, images };
+    try {
+      if (editingId) {
+        await patchAdminNews(editingId, payload);
+        setMsg("Новость обновлена ✅");
+      } else {
+        await createAdminNews(payload);
+        setMsg("Новость создана ✅");
+      }
+      resetForm();
+      await load();
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось сохранить новость");
+    }
+  };
+
+  const startEdit = (it: any) => {
+    setEditingId(Number(it.id));
+    setTitle(String(it.title || ""));
+    setTextBody(String(it.text || ""));
+    setImagesRaw(Array.isArray(it.images) ? it.images.join("\n") : "");
+  };
+
+  const removeNews = async (id: number) => {
+    if (!confirm(`Удалить новость #${id}?`)) return;
+    try {
+      await deleteAdminNews(id);
+      if (editingId === id) resetForm();
+      setMsg("Новость удалена");
+      await load();
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось удалить новость");
+    }
+  };
+
+  const sendCatalog = async () => {
+    try {
+      const res: any = await sendAdminCatalogToTelegram({
+        template: catalogTemplate.trim() || undefined,
+        only_visible: true,
+        limit: Math.max(1, Math.min(500, Number(catalogLimit) || 100)),
+      });
+      setMsg(`Каталог отправлен в TG: ${res?.sent || 0}/${res?.total || 0}`);
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось отправить каталог в Telegram");
+    }
+  };
+
+  return (
+    <div className="container" style={{ paddingTop: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <button className="btn btn-secondary" onClick={onBack}>← Назад</button>
+        <div style={{ fontWeight: 700 }}>Новости + выгрузка каталога в TG</div>
+      </div>
+
+      {msg ? <div className="card" style={{ padding: 12, marginBottom: 12 }}>{msg}</div> : null}
+
+      <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>
+        <div style={{ fontWeight: 800 }}>{editingId ? `Редактировать новость #${editingId}` : "Создать новость"}</div>
+        <input className="input" placeholder="Заголовок" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <textarea className="input" style={{ minHeight: 110 }} placeholder="Текст новости" value={textBody} onChange={(e) => setTextBody(e.target.value)} />
+        <textarea className="input" style={{ minHeight: 90 }} placeholder="Картинки (ссылки, каждая с новой строки)" value={imagesRaw} onChange={(e) => setImagesRaw(e.target.value)} />
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-primary" onClick={saveNews} disabled={!title.trim()}>{editingId ? "Сохранить" : "Создать"}</button>
+          {editingId ? <button className="btn btn-secondary" onClick={resetForm}>Отмена</button> : null}
+        </div>
+      </div>
+
+      <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>
+        <div style={{ fontWeight: 800 }}>Выгрузка каталога в Telegram</div>
+        <textarea
+          className="input"
+          style={{ minHeight: 120 }}
+          value={catalogTemplate}
+          onChange={(e) => setCatalogTemplate(e.target.value)}
+          placeholder={'Шаблон. Доступно: {category}, {title}, {price}, {slug}, {id}'}
+        />
+        <input className="input" type="number" min={1} max={500} value={catalogLimit} onChange={(e) => setCatalogLimit(Number(e.target.value || 100))} />
+        <button className="btn" onClick={sendCatalog}>Отправить каталог в TG канал</button>
+      </div>
+
+      <div className="card" style={{ padding: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Список новостей</div>
+        {items.length === 0 ? <div className="small-muted">Пока пусто</div> : null}
+        <div style={{ display: "grid", gap: 8 }}>
+          {items.map((it) => (
+            <div key={it.id} className="card" style={{ padding: 10 }}>
+              <div style={{ fontWeight: 700 }}>{it.title}</div>
+              {it.text ? <div className="small-muted" style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>{it.text}</div> : null}
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <button className="btn btn-secondary" onClick={() => startEdit(it)}>Редактировать</button>
+                <button className="btn" onClick={() => removeNews(Number(it.id))}>Удалить</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminDashboard() {
   const [authed, setAuthed] = useState<boolean>(() => Boolean(localStorage.getItem("admin_token")));
   const [range, setRange] = useState<RangeKey>("week");
@@ -1473,6 +1616,7 @@ export default function AdminDashboard() {
         { k: "categories" as const, label: "Категории" },
         { k: "managers" as const, label: "Менеджеры" },
         { k: "suppliers" as const, label: "Поставщики / источники" },
+        { k: "news" as const, label: "Новости + TG каталог" },
       ],
     []
   );
@@ -1530,6 +1674,7 @@ export default function AdminDashboard() {
   }
 
   if (view === "suppliers") return <AdminSupplierSourcesPanel onBack={() => setView("dashboard")} />;
+  if (view === "news") return <AdminNewsAndCatalogPanel onBack={() => setView("dashboard")} />;
 
   if (view === "managers") {
     return (
