@@ -783,6 +783,51 @@ img, picture { max-width: 100%; height: auto; display: block; }
 
 
 
+
+.related-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.related-item {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--bg) 88%, var(--panel) 12%);
+}
+
+.related-thumb {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.03);
+}
+
+.related-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.related-title {
+  margin-top: 8px;
+  font-weight: 800;
+  font-size: 13px;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@media (min-width: 760px) {
+  .related-row {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 /* Sticky search */
 .sticky-search {
   position: sticky;

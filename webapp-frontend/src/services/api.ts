@@ -518,6 +518,21 @@ export async function getProducts(params?: Record<string, any>) {
   }
 }
 
+
+export async function getRelatedProducts(productId: number | string, limit = 8) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/products/${productId}/related`,
+      `${API_BASE_URL}/api/v1/products/${productId}/related`,
+      `/api/products/${productId}/related`,
+      `/products/${productId}/related`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { limit } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function getProduct(id: number | string) {
   try {
     const candidates = [
