@@ -13,7 +13,7 @@ import {
   createOrder,
   deleteCartItem,
   getCart,
-  getRelatedProducts,
+  getCartRecommendations,
   removeCartPromo,
   setCartItem,
 } from "../services/api";
@@ -172,32 +172,10 @@ export default function Cart() {
       }
       setRelatedLoading(true);
       try {
-        const inCart = new Set(items.map((it) => Number(it.product_id)));
-        const seedIds = Array.from(inCart).filter((id) => Number.isFinite(id) && id > 0).slice(0, 3);
-        const chunks = await Promise.all(seedIds.map(async (pid) => {
-          try {
-            const res: any = await getRelatedProducts(pid, 8);
-            const data = (res as any)?.data ?? res;
-            return Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
-          } catch {
-            return [];
-          }
-        }));
-
-        const seen = new Set<number>();
-        const out: any[] = [];
-        for (const list of chunks) {
-          for (const p of list) {
-            const pid = Number(p?.id);
-            if (!Number.isFinite(pid) || pid <= 0) continue;
-            if (inCart.has(pid) || seen.has(pid)) continue;
-            seen.add(pid);
-            out.push(p);
-            if (out.length >= 8) break;
-          }
-          if (out.length >= 8) break;
-        }
-        setRelated(out);
+        const res: any = await getCartRecommendations(8);
+        const data = (res as any)?.data ?? res;
+        const out = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+        setRelated(out.slice(0, 8));
       } finally {
         setRelatedLoading(false);
       }
