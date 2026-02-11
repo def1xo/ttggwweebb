@@ -169,7 +169,7 @@ def create_order(
 
     # Apply special promo (discount)
     if promo_code_str:
-        promo = db.query(models.PromoCode).filter(models.PromoCode.code == promo_code_str).one_or_none()
+        promo = db.query(models.PromoCode).filter(models.PromoCode.code.ilike(promo_code_str)).one_or_none()
         promo_type = str(getattr(getattr(promo, "type", None), "value", getattr(promo, "type", ""))).lower() if promo else ""
         if promo and promo_type in {"special", "admin"}:
             # enforce "one promo per life" + pending lock
@@ -180,7 +180,10 @@ def create_order(
 
             resv = _active_reservation(db, user.id, promo.id)
             if not resv:
-                raise HTTPException(status_code=400, detail="promo reservation expired")
+                # Fallback: if promo came directly in payload (legacy clients / race),
+                # still apply discount instead of dropping to 0 silently.
+                # Pending lock will still be set below for created order.
+                pass
 
             percent = _promo_value_to_percent(_to_decimal(promo.value))
             promo_discount_percent = percent
