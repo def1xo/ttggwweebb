@@ -336,16 +336,34 @@ def _find_col_priority(headers: list[str], groups: tuple[tuple[str, ...], ...]) 
     return None
 
 
+
+
+def _is_non_purchase_price_header(header: str) -> bool:
+    h = (header or "").strip().lower()
+    if not h:
+        return False
+    blocked_tokens = ("ррц", "rrc", "мрц", "mrc", "розниц", "retail", "market")
+    return any(token in h for token in blocked_tokens)
+
 def _pick_price_column(headers: list[str]) -> int | None:
-    return _find_col_priority(
-        headers,
-        (
-            ("дроп", "dropship", "drop ship", "ds"),
-            ("drop",),
-            ("price", "цена", "стоим"),
-            ("опт", "wholesale"),
-        ),
-    )
+    normalized = [str(x or "").strip().lower() for x in headers]
+
+    # 1) explicit dropship column always wins
+    for i, col in enumerate(normalized):
+        if any(token in col for token in ("дроп", "dropship", "drop ship", "drop")):
+            return i
+
+    # 2) fallback to generic purchase-like price columns, but skip RRC/MRC/retail
+    generic = _find_col_priority(headers, (("price", "цена", "стоим", "опт", "wholesale"),))
+    if generic is not None and not _is_non_purchase_price_header(normalized[generic]):
+        return generic
+
+    for i, col in enumerate(normalized):
+        if _is_non_purchase_price_header(col):
+            continue
+        if any(token in col for token in ("опт", "wholesale", "price", "цена", "стоим")):
+            return i
+    return None
 
 def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[dict[str, Any]]:
     if not rows:

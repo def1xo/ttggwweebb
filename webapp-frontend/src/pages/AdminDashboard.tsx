@@ -76,6 +76,19 @@ type OpsNeedsAttention = {
   }>;
 };
 
+const DEFAULT_SUPPLIER_SOURCE_LINKS = [
+  "https://docs.google.com/spreadsheets/d/1Pv_iyCw5WCbBHXvhdH5w7pRjxfsjTbCm3SjHPElC_wA/edit?usp=sharing",
+  "https://docs.google.com/spreadsheets/d/1JQ5p32JknAm34W42fiTXzAFKYOhb9QEcMFAwSernwI4/htmlview",
+  "https://docs.google.com/spreadsheets/d/1Xfjpx1Bs9GDUlgKalrzzm3u2M6dpxwuHZQwCqihjw2Q/htmlview",
+  "https://docs.google.com/spreadsheets/d/1wfZJPJMO34WfcbGNxP-IWl5w0V1vEDf6FHakAqoJsBw/htmlview",
+  "https://docs.google.com/spreadsheets/d/1fvLjH86AAD2upGbQ9npo-mtUbFAsl3cmx8wDIczTCeE/htmlview",
+  "https://b2b.moysklad.ru/public/oWXBoG49bkuB/catalog",
+  "https://t.me/firmachdroppp",
+  "https://t.me/optobaza",
+  "https://t.me/venomopt12",
+  "https://t.me/shop_vkus",
+];
+
 type ViewKey =
   | "dashboard"
   | "orders"
@@ -1086,6 +1099,24 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
     }
   };
 
+  const seedDefaultSources = async () => {
+    try {
+      const entries = DEFAULT_SUPPLIER_SOURCE_LINKS.map((url) => ({
+        source_url: url,
+        supplier_name: bulkSupplierName.trim() || undefined,
+        manager_name: bulkManagerName.trim() || undefined,
+        manager_contact: bulkManagerContact.trim() || undefined,
+        note: "seed: стартовый набор источников",
+      }));
+      const res: any = await bulkUpsertAdminSupplierSources(entries);
+      setMsg(`Стартовые источники: +${res?.created || 0} новых, ~${res?.updated || 0} обновлено`);
+      await load();
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось добавить стартовые источники");
+    }
+  };
+
+
   const runImportProducts = async () => {
     const sourceIds = items
       .map((x) => Number(x?.id))
@@ -1207,7 +1238,10 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
         <input className="input" placeholder="Общий менеджер" value={bulkManagerName} onChange={(e) => setBulkManagerName(e.target.value)} />
         <input className="input" placeholder="Общий контакт менеджера" value={bulkManagerContact} onChange={(e) => setBulkManagerContact(e.target.value)} />
         <input className="input" placeholder="Общая заметка" value={bulkNote} onChange={(e) => setBulkNote(e.target.value)} />
-        <button className="btn" onClick={bulkAdd} disabled={!bulkLinks.trim()}>Массово добавить/обновить</button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="btn" onClick={bulkAdd} disabled={!bulkLinks.trim()}>Массово добавить/обновить</button>
+          <button className="btn btn-secondary" onClick={seedDefaultSources}>Добавить стартовый набор (Sheets + TG + MoySklad)</button>
+        </div>
       </div>
 
       <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>

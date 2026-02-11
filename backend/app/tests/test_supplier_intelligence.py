@@ -66,6 +66,31 @@ def test_extract_catalog_items_uses_wholesale_when_dropship_column_missing():
     assert len(items) == 1
     assert items[0]["dropship_price"] == 1900.0
 
+
+
+def test_extract_catalog_items_skips_rrc_mrc_and_picks_dropship():
+    rows = [
+        ["Товар", "РРЦ", "МРЦ", "Цена дроп", "Цвет"],
+        ["Худи Alpha", "4990", "3990", "2590", "Черный"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 2590.0
+
+
+def test_extract_catalog_items_ignores_rrc_when_only_generic_price_exists():
+    rows = [
+        ["Товар", "РРЦ цена", "Опт цена", "Цвет"],
+        ["Худи Alpha", "4990", "2190", "Черный"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 2190.0
+
 def test_generate_youth_description_mentions_title():
     txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
     assert "Худи Alpha" in txt
