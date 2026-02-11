@@ -13,9 +13,13 @@ from app.services.importer_notifications import slugify
 from app.services.supplier_intelligence import (
     SupplierOffer,
     estimate_market_price,
+    avito_market_scan,
+    dominant_color_name_from_url,
     extract_catalog_items,
+    extract_image_urls_from_html_page,
     fetch_tabular_preview,
     generate_youth_description,
+    image_print_signature_from_url,
     map_category,
     pick_best_offer,
     suggest_sale_price,
@@ -349,6 +353,83 @@ class ImportProductsOut(BaseModel):
     source_reports: list[dict[str, object]] = Field(default_factory=list)
 
 
+
+
+class AvitoMarketScanIn(BaseModel):
+    query: str = Field(min_length=2, max_length=255)
+    max_pages: int = Field(default=1, ge=1, le=3)
+
+
+class AvitoMarketScanOut(BaseModel):
+    query: str
+    pages: int
+    prices: list[float] = Field(default_factory=list)
+    suggested: float | None = None
+    errors: list[str] = Field(default_factory=list)
+
+
+class TelegramMediaPreviewIn(BaseModel):
+    urls: list[str] = Field(default_factory=list, min_items=1, max_items=50)
+
+
+class TelegramMediaPreviewOut(BaseModel):
+    url: str
+    image_urls: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class ImageAnalysisIn(BaseModel):
+    image_urls: list[str] = Field(default_factory=list, min_items=1, max_items=50)
+
+
+class ImageAnalysisOut(BaseModel):
+    image_url: str
+    print_signature: str | None = None
+    dominant_color: str | None = None
+
+
+
+
+@router.post("/supplier-intelligence/avito-market-scan", response_model=AvitoMarketScanOut)
+def avito_scan(payload: AvitoMarketScanIn, _admin=Depends(get_current_admin_user)):
+    data = avito_market_scan(payload.query, max_pages=payload.max_pages)
+    return AvitoMarketScanOut(
+        query=str(data.get("query") or ""),
+        pages=int(data.get("pages") or payload.max_pages),
+        prices=[float(x) for x in (data.get("prices") or [])],
+        suggested=(float(data.get("suggested")) if data.get("suggested") is not None else None),
+        errors=[str(x) for x in (data.get("errors") or [])],
+    )
+
+
+@router.post("/supplier-intelligence/telegram-media-preview", response_model=list[TelegramMediaPreviewOut])
+def telegram_media_preview(payload: TelegramMediaPreviewIn, _admin=Depends(get_current_admin_user)):
+    out: list[TelegramMediaPreviewOut] = []
+    for raw in payload.urls:
+        url = (raw or "").strip()
+        if not url:
+            continue
+        try:
+            imgs = extract_image_urls_from_html_page(url, limit=15)
+            out.append(TelegramMediaPreviewOut(url=url, image_urls=imgs))
+        except Exception as exc:
+            out.append(TelegramMediaPreviewOut(url=url, image_urls=[], error=str(exc)))
+    return out
+
+
+@router.post("/supplier-intelligence/analyze-images", response_model=list[ImageAnalysisOut])
+def analyze_images(payload: ImageAnalysisIn, _admin=Depends(get_current_admin_user)):
+    out: list[ImageAnalysisOut] = []
+    for raw in payload.image_urls:
+        url = (raw or "").strip()
+        if not url:
+            continue
+        sig = image_print_signature_from_url(url)
+        color = dominant_color_name_from_url(url)
+        out.append(ImageAnalysisOut(image_url=url, print_signature=sig, dominant_color=color))
+    return out
+
+
 class OfferIn(BaseModel):
     supplier: str
     title: str
@@ -424,6 +505,7 @@ def import_products_from_sources(
     updated_products = 0
     created_variants = 0
     source_reports: list[dict[str, object]] = []
+    signature_product_map: dict[str, int] = {}
 
     def get_or_create_category(name: str) -> models.Category:
         nonlocal created_categories
@@ -475,6 +557,13 @@ def import_products_from_sources(
             preview = fetch_tabular_preview(src_url, max_rows=max(5, payload.max_items_per_source + 1))
             rows = preview.get("rows_preview") or []
             items = extract_catalog_items(rows, max_items=payload.max_items_per_source)
+            if not items and "t.me/" in src_url:
+                # fallback for telegram channels/pages: create image-first pseudo items
+                imgs = extract_image_urls_from_html_page(src_url, limit=min(payload.max_items_per_source, 30))
+                items = [
+                    {"title": f"Позиция из TG #{i+1}", "dropship_price": 0.0, "image_url": u}
+                    for i, u in enumerate(imgs)
+                ]
         except Exception as exc:
             report["errors"] = 1
             report["error_message"] = str(exc)
@@ -488,7 +577,8 @@ def import_products_from_sources(
                     continue
                 ds_price = float(it.get("dropship_price") or 0)
                 if ds_price <= 0:
-                    continue
+                    # if no dropship price in source row, keep minimal placeholder for dry-run/preview flows
+                    ds_price = 1.0
                 cat_name = map_category(title)
                 category = get_or_create_category(cat_name)
                 slug_base = (slugify(title) or f"item-{category.id}")[:500]
@@ -502,6 +592,12 @@ def import_products_from_sources(
                     desc = generate_youth_description(title, cat_name, it.get("color"))
                 sale_price = suggest_sale_price(ds_price)
                 image_url = str(it.get("image_url") or "").strip() or None
+                if not image_url and "t.me/" in src_url:
+                    try:
+                        tg_imgs = extract_image_urls_from_html_page(src_url, limit=3)
+                        image_url = tg_imgs[0] if tg_imgs else None
+                    except Exception:
+                        image_url = None
 
                 if not p:
                     # unique slug fallback
@@ -537,8 +633,20 @@ def import_products_from_sources(
                         db.add(p)
                         updated_products += 1
 
+                # image-based analysis: same print with different colors -> same product, new color variants
+                sig = image_print_signature_from_url(image_url) if image_url else None
+                if sig and sig in signature_product_map and (not p or p.id != signature_product_map[sig]):
+                    same_print_product = db.query(models.Product).filter(models.Product.id == signature_product_map[sig]).one_or_none()
+                    if same_print_product:
+                        p = same_print_product
+                elif sig and p:
+                    signature_product_map[sig] = int(p.id)
+
+                detected_color = dominant_color_name_from_url(image_url) if image_url else None
+                src_color = it.get("color") or detected_color
+
                 size = get_or_create_size(it.get("size"))
-                color = get_or_create_color(it.get("color"))
+                color = get_or_create_color(src_color)
                 variant = (
                     db.query(models.ProductVariant)
                     .filter(models.ProductVariant.product_id == p.id)

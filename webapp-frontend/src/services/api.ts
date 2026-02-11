@@ -1309,6 +1309,35 @@ export async function patchAdminSupplierSource(id: number, payload: {
 
 
 
+
+
+export async function avitoMarketScan(payload: { query: string; max_pages?: number }) {
+  try {
+    const res = await axiosInstance.post("/api/admin/supplier-intelligence/avito-market-scan", payload);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function telegramMediaPreview(urls: string[]) {
+  try {
+    const res = await axiosInstance.post("/api/admin/supplier-intelligence/telegram-media-preview", { urls });
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function analyzeImages(imageUrls: string[]) {
+  try {
+    const res = await axiosInstance.post("/api/admin/supplier-intelligence/analyze-images", { image_urls: imageUrls });
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function importProductsFromSupplierSources(payload: {
   source_ids: number[];
   max_items_per_source?: number;
@@ -1430,6 +1459,9 @@ api.bulkUpsertAdminSupplierSources = bulkUpsertAdminSupplierSources;
 api.analyzeSupplierLinks = analyzeSupplierLinks;
 api.analyzeStoredSources = analyzeStoredSources;
 api.importProductsFromSupplierSources = importProductsFromSupplierSources;
+api.avitoMarketScan = avitoMarketScan;
+api.telegramMediaPreview = telegramMediaPreview;
+api.analyzeImages = analyzeImages;
 api.reportClientError = reportClientError;
 
 export default api;

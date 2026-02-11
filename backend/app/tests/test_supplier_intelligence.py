@@ -1,4 +1,4 @@
-from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, estimate_market_price, extract_catalog_items, generate_youth_description, map_category, pick_best_offer
+from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, estimate_market_price, extract_catalog_items, generate_youth_description, map_category, pick_best_offer, suggest_sale_price
 
 
 def test_estimate_market_price_ignores_fake_outliers():
@@ -43,3 +43,7 @@ def test_generate_youth_description_mentions_title():
     txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
     assert "Худи Alpha" in txt
     assert "стрит" in txt.lower()
+
+
+def test_suggest_sale_price_markup():
+    assert suggest_sale_price(1000) >= 1500

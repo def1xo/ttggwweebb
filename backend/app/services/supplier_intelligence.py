@@ -321,3 +321,160 @@ def suggest_sale_price(dropship_price: float) -> float:
         return 0.0
     # conservative markup for retail target
     return round(base * 1.55, 0)
+
+
+def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: int = 20) -> list[str]:
+    headers = {"User-Agent": "defshop-intel-bot/1.0"}
+    r = requests.get(url, timeout=timeout_sec, headers=headers)
+    r.raise_for_status()
+    html = r.text or ""
+
+    urls: list[str] = []
+
+    # og/twitter image meta
+    for m in re.findall(r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]+content=["\']([^"\']+)["\']', html, flags=re.I):
+        u = str(m).strip()
+        if u and u not in urls:
+            urls.append(u)
+
+    # plain img src
+    for m in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html, flags=re.I):
+        u = str(m).strip()
+        if not u:
+            continue
+        if u.startswith("//"):
+            u = "https:" + u
+        if u.startswith("/"):
+            parsed = urlparse(url)
+            u = f"{parsed.scheme}://{parsed.netloc}{u}"
+        if u not in urls:
+            urls.append(u)
+        if len(urls) >= limit:
+            break
+    return urls[:limit]
+
+
+def _load_image_for_analysis(image_bytes: bytes):
+    try:
+        from PIL import Image  # type: ignore
+        return Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except Exception as exc:
+        raise RuntimeError("Pillow is required for image analysis. Add pillow to backend requirements.") from exc
+
+
+def image_print_signature_from_url(url: str, timeout_sec: int = 20) -> str | None:
+    try:
+        headers = {"User-Agent": "defshop-intel-bot/1.0"}
+        r = requests.get(url, timeout=timeout_sec, headers=headers)
+        r.raise_for_status()
+        img = _load_image_for_analysis(r.content)
+
+        # simple average hash 8x8
+        gray = img.convert("L").resize((8, 8))
+        px = list(gray.getdata())
+        if not px:
+            return None
+        avg = sum(px) / len(px)
+        bits = "".join("1" if p >= avg else "0" for p in px)
+        # hex string
+        out = ""
+        for i in range(0, len(bits), 4):
+            out += f"{int(bits[i:i+4], 2):x}"
+        return out
+    except Exception:
+        return None
+
+
+def dominant_color_name_from_url(url: str, timeout_sec: int = 20) -> str | None:
+    try:
+        headers = {"User-Agent": "defshop-intel-bot/1.0"}
+        r = requests.get(url, timeout=timeout_sec, headers=headers)
+        r.raise_for_status()
+        img = _load_image_for_analysis(r.content)
+
+        small = img.resize((64, 64))
+        rs = gs = bs = 0
+        n = 0
+        for (rr, gg, bb) in list(small.getdata()):
+            rs += int(rr)
+            gs += int(gg)
+            bs += int(bb)
+            n += 1
+        if n <= 0:
+            return None
+        r_avg = rs / n
+        g_avg = gs / n
+        b_avg = bs / n
+
+        # coarse color naming
+        mx = max(r_avg, g_avg, b_avg)
+        mn = min(r_avg, g_avg, b_avg)
+        if mx < 45:
+            return "черный"
+        if mn > 215:
+            return "белый"
+        if abs(r_avg - g_avg) < 15 and abs(g_avg - b_avg) < 15:
+            return "серый"
+        if r_avg > g_avg * 1.18 and r_avg > b_avg * 1.18:
+            return "красный"
+        if g_avg > r_avg * 1.18 and g_avg > b_avg * 1.18:
+            return "зеленый"
+        if b_avg > r_avg * 1.18 and b_avg > g_avg * 1.18:
+            return "синий"
+        if r_avg > 150 and g_avg > 125 and b_avg < 120:
+            return "желтый"
+        if r_avg > 135 and b_avg > 120 and g_avg < 120:
+            return "фиолетовый"
+        return "мульти"
+    except Exception:
+        return None
+
+
+def _extract_prices_from_text(text: str) -> list[float]:
+    out: list[float] = []
+    for m in re.findall(r"(\d[\d\s]{1,9})\s?₽", text or ""):
+        s = str(m).replace(" ", "")
+        try:
+            out.append(float(s))
+        except Exception:
+            continue
+    return out
+
+
+def avito_market_scan(query: str, max_pages: int = 1, timeout_sec: int = 20) -> dict[str, Any]:
+    """Best-effort scan of Avito search pages (can fail due to anti-bot)."""
+    q = (query or "").strip()
+    if not q:
+        return {"query": q, "prices": [], "suggested": None, "errors": ["empty query"]}
+
+    errors: list[str] = []
+    prices: list[float] = []
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Mobile Safari/537.36",
+        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+    }
+
+    pages = max(1, min(int(max_pages or 1), 3))
+    for page in range(1, pages + 1):
+        try:
+            url = f"https://www.avito.ru/rossiya?cd=1&p={page}&q={requests.utils.quote(q)}"
+            r = requests.get(url, timeout=timeout_sec, headers=headers)
+            if r.status_code >= 400:
+                errors.append(f"page {page}: status {r.status_code}")
+                continue
+            txt = r.text or ""
+            found = _extract_prices_from_text(txt)
+            prices.extend(found)
+            if not found:
+                errors.append(f"page {page}: no prices parsed")
+        except Exception as exc:
+            errors.append(f"page {page}: {exc}")
+
+    suggested = estimate_market_price(prices)
+    return {
+        "query": q,
+        "pages": pages,
+        "prices": prices,
+        "suggested": suggested,
+        "errors": errors,
+    }

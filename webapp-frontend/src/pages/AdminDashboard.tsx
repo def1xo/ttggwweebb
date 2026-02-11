@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, analyzeStoredSources, bulkUpsertAdminSupplierSources, createAdminSupplierSource, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, importProductsFromSupplierSources, patchAdminSupplierSource, sendAdminSalesExportToTelegram, sendOrderProofToTelegram } from "../services/api";
+import api, { adminLogin, analyzeImages, analyzeStoredSources, avitoMarketScan, bulkUpsertAdminSupplierSources, createAdminSupplierSource, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, importProductsFromSupplierSources, patchAdminSupplierSource, sendAdminSalesExportToTelegram, sendOrderProofToTelegram, telegramMediaPreview } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -966,6 +966,10 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [importUseAi, setImportUseAi] = useState(true);
   const [importMaxItems, setImportMaxItems] = useState(40);
   const [importReport, setImportReport] = useState<any | null>(null);
+  const [avitoQuery, setAvitoQuery] = useState("");
+  const [avitoResult, setAvitoResult] = useState<any | null>(null);
+  const [tgMediaResult, setTgMediaResult] = useState<any[]>([]);
+  const [imageAnalysisResult, setImageAnalysisResult] = useState<any[]>([]);
 
   const resetForm = () => {
     setEditingId(null);
@@ -1141,6 +1145,32 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
             <div style={{ fontWeight: 700 }}>Отчёт импорта</div>
             <div className="small-muted" style={{ marginTop: 4 }}>
               Категорий: +{importReport?.created_categories || 0} • Товаров: +{importReport?.created_products || 0} • Обновлено: {importReport?.updated_products || 0} • Вариантов: +{importReport?.created_variants || 0}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+
+      <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>
+        <div style={{ fontWeight: 800 }}>Avito + TG + анализ изображений</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input className="input" placeholder="Запрос для Avito (например: худи nike black)" value={avitoQuery} onChange={(e) => setAvitoQuery(e.target.value)} />
+          <button className="btn" onClick={runAvitoScan} disabled={!avitoQuery.trim()}>Скан Avito</button>
+        </div>
+        {avitoResult ? (
+          <div className="small-muted">Рекомендованная цена: {avitoResult?.suggested ?? "—"} ₽ • найдено цен: {(avitoResult?.prices || []).length}</div>
+        ) : null}
+        <button className="btn btn-secondary" onClick={runTgMediaPreview}>Подгрузить фото из TGК и проанализировать</button>
+        {tgMediaResult.length > 0 ? <div className="small-muted">TG источников с фото: {tgMediaResult.length}</div> : null}
+        {imageAnalysisResult.length > 0 ? (
+          <div className="card" style={{ padding: 10 }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Анализ принтов/цветов (preview)</div>
+            <div style={{ display: "grid", gap: 4 }}>
+              {imageAnalysisResult.slice(0, 8).map((it: any, idx: number) => (
+                <div key={`${it.image_url}_${idx}`} className="small-muted" style={{ wordBreak: "break-all" }}>
+                  {it.dominant_color || "цвет ?"} • sig: {it.print_signature || "—"} • {it.image_url}
+                </div>
+              ))}
             </div>
           </div>
         ) : null}
