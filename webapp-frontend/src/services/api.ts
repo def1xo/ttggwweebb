@@ -1274,6 +1274,32 @@ export async function deleteAdminSupplierSource(id: number) {
   }
 }
 
+export async function patchAdminSupplierSource(id: number, payload: {
+  source_url?: string;
+  supplier_name?: string;
+  manager_name?: string;
+  manager_contact?: string;
+  note?: string;
+  active?: boolean;
+}) {
+  try {
+    const res = await axiosInstance.patch(`/api/admin/supplier-intelligence/sources/${id}`, payload);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function analyzeStoredSources(sourceIds: number[]) {
+  try {
+    const res = await axiosInstance.post("/api/admin/supplier-intelligence/analyze-sources", { source_ids: sourceIds });
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+
 export async function analyzeSupplierLinks(links: string[]) {
   try {
     const res = await axiosInstance.post("/api/admin/supplier-intelligence/analyze-links", { links });
@@ -1365,7 +1391,9 @@ api.getRecommendations = getRecommendations;
 api.getAdminSupplierSources = getAdminSupplierSources;
 api.createAdminSupplierSource = createAdminSupplierSource;
 api.deleteAdminSupplierSource = deleteAdminSupplierSource;
+api.patchAdminSupplierSource = patchAdminSupplierSource;
 api.analyzeSupplierLinks = analyzeSupplierLinks;
+api.analyzeStoredSources = analyzeStoredSources;
 api.reportClientError = reportClientError;
 
 export default api;

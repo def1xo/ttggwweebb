@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, analyzeSupplierLinks, createAdminSupplierSource, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, sendAdminSalesExportToTelegram, sendOrderProofToTelegram } from "../services/api";
+import api, { adminLogin, analyzeStoredSources, createAdminSupplierSource, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, patchAdminSupplierSource, sendAdminSalesExportToTelegram, sendOrderProofToTelegram } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -948,6 +948,7 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
   const [supplierName, setSupplierName] = useState("");
   const [managerName, setManagerName] = useState("");
@@ -955,6 +956,15 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [note, setNote] = useState("");
 
   const [analysis, setAnalysis] = useState<any[]>([]);
+
+  const resetForm = () => {
+    setEditingId(null);
+    setSourceUrl("");
+    setSupplierName("");
+    setManagerName("");
+    setManagerContact("");
+    setNote("");
+  };
 
   const load = async () => {
     setLoading(true);
@@ -973,32 +983,45 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
     load();
   }, []);
 
-  const addSource = async () => {
+  const saveSource = async () => {
     if (!sourceUrl.trim()) return;
     try {
-      await createAdminSupplierSource({
+      const payload = {
         source_url: sourceUrl.trim(),
         supplier_name: supplierName.trim() || undefined,
         manager_name: managerName.trim() || undefined,
         manager_contact: managerContact.trim() || undefined,
         note: note.trim() || undefined,
-      });
-      setSourceUrl("");
-      setSupplierName("");
-      setManagerName("");
-      setManagerContact("");
-      setNote("");
-      setMsg("Источник добавлен ✅");
+      };
+      if (editingId) {
+        await patchAdminSupplierSource(editingId, payload);
+        setMsg("Источник обновлён ✅");
+      } else {
+        await createAdminSupplierSource(payload);
+        setMsg("Источник добавлен ✅");
+      }
+      resetForm();
       load();
     } catch (e: any) {
-      setMsg(e?.message || "Не удалось добавить источник");
+      setMsg(e?.message || "Не удалось сохранить источник");
     }
+  };
+
+  const startEdit = (it: any) => {
+    setEditingId(Number(it.id));
+    setSourceUrl(String(it.source_url || ""));
+    setSupplierName(String(it.supplier_name || ""));
+    setManagerName(String(it.manager_name || ""));
+    setManagerContact(String(it.manager_contact || ""));
+    setNote(String(it.note || ""));
+    setMsg(`Редактирование #${it.id}`);
   };
 
   const delSource = async (id: number) => {
     if (!confirm(`Удалить источник #${id}?`)) return;
     try {
       await deleteAdminSupplierSource(id);
+      if (editingId === id) resetForm();
       setMsg("Источник удалён");
       load();
     } catch (e: any) {
@@ -1007,13 +1030,13 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   };
 
   const analyzeAll = async () => {
-    const links = items.map((x) => String(x?.source_url || "").trim()).filter(Boolean);
-    if (!links.length) {
+    const ids = items.map((x) => Number(x?.id)).filter((x) => Number.isFinite(x) && x > 0);
+    if (!ids.length) {
       setMsg("Сначала добавьте хотя бы один источник");
       return;
     }
     try {
-      const res: any = await analyzeSupplierLinks(links);
+      const res: any = await analyzeStoredSources(ids);
       setAnalysis(Array.isArray(res) ? res : []);
       setMsg("Анализ источников готов ✅");
     } catch (e: any) {
@@ -1031,13 +1054,16 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
       {msg ? <div className="card" style={{ padding: 12, marginBottom: 12 }}>{msg}</div> : null}
 
       <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>
-        <div style={{ fontWeight: 800 }}>Добавить источник</div>
+        <div style={{ fontWeight: 800 }}>{editingId ? `Редактировать источник #${editingId}` : "Добавить источник"}</div>
         <input className="input" placeholder="Ссылка на таблицу/сайт/канал" value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} />
         <input className="input" placeholder="Название поставщика (опционально)" value={supplierName} onChange={(e) => setSupplierName(e.target.value)} />
         <input className="input" placeholder="Менеджер (как подписать)" value={managerName} onChange={(e) => setManagerName(e.target.value)} />
         <input className="input" placeholder="Контакт менеджера (tg/link/phone)" value={managerContact} onChange={(e) => setManagerContact(e.target.value)} />
         <input className="input" placeholder="Комментарий" value={note} onChange={(e) => setNote(e.target.value)} />
-        <button className="btn btn-primary" onClick={addSource} disabled={!sourceUrl.trim()}>Добавить</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-primary" onClick={saveSource} disabled={!sourceUrl.trim()}>{editingId ? "Сохранить" : "Добавить"}</button>
+          {editingId ? <button className="btn btn-secondary" onClick={resetForm}>Отмена</button> : null}
+        </div>
       </div>
 
       <div className="card" style={{ padding: 12, marginBottom: 12 }}>
@@ -1058,7 +1084,8 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
                 Поставщик: {it.supplier_name || "—"} • Менеджер: {it.manager_name || "—"} • Контакт: {it.manager_contact || "—"}
               </div>
               {it.note ? <div className="small-muted" style={{ marginTop: 4 }}>Комментарий: {it.note}</div> : null}
-              <div style={{ marginTop: 8 }}>
+              <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+                <button className="btn btn-secondary" onClick={() => startEdit(it)}>Редактировать</button>
                 <button className="btn btn-secondary" onClick={() => delSource(Number(it.id))}>Удалить</button>
               </div>
             </div>
@@ -1071,9 +1098,12 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
           <div style={{ fontWeight: 800, marginBottom: 8 }}>Результат быстрой проверки</div>
           <div style={{ display: "grid", gap: 8 }}>
             {analysis.map((a, idx) => (
-              <div key={`${a.url}_${idx}`} className="card" style={{ padding: 10 }}>
+              <div key={`${a.source_id || a.url}_${idx}`} className="card" style={{ padding: 10 }}>
                 <div style={{ fontWeight: 700, wordBreak: "break-all" }}>{a.url}</div>
-                <div className="small-muted">{a.ok ? `OK • ${a.kind || "unknown"} • строк: ${a.rows_count_preview ?? 0}` : `Ошибка: ${a.error || "unknown"}`}</div>
+                <div className="small-muted" style={{ marginTop: 4 }}>
+                  Поставщик: {a.supplier_name || "—"} • Менеджер: {a.manager_name || "—"} • Контакт: {a.manager_contact || "—"}
+                </div>
+                <div className="small-muted" style={{ marginTop: 4 }}>{a.ok ? `OK • ${a.kind || "unknown"} • строк: ${a.rows_count_preview ?? 0}` : `Ошибка: ${a.error || "unknown"}`}</div>
                 {a.ok && Array.isArray(a.mapped_categories_sample) && a.mapped_categories_sample.length > 0 ? (
                   <div className="small-muted" style={{ marginTop: 4 }}>Категории (пример): {a.mapped_categories_sample.join(", ")}</div>
                 ) : null}
@@ -1085,6 +1115,7 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
     </div>
   );
 }
+
 
 export default function AdminDashboard() {
   const [authed, setAuthed] = useState<boolean>(() => Boolean(localStorage.getItem("admin_token")));
