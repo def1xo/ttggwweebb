@@ -408,6 +408,21 @@ export async function clearCart() {
   }
 }
 
+
+export async function getCartRecommendations(limit = 8) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/cart/recommendations`,
+      `${API_BASE_URL}/api/v1/cart/recommendations`,
+      `/api/cart/recommendations`,
+      `/cart/recommendations`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { limit } });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function applyCartPromo(code: string) {
   try {
     const candidates = [
@@ -513,6 +528,21 @@ export async function removeFavorite(productId: number | string) {
 export async function getProducts(params?: Record<string, any>) {
   try {
     return await tryCandidates(CANDIDATES.products, { method: "get", params });
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+
+export async function getRelatedProducts(productId: number | string, limit = 8) {
+  try {
+    const candidates = [
+      `${API_BASE_URL}/api/products/${productId}/related`,
+      `${API_BASE_URL}/api/v1/products/${productId}/related`,
+      `/api/products/${productId}/related`,
+      `/products/${productId}/related`,
+    ];
+    return await tryCandidates(candidates, { method: "get", params: { limit } });
   } catch (e) {
     return handleAxiosError(e);
   }
