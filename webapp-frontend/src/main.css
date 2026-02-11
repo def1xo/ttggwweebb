@@ -1313,3 +1313,47 @@ img, picture { max-width: 100%; height: auto; display: block; }
     height: 44px;
   }
 }
+
+
+.modal-overlay--product {
+  z-index: 140;
+  overscroll-behavior: contain;
+}
+
+.product-modal-scroll {
+  max-height: calc(var(--vh, 1vh) * 100 - 28px);
+  overscroll-behavior: contain;
+}
+
+.product-modal__close {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  padding: 0;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.icon-like-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  color: var(--panel);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  place-items: center;
+}
+
+.icon-like-btn:active {
+  transform: scale(0.97);
+}
+
+@media (max-width: 760px) {
+  .product-modal-scroll {
+    max-height: calc(var(--vh, 1vh) * 100 - 12px);
+    border-radius: 16px;
+  }
+}
