@@ -117,6 +117,7 @@ admin_promos = safe_import("app.api.v1.admin_promos")
 admin_auth = safe_import("app.api.v1.admin_auth")
 admin_dashboard = safe_import("app.api.v1.admin_dashboard")
 admin_managers = safe_import("app.api.v1.admin_managers")
+admin_supplier_intelligence = safe_import("app.api.v1.admin_supplier_intelligence")
 auth = safe_import("app.api.v1.auth")
 
 def include_router_if_present(mod, prefix: str = ""):
@@ -162,6 +163,7 @@ include_router_multi_prefix(admin_promos, ADMIN_PREFIXES)
 include_router_multi_prefix(admin_auth, ADMIN_PREFIXES)
 include_router_multi_prefix(admin_dashboard, ADMIN_PREFIXES)
 include_router_multi_prefix(admin_managers, ADMIN_PREFIXES)
+include_router_multi_prefix(admin_supplier_intelligence, ADMIN_PREFIXES)
 
 # uploads and logs
 try:
