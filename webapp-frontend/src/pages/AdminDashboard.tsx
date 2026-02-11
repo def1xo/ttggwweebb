@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, getAdminStats } from "../services/api";
+import api, { adminLogin, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -21,6 +21,59 @@ type AdminStats = {
   range: RangeKey;
   series: SeriesPoint[];
   month: MonthSummary;
+};
+
+type AnalyticsFunnel = {
+  days: number;
+  counts: {
+    view_product: number;
+    add_to_cart: number;
+    begin_checkout: number;
+    purchase: number;
+  };
+  conversion: {
+    view_to_cart_percent: number;
+    cart_to_checkout_percent: number;
+    checkout_to_purchase_percent: number;
+    view_to_purchase_percent: number;
+  };
+};
+
+
+type AnalyticsTopProduct = {
+  product_id: number;
+  title: string;
+  view_product: number;
+  add_to_cart: number;
+  purchase: number;
+  add_rate_percent: number;
+  purchase_rate_percent: number;
+};
+
+
+type OpsNeedsAttention = {
+  generated_at: string;
+  thresholds: { low_stock_threshold: number; stale_order_hours: number };
+  severity_score: number;
+  counts: {
+    stale_orders: number;
+    stale_orders_without_proof: number;
+    products_missing_data: number;
+    low_stock_variants: number;
+  };
+  items: {
+    stale_orders: Array<{ order_id: number; created_at?: string | null; hours_waiting: number; total_amount: number; fio?: string | null; has_payment_proof: boolean }>;
+    products_missing_data: Array<{ product_id: number; title: string; visible: boolean; reasons: string[] }>;
+    low_stock_variants: Array<{ variant_id: number; product_id: number; title: string; stock_quantity: number; is_out: boolean }>;
+  };
+  queue: Array<{
+    type: "stale_order" | "product_card" | "low_stock" | string;
+    priority: number;
+    title: string;
+    subtitle: string;
+    recommended_action: string;
+    meta?: Record<string, any>;
+  }>;
 };
 
 type ViewKey =
@@ -837,6 +890,15 @@ export default function AdminDashboard() {
   const [loadingStats, setLoadingStats] = useState(false);
   const [statsErr, setStatsErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<SeriesPoint | null>(null);
+  const [funnel, setFunnel] = useState<AnalyticsFunnel | null>(null);
+  const [funnelErr, setFunnelErr] = useState<string | null>(null);
+  const [topProducts, setTopProducts] = useState<AnalyticsTopProduct[]>([]);
+  const [topProductsErr, setTopProductsErr] = useState<string | null>(null);
+  const [opsQueue, setOpsQueue] = useState<OpsNeedsAttention | null>(null);
+  const [opsErr, setOpsErr] = useState<string | null>(null);
+  const [opsLimit, setOpsLimit] = useState(8);
+  const [opsLowStockThreshold, setOpsLowStockThreshold] = useState(2);
+  const [opsStaleHours, setOpsStaleHours] = useState(24);
   const [view, setView] = useState<ViewKey>("dashboard");
 
   const loadStats = async (r: RangeKey) => {
@@ -866,10 +928,66 @@ export default function AdminDashboard() {
     }
   };
 
+  const loadFunnel = async () => {
+    setFunnelErr(null);
+    try {
+      const res: any = await getAdminAnalyticsFunnel(30);
+      if (res?.counts && res?.conversion) {
+        setFunnel(res as AnalyticsFunnel);
+        return;
+      }
+      if (res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
+        return;
+      }
+      setFunnelErr(res?.detail || "Не удалось загрузить воронку");
+    } catch (e: any) {
+      setFunnelErr(e?.message || "Не удалось загрузить воронку");
+    }
+  };
+
+  const loadTopProducts = async () => {
+    setTopProductsErr(null);
+    try {
+      const res: any = await getAdminAnalyticsTopProducts(30, 8);
+      const items = Array.isArray(res?.items) ? res.items : [];
+      setTopProducts(items as AnalyticsTopProduct[]);
+      if (!Array.isArray(res?.items) && res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
+      }
+    } catch (e: any) {
+      setTopProductsErr(e?.message || "Не удалось загрузить топ товаров");
+    }
+  };
+
+  const loadOpsQueue = async () => {
+    setOpsErr(null);
+    try {
+      const res: any = await getAdminOpsNeedsAttention(opsLimit, opsLowStockThreshold, opsStaleHours);
+      if (res?.counts && res?.items) {
+        setOpsQueue(res as OpsNeedsAttention);
+        return;
+      }
+      if (res?.status === 401) {
+        localStorage.removeItem("admin_token");
+        setAuthed(false);
+        return;
+      }
+      setOpsErr(res?.detail || "Не удалось загрузить операционную очередь");
+    } catch (e: any) {
+      setOpsErr(e?.message || "Не удалось загрузить операционную очередь");
+    }
+  };
+
   useEffect(() => {
     if (!authed) return;
     loadStats(range);
-  }, [authed, range]);
+    loadFunnel();
+    loadTopProducts();
+    loadOpsQueue();
+  }, [authed, range, opsLimit, opsLowStockThreshold, opsStaleHours]);
 
   const navButtons = useMemo(
     () =>
@@ -1027,6 +1145,157 @@ export default function AdminDashboard() {
         <div className="card" style={{ padding: 12 }}>
           <div style={{ color: "var(--muted)", fontSize: 12 }}>Маржа (оценка)</div>
           <div style={{ fontSize: 20, fontWeight: 800 }}>{(stats?.month.margin_percent ?? 0).toFixed(1)}%</div>
+        </div>
+      </div>
+
+
+      <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Воронка продаж (30 дней)</div>
+        {funnelErr ? <div style={{ color: "#ff8c8c", marginBottom: 8 }}>{funnelErr}</div> : null}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Просмотры товара</div><div style={{ fontWeight: 800 }}>{funnel?.counts.view_product ?? 0}</div></div>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Добавления в корзину</div><div style={{ fontWeight: 800 }}>{funnel?.counts.add_to_cart ?? 0}</div></div>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Начали оформление</div><div style={{ fontWeight: 800 }}>{funnel?.counts.begin_checkout ?? 0}</div></div>
+          <div><div style={{ color: "var(--muted)", fontSize: 12 }}>Покупки</div><div style={{ fontWeight: 800 }}>{funnel?.counts.purchase ?? 0}</div></div>
+        </div>
+        <div style={{ marginTop: 10, color: "var(--muted)", fontSize: 13 }}>
+          CR view→cart: <b>{(funnel?.conversion.view_to_cart_percent ?? 0).toFixed(2)}%</b> • cart→checkout: <b>{(funnel?.conversion.cart_to_checkout_percent ?? 0).toFixed(2)}%</b> • checkout→purchase: <b>{(funnel?.conversion.checkout_to_purchase_percent ?? 0).toFixed(2)}%</b>
+        </div>
+      </div>
+
+
+      <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Топ товаров по аналитике (30 дней)</div>
+        {topProductsErr ? <div style={{ color: "#ff8c8c", marginBottom: 8 }}>{topProductsErr}</div> : null}
+        {topProducts.length === 0 ? (
+          <div className="small-muted">Пока недостаточно данных.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "6px 4px" }}>Товар</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>Просм.</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>В корз.</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>Покупки</th>
+                  <th style={{ textAlign: "right", padding: "6px 4px" }}>CR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topProducts.map((it) => (
+                  <tr key={it.product_id} style={{ borderTop: "1px solid var(--border)" }}>
+                    <td style={{ padding: "6px 4px" }}>{it.title}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px" }}>{it.view_product}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px" }}>{it.add_to_cart}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px" }}>{it.purchase}</td>
+                    <td style={{ textAlign: "right", padding: "6px 4px", fontWeight: 700 }}>{Number(it.purchase_rate_percent || 0).toFixed(2)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+
+
+      <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ fontWeight: 800 }}>Операционная очередь (что требует внимания)</div>
+          <div className="small-muted">Индекс нагрузки: <b>{opsQueue?.severity_score ?? 0}</b></div>
+        </div>
+        {opsErr ? <div style={{ color: "#ff8c8c", marginTop: 8 }}>{opsErr}</div> : null}
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8, marginTop: 10 }}>
+          <label className="small-muted">Лимит
+            <input className="input" type="number" min={3} max={20} value={opsLimit} onChange={(e) => setOpsLimit(Math.min(20, Math.max(3, Number(e.target.value) || 8)))} />
+          </label>
+          <label className="small-muted">Низкий остаток ≤
+            <input className="input" type="number" min={0} max={20} value={opsLowStockThreshold} onChange={(e) => setOpsLowStockThreshold(Math.min(20, Math.max(0, Number(e.target.value) || 2)))} />
+          </label>
+          <label className="small-muted">Просрочка (часы)
+            <input className="input" type="number" min={1} max={168} value={opsStaleHours} onChange={(e) => setOpsStaleHours(Math.min(168, Math.max(1, Number(e.target.value) || 24)))} />
+          </label>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10, marginTop: 10 }}>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Просроченные оплаты</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.stale_orders ?? 0}</div>
+          </div>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Без чека</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.stale_orders_without_proof ?? 0}</div>
+          </div>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Карточки с проблемами</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.products_missing_data ?? 0}</div>
+          </div>
+          <div className="card" style={{ padding: 10 }}>
+            <div className="small-muted">Низкий остаток</div>
+            <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.low_stock_variants ?? 0}</div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <div style={{ fontWeight: 700 }}>Приоритетные задачи</div>
+            <div className="small-muted">по убыванию приоритета</div>
+          </div>
+          {(opsQueue?.queue || []).slice(0, 8).map((task, idx) => (
+            <div key={`${task.type}_${idx}`} className="card" style={{ padding: 10, marginBottom: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "start" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700 }}>{task.title}</div>
+                  <div className="small-muted" style={{ marginTop: 4 }}>{task.subtitle}</div>
+                  <div style={{ marginTop: 6, fontSize: 13 }}>
+                    👉 {task.recommended_action}
+                  </div>
+                </div>
+                <div className="chip chip-sm" style={{ whiteSpace: "nowrap" }}>prio {task.priority}</div>
+              </div>
+            </div>
+          ))}
+          {(opsQueue?.queue || []).length === 0 ? <div className="small-muted">Очередь пока пустая</div> : null}
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Просроченные заказы</div>
+          {(opsQueue?.items.stale_orders || []).slice(0, 5).map((it) => (
+            <div key={it.order_id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700 }}>Заказ #{it.order_id} • {it.hours_waiting}ч</div>
+                <div className="small-muted">{formatRub(it.total_amount)} {it.fio ? `• ${it.fio}` : ""} {it.has_payment_proof ? "• чек есть" : "• без чека"}</div>
+              </div>
+            </div>
+          ))}
+          {(opsQueue?.items.stale_orders || []).length === 0 ? <div className="small-muted">Нет просроченных заказов</div> : null}
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Топ проблемных карточек</div>
+          {(opsQueue?.items.products_missing_data || []).slice(0, 5).map((it) => (
+            <div key={it.product_id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.title}</div>
+                <div className="small-muted">#{it.product_id} • {it.reasons.join(", ")}</div>
+              </div>
+            </div>
+          ))}
+          {(opsQueue?.items.products_missing_data || []).length === 0 ? <div className="small-muted">Нет критичных карточек 🎉</div> : null}
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Низкие остатки</div>
+          {(opsQueue?.items.low_stock_variants || []).slice(0, 5).map((it) => (
+            <div key={it.variant_id} style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "6px 0", borderTop: "1px solid var(--border)" }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.title}</div>
+                <div className="small-muted">variant #{it.variant_id} • остаток: {it.stock_quantity} {it.is_out ? "• OUT" : ""}</div>
+              </div>
+            </div>
+          ))}
+          {(opsQueue?.items.low_stock_variants || []).length === 0 ? <div className="small-muted">Критичных остатков нет</div> : null}
         </div>
       </div>
 
