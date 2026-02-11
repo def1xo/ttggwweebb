@@ -65,7 +65,7 @@ async def client_error(request: Request):
     try:
         payload = await request.json()
     except Exception:
-        payload = {"raw": await request.body()}
+        payload = {"raw": (await request.body()).decode("utf-8", errors="ignore")}
     try:
         fn = os.environ.get("CLIENT_ERRORS_LOG", "/tmp/client_errors.log")
         _append_jsonl(fn, {"ts": datetime.utcnow().isoformat(), "payload": payload})

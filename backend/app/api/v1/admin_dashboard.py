@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
+import logging
 import os
 from typing import Dict, List, Tuple, Optional
 
@@ -17,6 +18,7 @@ from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
 
 router = APIRouter(tags=["admin_dashboard"])
+logger = logging.getLogger(__name__)
 
 
 # Order statuses that count as "sales".
