@@ -76,6 +76,19 @@ type OpsNeedsAttention = {
   }>;
 };
 
+const DEFAULT_SUPPLIER_SOURCE_LINKS = [
+  "https://docs.google.com/spreadsheets/d/1Pv_iyCw5WCbBHXvhdH5w7pRjxfsjTbCm3SjHPElC_wA/edit?usp=sharing",
+  "https://docs.google.com/spreadsheets/d/1JQ5p32JknAm34W42fiTXzAFKYOhb9QEcMFAwSernwI4/htmlview",
+  "https://docs.google.com/spreadsheets/d/1Xfjpx1Bs9GDUlgKalrzzm3u2M6dpxwuHZQwCqihjw2Q/htmlview",
+  "https://docs.google.com/spreadsheets/d/1wfZJPJMO34WfcbGNxP-IWl5w0V1vEDf6FHakAqoJsBw/htmlview",
+  "https://docs.google.com/spreadsheets/d/1fvLjH86AAD2upGbQ9npo-mtUbFAsl3cmx8wDIczTCeE/htmlview",
+  "https://b2b.moysklad.ru/public/oWXBoG49bkuB/catalog",
+  "https://t.me/firmachdroppp",
+  "https://t.me/optobaza",
+  "https://t.me/venomopt12",
+  "https://t.me/shop_vkus",
+];
+
 type ViewKey =
   | "dashboard"
   | "orders"
@@ -1086,6 +1099,110 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
     }
   };
 
+  const seedDefaultSources = async () => {
+    try {
+      const entries = DEFAULT_SUPPLIER_SOURCE_LINKS.map((url) => ({
+        source_url: url,
+        supplier_name: bulkSupplierName.trim() || undefined,
+        manager_name: bulkManagerName.trim() || undefined,
+        manager_contact: bulkManagerContact.trim() || undefined,
+        note: "seed: стартовый набор источников",
+      }));
+      const res: any = await bulkUpsertAdminSupplierSources(entries);
+      setMsg(`Стартовые источники: +${res?.created || 0} новых, ~${res?.updated || 0} обновлено`);
+      await load();
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось добавить стартовые источники");
+    }
+  };
+
+
+  const runImportProducts = async () => {
+    const sourceIds = items
+      .map((x) => Number(x?.id))
+      .filter((x) => Number.isFinite(x) && x > 0);
+    if (!sourceIds.length) {
+      setMsg("Нет источников для импорта");
+      return;
+    }
+
+    try {
+      setImportReport(null);
+      const payload = {
+        source_ids: sourceIds,
+        max_items_per_source: Math.max(1, Math.min(200, Number(importMaxItems) || 40)),
+        dry_run: Boolean(importDryRun),
+        publish_visible: Boolean(importPublishVisible),
+        ai_style_description: Boolean(importUseAi),
+        use_avito_pricing: Boolean(importUseAvitoPricing),
+        avito_max_pages: Math.max(1, Math.min(3, Number(importAvitoPages) || 1)),
+      };
+      const res: any = await importProductsFromSupplierSources(payload);
+      setImportReport(res || null);
+      setMsg(importDryRun ? "Dry-run импорт завершён ✅" : "Импорт товаров завершён ✅");
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось запустить импорт товаров");
+    }
+  };
+
+  const runAvitoScan = async () => {
+    const query = avitoQuery.trim();
+    if (!query) {
+      setMsg("Введите запрос для Avito");
+      return;
+    }
+    try {
+      const res: any = await avitoMarketScan({
+        query,
+        max_pages: Math.max(1, Math.min(3, Number(importAvitoPages) || 1)),
+      });
+      setAvitoResult(res || null);
+      setMsg("Avito скан завершён ✅");
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось выполнить Avito скан");
+    }
+  };
+
+  const runTgMediaPreview = async () => {
+    const urls = items
+      .map((x) => String(x?.source_url || "").trim())
+      .filter((url) => url && /(?:t\.me\/|telegram\.me\/)/i.test(url));
+    if (!urls.length) {
+      setMsg("Нет Telegram-источников для подгрузки фото");
+      setTgMediaResult([]);
+      setImageAnalysisResult([]);
+      return;
+    }
+
+    try {
+      const mediaRes: any = await telegramMediaPreview(urls);
+      const media = Array.isArray(mediaRes) ? mediaRes : [];
+      setTgMediaResult(media);
+
+      const imageUrls = Array.from(
+        new Set(
+          media
+            .flatMap((x: any) => (Array.isArray(x?.image_urls) ? x.image_urls : []))
+            .map((x: any) => String(x || "").trim())
+            .filter(Boolean),
+        ),
+      ).slice(0, 50);
+
+      if (!imageUrls.length) {
+        setImageAnalysisResult([]);
+        setMsg("Фото в TG-источниках не найдены");
+        return;
+      }
+
+      const analysisRes: any = await analyzeImages(imageUrls);
+      setImageAnalysisResult(Array.isArray(analysisRes) ? analysisRes : []);
+      setMsg("Фото из TGК загружены и проанализированы ✅");
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось получить/проанализировать фото из Telegram");
+    }
+  };
+
+
   return (
     <div className="container" style={{ paddingTop: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
@@ -1121,7 +1238,10 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
         <input className="input" placeholder="Общий менеджер" value={bulkManagerName} onChange={(e) => setBulkManagerName(e.target.value)} />
         <input className="input" placeholder="Общий контакт менеджера" value={bulkManagerContact} onChange={(e) => setBulkManagerContact(e.target.value)} />
         <input className="input" placeholder="Общая заметка" value={bulkNote} onChange={(e) => setBulkNote(e.target.value)} />
-        <button className="btn" onClick={bulkAdd} disabled={!bulkLinks.trim()}>Массово добавить/обновить</button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="btn" onClick={bulkAdd} disabled={!bulkLinks.trim()}>Массово добавить/обновить</button>
+          <button className="btn btn-secondary" onClick={seedDefaultSources}>Добавить стартовый набор (Sheets + TG + MoySklad)</button>
+        </div>
       </div>
 
       <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>
