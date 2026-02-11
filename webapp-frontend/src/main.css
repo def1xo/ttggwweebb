@@ -1006,11 +1006,37 @@ img, picture { max-width: 100%; height: auto; display: block; }
   font-weight: 900;
 }
 
+.section-link-luxe {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--accent) 14%, var(--border));
+  background: color-mix(in srgb, var(--bg) 90%, var(--panel) 10%);
+  color: color-mix(in srgb, var(--panel) 88%, transparent);
+  text-decoration: none;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  font-size: 12px;
+  text-transform: uppercase;
+  transition: transform 120ms ease, border-color 160ms ease, color 160ms ease;
+}
+
+.section-link-luxe:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklab, var(--accent) 20%, var(--border));
+}
+
+.section-link-luxe:active {
+  transform: translateY(0);
+}
+
 .link-pill {
   padding: 8px 12px;
   border-radius: 999px;
-  border: 1px solid color-mix(in oklab, var(--accent) 26%, var(--border));
-  background: linear-gradient(180deg, color-mix(in oklab, var(--accent) 10%, transparent), rgba(255,255,255,0.02));
+  border: 1px solid color-mix(in oklab, var(--accent) 20%, var(--border));
+  background: color-mix(in srgb, var(--bg) 84%, var(--panel) 16%);
   color: var(--panel);
   text-decoration: none;
   font-weight: 800;
@@ -1170,7 +1196,7 @@ img, picture { max-width: 100%; height: auto; display: block; }
 
 /* Reduce motion */
 @media (prefers-reduced-motion: reduce) {
-  .route-view, .list-item-animate, .btn, .icon-btn, .link-pill {
+  .route-view, .list-item-animate, .btn, .icon-btn, .link-pill, .section-link-luxe {
     animation: none !important;
     transition: none !important;
     transform: none !important;
