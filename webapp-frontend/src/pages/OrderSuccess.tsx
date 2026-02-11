@@ -34,6 +34,25 @@ function statusLabel(s: any): string {
   return key;
 }
 
+function pickFirstFinite(source: any, keys: string[]): number {
+  for (const key of keys) {
+    const value = source?.[key];
+    const num = Number(value);
+    if (Number.isFinite(num)) return num;
+  }
+  return 0;
+}
+
+function inferSubtotalFromItems(order: any): number {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  if (!items.length) return 0;
+  return items.reduce((sum: number, item: any) => {
+    const qty = Math.max(1, Number(item?.quantity ?? item?.qty ?? 1) || 1);
+    const price = pickFirstFinite(item, ["price", "unit_price", "final_price", "amount"]);
+    return sum + qty * price;
+  }, 0);
+}
+
 export default function OrderSuccess() {
   const { id } = useParams<{ id: string }>();
   const { notify } = useToast();
@@ -79,28 +98,24 @@ export default function OrderSuccess() {
 
   const paymentUrl = (order as any)?.payment_screenshot ? String((order as any).payment_screenshot) : null;
 
-  const subtotalAmount = Number(
-    (order as any)?.subtotal_amount ??
-    (order as any)?.subtotal ??
-    0
-  );
-  const rawDiscountAmount = Number(
-    (order as any)?.discount_amount ??
-    (order as any)?.discount ??
-    0
-  );
-  const deliveryAmount = Number(
-    (order as any)?.delivery_price ??
-    (order as any)?.delivery ??
-    0
-  );
-  const payableAmount = Number(
-    (order as any)?.total_amount ??
-    (order as any)?.total ??
-    Math.max(0, subtotalAmount - rawDiscountAmount + deliveryAmount)
-  );
+  const subtotalAmount = pickFirstFinite(order, ["subtotal_amount", "subtotal", "items_total", "amount_without_discount", "products_total"])
+    || inferSubtotalFromItems(order);
+  const rawDiscountAmount = pickFirstFinite(order, [
+    "discount_amount",
+    "discount",
+    "promo_discount",
+    "discount_total",
+    "promo_discount_amount",
+  ]);
+  const deliveryAmount = pickFirstFinite(order, ["delivery_price", "delivery", "shipping_amount", "shipping"]);
+  const payableAmount = pickFirstFinite(order, ["total_amount", "total", "amount_to_pay", "payable_amount"]) || Math.max(0, subtotalAmount - rawDiscountAmount + deliveryAmount);
   const inferredDiscount = Math.max(0, subtotalAmount + deliveryAmount - payableAmount);
-  const discountAmount = rawDiscountAmount > 0 ? rawDiscountAmount : inferredDiscount;
+  const promoPercentDiscount = (() => {
+    const p = Number((order as any)?.promo?.discount_percent ?? (order as any)?.discount_percent ?? 0);
+    if (!Number.isFinite(p) || p <= 0 || subtotalAmount <= 0) return 0;
+    return (subtotalAmount * p) / 100;
+  })();
+  const discountAmount = rawDiscountAmount > 0 ? rawDiscountAmount : Math.max(inferredDiscount, promoPercentDiscount);
 
   return (
     <div className="container" style={{ paddingTop: 12, paddingBottom: 150 }}>
