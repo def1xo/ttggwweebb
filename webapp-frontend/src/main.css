@@ -318,7 +318,7 @@ select.input { appearance: none; }
 }
 .bottom-nav a:active { transform: scale(0.96); }
 .bottom-nav a.active { transform: translateY(-1px); color: var(--panel); }
-.bottom-nav a.active { background: color-mix(in srgb, var(--panel) 12%, transparent); }
+.bottom-nav a.active { background: transparent; }
 
 
 .nav-icon {
@@ -328,6 +328,7 @@ select.input { appearance: none; }
 }
 
 .bottom-nav a.active .nav-icon { opacity: 1; }
+.bottom-nav a.active span { font-weight: 800; }
 .bottom-nav a:focus-visible { outline: none; box-shadow: none; }
 
 /* Smooth accordion helper */

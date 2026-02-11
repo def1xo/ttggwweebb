@@ -1,11 +1,9 @@
 import React, { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { useToast } from "../contexts/ToastContext";
 import { useFavorites } from "../contexts/FavoritesContext";
 import { hapticImpact } from "../utils/tg";
 import ColorSwatch from "./ColorSwatch";
 import { HeartSmall } from "./Icons";
-import { addCartItem } from "../services/api";
 
 type Props = {
   product: any;
@@ -30,7 +28,6 @@ function sortSizes(values: string[]) {
 }
 
 export default function ProductCard({ product }: Props) {
-  const { notify } = useToast();
   const { isFavorite, toggle } = useFavorites();
 
   const title = (product?.title || product?.name || "Товар") as string;
@@ -42,7 +39,6 @@ export default function ProductCard({ product }: Props) {
 
   const variantList = (product?.variants || []) as any[];
   const defaultVariant = variantList?.[0] || null;
-  const defaultVariantId = product?.default_variant_id || defaultVariant?.id || product?.id;
 
   const price = Number(product?.price ?? product?.base_price ?? defaultVariant?.price ?? 0);
 
@@ -74,21 +70,6 @@ export default function ProductCard({ product }: Props) {
     return { sizes, colors, sizeLabel, isNew };
   }, [product, variantList]);
 
-  const addToCart = async (e?: React.MouseEvent) => {
-    if (e) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-    const variantId = defaultVariantId;
-    try {
-      await addCartItem(Number(variantId), 1);
-      hapticImpact("light");
-      notify("Добавлено в корзину", "success");
-      try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
-    } catch {
-      notify("Не удалось добавить в корзину", "error");
-    }
-  };
 
   const toggleFav = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -127,11 +108,6 @@ export default function ProductCard({ product }: Props) {
           >
             <HeartSmall filled={isFavorite(Number(product?.id))} />
           </button>
-          <div className="quick-add">
-            <button type="button" onClick={addToCart} aria-label="Добавить в корзину">
-              В корзину
-            </button>
-          </div>
         </div>
 
         <div style={{ padding: "12px 12px 14px" }}>
