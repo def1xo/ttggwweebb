@@ -154,8 +154,9 @@ def create_order(
     st = _get_cart_state(db, user.id)
     referral_code = (st.referral_code if st else None) or None
     promo_code_str = (st.promo_code if st else None) or None
-    if not promo_code_str and payload.promo_code:
-        promo_code_str = str(payload.promo_code).strip() or None
+    payload_code = str(payload.promo_code).strip() if payload.promo_code else None
+    if not promo_code_str and payload_code:
+        promo_code_str = payload_code
 
     subtotal = Decimal("0")
     for ci in cart_items:
@@ -196,6 +197,12 @@ def create_order(
 
 
     # Apply referral promo discount (5%) if no special promo is active
+    if discount == Decimal("0") and not referral_code and payload_code:
+        # fallback for clients where cart state wasn't persisted but code was sent in payload
+        owner = _resolve_referral(db, payload_code)
+        if owner and owner.id != user.id:
+            referral_code = payload_code
+
     if discount == Decimal("0") and referral_code:
         owner = _resolve_referral(db, referral_code)
         if owner and owner.id != user.id:
