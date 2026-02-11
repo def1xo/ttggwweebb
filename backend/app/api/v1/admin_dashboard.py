@@ -503,6 +503,63 @@ def admin_ops_needs_attention(
         + len(low_stock) * 1
     )
 
+    queue = []
+
+    for o in stale_serialized:
+        base_prio = 95 if not o.get("has_payment_proof") else 80
+        priority = base_prio + min(15, int((o.get("hours_waiting") or 0) // 24) * 2)
+        queue.append(
+            {
+                "type": "stale_order",
+                "priority": priority,
+                "title": f"Заказ #{o.get('order_id')} ожидает оплату",
+                "subtitle": f"Ожидает {o.get('hours_waiting', 0)}ч • {'без чека' if not o.get('has_payment_proof') else 'чек загружен'}",
+                "recommended_action": "Связаться с клиентом и обновить статус заказа",
+                "meta": {
+                    "order_id": o.get("order_id"),
+                    "has_payment_proof": bool(o.get("has_payment_proof")),
+                },
+            }
+        )
+
+    for item in missing_cards:
+        reasons = list(item.get("reasons") or [])
+        priority = 75 + min(20, len(reasons) * 5)
+        queue.append(
+            {
+                "type": "product_card",
+                "priority": priority,
+                "title": f"Карточка #{item.get('product_id')} требует доработки",
+                "subtitle": f"Причины: {', '.join(reasons)}",
+                "recommended_action": "Заполнить описание/фото/цену и проверить варианты",
+                "meta": {
+                    "product_id": item.get("product_id"),
+                    "reasons": reasons,
+                },
+            }
+        )
+
+    for item in low_stock:
+        stock = int(item.get("stock_quantity") or 0)
+        priority = 90 if stock <= 0 else 70
+        queue.append(
+            {
+                "type": "low_stock",
+                "priority": priority,
+                "title": f"Низкий остаток: {item.get('title')}",
+                "subtitle": f"Variant #{item.get('variant_id')} • остаток {stock}",
+                "recommended_action": "Пополнить остаток или скрыть недоступный вариант",
+                "meta": {
+                    "variant_id": item.get("variant_id"),
+                    "product_id": item.get("product_id"),
+                    "stock_quantity": stock,
+                },
+            }
+        )
+
+    queue.sort(key=lambda x: int(x.get("priority") or 0), reverse=True)
+    queue = queue[: max(limit * 3, 12)]
+
     return {
         "generated_at": now.isoformat() + "Z",
         "thresholds": {
@@ -521,4 +578,5 @@ def admin_ops_needs_attention(
             "products_missing_data": missing_cards,
             "low_stock_variants": low_stock,
         },
+        "queue": queue,
     }

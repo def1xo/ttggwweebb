@@ -66,6 +66,14 @@ type OpsNeedsAttention = {
     products_missing_data: Array<{ product_id: number; title: string; visible: boolean; reasons: string[] }>;
     low_stock_variants: Array<{ variant_id: number; product_id: number; title: string; stock_quantity: number; is_out: boolean }>;
   };
+  queue: Array<{
+    type: "stale_order" | "product_card" | "low_stock" | string;
+    priority: number;
+    title: string;
+    subtitle: string;
+    recommended_action: string;
+    meta?: Record<string, any>;
+  }>;
 };
 
 type ViewKey =
@@ -1227,6 +1235,28 @@ export default function AdminDashboard() {
             <div className="small-muted">Низкий остаток</div>
             <div style={{ fontWeight: 800, fontSize: 20 }}>{opsQueue?.counts.low_stock_variants ?? 0}</div>
           </div>
+        </div>
+
+        <div style={{ marginTop: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <div style={{ fontWeight: 700 }}>Приоритетные задачи</div>
+            <div className="small-muted">по убыванию приоритета</div>
+          </div>
+          {(opsQueue?.queue || []).slice(0, 8).map((task, idx) => (
+            <div key={`${task.type}_${idx}`} className="card" style={{ padding: 10, marginBottom: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "start" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700 }}>{task.title}</div>
+                  <div className="small-muted" style={{ marginTop: 4 }}>{task.subtitle}</div>
+                  <div style={{ marginTop: 6, fontSize: 13 }}>
+                    👉 {task.recommended_action}
+                  </div>
+                </div>
+                <div className="chip chip-sm" style={{ whiteSpace: "nowrap" }}>prio {task.priority}</div>
+              </div>
+            </div>
+          ))}
+          {(opsQueue?.queue || []).length === 0 ? <div className="small-muted">Очередь пока пустая</div> : null}
         </div>
 
         <div style={{ marginTop: 10 }}>

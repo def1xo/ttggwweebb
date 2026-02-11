@@ -173,9 +173,7 @@ def create_order(
         promo = db.query(models.PromoCode).filter(models.PromoCode.code.ilike(promo_code_str)).one_or_none()
         promo_type = str(getattr(getattr(promo, "type", None), "value", getattr(promo, "type", ""))).lower() if promo else ""
         if promo and promo_type in {"special", "admin"}:
-            # enforce "one promo per life" + pending lock
-            if user.promo_used_code:
-                raise HTTPException(status_code=400, detail="promo already used")
+            # special promo keeps pending lock semantics; one-time restriction is referral-only
             if user.promo_pending_code and str(user.promo_pending_code).lower() != str(promo.code).lower():
                 raise HTTPException(status_code=400, detail="another promo is pending")
 
@@ -210,7 +208,7 @@ def create_order(
 
     if discount == Decimal("0") and referral_code:
         if user.promo_used_code:
-            raise HTTPException(status_code=400, detail="promo already used")
+            raise HTTPException(status_code=400, detail="referral promo already used")
         owner = _resolve_referral(db, referral_code)
         if owner and owner.id != user.id:
             promo_discount_percent = REFERRAL_DISCOUNT_PERCENT

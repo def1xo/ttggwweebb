@@ -1121,9 +1121,9 @@ export async function createProduct(payload: any) {
     if (payload?.visible != null) form.append("visible", payload.visible ? "true" : "false");
     if (payload?.sizes) form.append("sizes", String(payload.sizes));
     if (payload?.color) form.append("color", String(payload.color));
-    if (payload?.image instanceof File) form.append("images", payload.image);
+    if (payload?.image instanceof File) form.append("image", payload.image);
     if (payload?.images && Array.isArray(payload.images)) payload.images.forEach((f: File) => form.append("images", f));
-    const res = await axiosInstance.post("/api/admin/products", form, { headers: { "Content-Type": "multipart/form-data" } });
+    const res = await axiosInstance.post("/api/admin/products", form);
     return res.data;
   } catch (e) {
     return handleAxiosError(e);
@@ -1140,9 +1140,9 @@ export async function updateProduct(id: number, payload: any) {
     if (payload?.visible != null) form.append("visible", payload.visible ? "true" : "false");
     if (payload?.sizes) form.append("sizes", String(payload.sizes));
     if (payload?.color) form.append("color", String(payload.color));
-    if (payload?.image instanceof File) form.append("images", payload.image);
+    if (payload?.image instanceof File) form.append("image", payload.image);
     if (payload?.images && Array.isArray(payload.images)) payload.images.forEach((f: File) => form.append("images", f));
-    const res = await axiosInstance.patch(`/api/admin/products/${id}`, form, { headers: { "Content-Type": "multipart/form-data" } });
+    const res = await axiosInstance.patch(`/api/admin/products/${id}`, form);
     return res.data;
   } catch (e) {
     return handleAxiosError(e);
