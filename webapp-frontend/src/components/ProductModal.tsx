@@ -70,6 +70,7 @@ export default function ProductModal({
 
   const [title, setTitle] = useState("");
   const [basePrice, setBasePrice] = useState<string>("");
+  const [stockQuantity, setStockQuantity] = useState<string>("0");
   const [description, setDescription] = useState("");
   const [categoryId, setCategoryId] = useState<string>("");
   const [visible, setVisible] = useState(true);
@@ -140,6 +141,7 @@ export default function ProductModal({
         description: description.trim() || undefined,
         category_id: categoryId ? Number(categoryId) : undefined,
         visible: !!visible,
+        stock_quantity: Math.max(0, Number(stockQuantity || 0)),
       };
       if (parsedSizes.length) payload.sizes = parsedSizes.join(",");
       if (parsedColors.length) payload.color = parsedColors.join(", ");
@@ -223,6 +225,11 @@ export default function ProductModal({
                 </div>
               ) : null}
             </div>
+          </div>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            <label className="small-muted">Остаток (на все варианты)</label>
+            <input className="input" type="number" min={0} step={1} value={stockQuantity} onChange={(e) => setStockQuantity(e.target.value)} placeholder="0" />
           </div>
 
           <div style={{ display: "grid", gap: 10 }}>

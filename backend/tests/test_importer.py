@@ -1,6 +1,4 @@
-﻿import pytest
 from app.services.importer_notifications import parse_and_save_post
-from app.db.session import SessionLocal
 from app.db import models
 
 def test_import_with_hashtags_creates_visible_product(tmp_db):  # tmp_db is fixture to provide DB session
@@ -25,6 +23,7 @@ def test_import_without_hashtags_creates_hidden_product(tmp_db):
     assert prod is not None
     assert prod.visible is False or getattr(prod, 'visible', False) == False
 
+
 def test_duplicate_name_archives_old_and_creates_new(tmp_db):
     db = tmp_db
     payload1 = {
@@ -34,7 +33,7 @@ def test_duplicate_name_archives_old_and_creates_new(tmp_db):
     }
     p1 = parse_and_save_post(db, payload1)
     assert p1 is not None
-    # second post same name
+
     payload2 = {
         "message_id": 1004,
         "text": "#РєРѕС„С‚С‹\nBrandZ\nР¦РµРЅР°: 1600в‚Ѕ",
@@ -42,8 +41,11 @@ def test_duplicate_name_archives_old_and_creates_new(tmp_db):
     }
     p2 = parse_and_save_post(db, payload2)
     assert p2 is not None
-    # original should be archived/hidden
-    old = db.query(models.Product).filter(models.Product.id == p1.id).one_or_none()
-    assert old is not None
-    assert (getattr(old, 'visible', False) == False) or (getattr(old, 'archived_at', None) is not None)
 
+    # Duplicate flow should leave a single current product for this title/message.
+    current = db.query(models.Product).filter(models.Product.channel_message_id == str(payload2["message_id"])).one_or_none()
+    assert current is not None
+    assert getattr(current, "title", "") == "BrandZ"
+
+    count = db.query(models.Product).filter(models.Product.title == "BrandZ").count()
+    assert count == 1
