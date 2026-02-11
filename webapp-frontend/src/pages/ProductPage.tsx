@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import api from "../services/api";
-import { addCartItem } from "../services/api";
+import { Link, useParams, useNavigate } from "react-router-dom";
+import api, { addCartItem, getRelatedProducts } from "../services/api";
 import ColorSwatch from "../components/ColorSwatch";
 import { useToast } from "../contexts/ToastContext";
 import { useFavorites } from "../contexts/FavoritesContext";
@@ -25,6 +24,16 @@ function sortSizes(values: string[]) {
   });
 }
 
+function pickImage(p: any): string | null {
+  const imgs = (p?.images || p?.image_urls || p?.imageUrls || []) as any[];
+  return (
+    (Array.isArray(imgs) && imgs.length ? (imgs[0]?.url || imgs[0]) : null) ||
+    p?.default_image ||
+    p?.image ||
+    null
+  );
+}
+
 export default function ProductPage() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -35,6 +44,7 @@ export default function ProductPage() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
+  const [related, setRelated] = useState<any[]>([]);
 
   const touchX = useRef<number | null>(null);
 
@@ -44,18 +54,34 @@ export default function ProductPage() {
         const res = await api.get(`/api/products/${id}`);
         const p = (res as any).data ?? res;
         setProduct(p);
-      } catch (e) {
+      } catch {
         setProduct(null);
       }
     })();
   }, [id]);
+
+  useEffect(() => {
+    (async () => {
+      if (!product?.id) {
+        setRelated([]);
+        return;
+      }
+      try {
+        const res: any = await getRelatedProducts(Number(product.id), 8);
+        const data = (res as any)?.data ?? res;
+        const list = Array.isArray(data) ? data : (Array.isArray(data?.items) ? data.items : []);
+        setRelated(list.slice(0, 8));
+      } catch {
+        setRelated([]);
+      }
+    })();
+  }, [product?.id, product?.category_id]);
 
   const images: string[] = useMemo(() => {
     if (!product) return [];
     const imgs = (product.images || product.image_urls || []) as any[];
     const list = imgs.map((x) => String(x?.url || x)).filter(Boolean);
     if (product.default_image) list.unshift(String(product.default_image));
-    // uniq preserving order
     const seen = new Set<string>();
     return list.filter((u) => {
       if (seen.has(u)) return false;
@@ -135,6 +161,20 @@ export default function ProductPage() {
         // ignore
       }
     })();
+  };
+
+  const addRelatedToCart = async (item: any) => {
+    const variants = Array.isArray(item?.variants) ? item.variants : [];
+    const variantId = Number(item?.default_variant_id || variants?.[0]?.id || item?.id || 0);
+    if (!Number.isFinite(variantId) || variantId <= 0) return;
+    try {
+      await addCartItem(variantId, 1);
+      notify("Товар добавлен в корзину", "success");
+      try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
+      hapticImpact("light");
+    } catch {
+      notify("Не удалось добавить товар", "error");
+    }
   };
 
   if (!product) {
@@ -260,6 +300,36 @@ export default function ProductPage() {
           </button>
         </div>
       </div>
+
+      {related.length > 0 ? (
+        <div className="card" style={{ marginTop: 12, padding: 14 }}>
+          <div className="panel-title" style={{ marginBottom: 10 }}>С этим берут</div>
+          <div className="related-row">
+            {related.map((p) => {
+              const pid = Number(p?.id);
+              const pTitle = String(p?.title || p?.name || "Товар");
+              const pPrice = Number(p?.price ?? p?.base_price ?? 0);
+              const img = pickImage(p);
+              return (
+                <div key={pid} className="related-item">
+                  <Link to={`/product/${pid}`} style={{ textDecoration: "none", color: "inherit" }}>
+                    <div className="related-thumb">{img ? <img src={img} alt={pTitle} /> : null}</div>
+                    <div className="related-title">{pTitle}</div>
+                  </Link>
+                  <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <div className="small-muted" style={{ fontWeight: 700 }}>
+                      {Number.isFinite(pPrice) && pPrice > 0 ? `${pPrice.toLocaleString("ru-RU")} ₽` : "—"}
+                    </div>
+                    <button className="btn btn-sm" type="button" onClick={() => addRelatedToCart(p)}>
+                      + В корзину
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
