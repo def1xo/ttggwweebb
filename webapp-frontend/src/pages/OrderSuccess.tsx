@@ -84,7 +84,7 @@ export default function OrderSuccess() {
     (order as any)?.subtotal ??
     0
   );
-  const discountAmount = Number(
+  const rawDiscountAmount = Number(
     (order as any)?.discount_amount ??
     (order as any)?.discount ??
     0
@@ -97,8 +97,10 @@ export default function OrderSuccess() {
   const payableAmount = Number(
     (order as any)?.total_amount ??
     (order as any)?.total ??
-    Math.max(0, subtotalAmount - discountAmount + deliveryAmount)
+    Math.max(0, subtotalAmount - rawDiscountAmount + deliveryAmount)
   );
+  const inferredDiscount = Math.max(0, subtotalAmount + deliveryAmount - payableAmount);
+  const discountAmount = rawDiscountAmount > 0 ? rawDiscountAmount : inferredDiscount;
 
   return (
     <div className="container" style={{ paddingTop: 12, paddingBottom: 150 }}>

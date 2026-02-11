@@ -195,6 +195,11 @@ def create_order(
             # if promo is invalid for discount, ignore
             promo_code_str = None
 
+    # If code is not a special promo, treat it as potential referral code fallback.
+    if promo_code_str and not referral_code:
+        owner = _resolve_referral(db, promo_code_str)
+        if owner and owner.id != user.id:
+            referral_code = promo_code_str
 
     # Apply referral promo discount (5%) if no special promo is active
     if discount == Decimal("0") and not referral_code and payload_code:

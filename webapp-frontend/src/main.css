@@ -86,7 +86,7 @@ body {
   --glass: rgba(255,255,255,0.03);
   --shadow-strong: 0 20px 60px rgba(0,0,0,0.7);
   --shadow-soft: 0 8px 30px rgba(0,0,0,0.5);
-  --nav-bottom-offset: calc(12px + env(safe-area-inset-bottom));
+  --nav-bottom-offset: calc(20px + env(safe-area-inset-bottom));
   --header-h: 84px;
   --surface: rgba(255,255,255,0.02);
   --surface-2: rgba(255,255,255,0.04);
@@ -292,7 +292,7 @@ select.input { appearance: none; }
 .bottom-nav-inner {
   pointer-events: auto;
   position: relative;
-  background: rgba(10, 10, 10, 0.96);
+  background: #0b0b0b;
   border-radius: 14px;
   padding: 8px 14px;
   display: flex;
@@ -1327,7 +1327,7 @@ img, picture { max-width: 100%; height: auto; display: block; }
 .icon-like-btn {
   width: 44px;
   height: 44px;
-  border-radius: 14px;
+  border-radius: 999px;
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   color: var(--panel);
