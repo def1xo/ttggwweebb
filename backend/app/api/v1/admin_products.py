@@ -200,7 +200,6 @@ def create_product(
         color = payload.get("color")
         if "stock_quantity" in payload:
             stock_quantity = payload.get("stock_quantity")
-        stock_quantity = payload.get("stock_quantity")
 
     if not title or not str(title).strip():
         raise HTTPException(400, detail="title required")
@@ -325,7 +324,6 @@ def update_product(
         color = payload.get("color")
         if "stock_quantity" in payload:
             stock_quantity = payload.get("stock_quantity")
-        stock_quantity = payload.get("stock_quantity")
 
     if title is not None:
         p.title = str(title).strip()[:512]
@@ -348,6 +346,7 @@ def update_product(
             raise HTTPException(400, detail="invalid stock_quantity")
         if sq < 0:
             sq = 0
+        stock_value = sq
         for v in (p.variants or []):
             v.stock_quantity = sq
             db.add(v)
