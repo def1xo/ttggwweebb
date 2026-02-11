@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
+import os
 from typing import Dict, List, Tuple, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+import requests
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, text
 from sqlalchemy.exc import DataError
@@ -27,6 +29,19 @@ CONFIRMED_STATUSES: Tuple[str, ...] = (
     models.OrderStatus.received.value,
 )
 
+
+
+def _send_admin_telegram_message(text: str) -> bool:
+    bot_token = os.getenv("BOT_TOKEN")
+    chat_id = os.getenv("ADMIN_CHAT_ID")
+    if not bot_token or not chat_id:
+        return False
+    try:
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        resp = requests.post(url, data={"chat_id": str(chat_id), "text": text}, timeout=8)
+        return resp.ok
+    except Exception:
+        return False
 
 def _db_enum_values(db: Session, enum_name: str) -> Optional[set]:
     """Return PostgreSQL enum labels for a given enum type name.
@@ -234,15 +249,24 @@ def admin_stats(
     profit = revenue - cost_total
     margin_percent = float((profit / revenue * Decimal("100")) if revenue > 0 else 0)
 
+    revenue_f = float(revenue)
+    cost_f = float(cost_total)
+    profit_f = float(profit)
+
+
     return {
         "range": (range or "month"),
         "series": series,
         "month": {
             "month_start": m_start.isoformat() + "Z",
             "orders_count": len(orders),
-            "revenue": float(revenue),
-            "cost": float(cost_total),
-            "profit": float(profit),
+            # keep both legacy and current keys for frontend compatibility
+            "revenue": revenue_f,
+            "cost": cost_f,
+            "profit": profit_f,
+            "revenue_gross": revenue_f,
+            "cogs_estimated": cost_f,
+            "profit_estimated": profit_f,
             "margin_percent": margin_percent,
         },
     }
@@ -393,3 +417,237 @@ def export_sales_xlsx(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers=headers,
     )
+
+
+@router.post("/export/sales-to-telegram")
+def export_sales_to_telegram(
+    scope: str = Query("month", description="month|week|all"),
+    base_url: str | None = Query(None),
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(get_current_admin_user),
+):
+    scope_norm = (scope or "month").strip().lower()
+    if scope_norm not in {"month", "week", "all", "alltime", "all_time"}:
+        raise HTTPException(status_code=400, detail="invalid scope; use month|week|all")
+    scope_out = "all" if scope_norm in {"alltime", "all_time"} else scope_norm
+
+    origin = (base_url or os.getenv("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    path = f"/api/admin/export/sales.xlsx?scope={scope_out}"
+    link = f"{origin}{path}" if origin else path
+
+    ok = _send_admin_telegram_message(
+        f"📊 Экспорт продаж готов\nScope: {scope_out}\nСсылка: {link}"
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to send telegram message")
+    return {"ok": True, "link": link, "scope": scope_out}
+
+
+@router.post("/orders/{order_id}/send-proof-to-telegram")
+def send_order_proof_to_telegram(
+    order_id: int,
+    base_url: str | None = Query(None),
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(get_current_admin_user),
+):
+    order = db.query(models.Order).filter(models.Order.id == order_id).one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="order not found")
+    proof = (order.payment_screenshot or "").strip()
+    if not proof:
+        raise HTTPException(status_code=400, detail="order has no payment proof")
+
+    if proof.startswith("/") and base_url:
+        proof_link = f"{base_url.rstrip('/')}{proof}"
+    elif proof.startswith("/") and os.getenv("PUBLIC_BASE_URL"):
+        proof_link = f"{os.getenv('PUBLIC_BASE_URL').rstrip('/')}{proof}"
+    else:
+        proof_link = proof
+
+    ok = _send_admin_telegram_message(
+        f"🧾 Чек по заказу #{order.id}\nСумма: {float(order.total_amount or 0):.0f} ₽\nСсылка: {proof_link}"
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="failed to send telegram message")
+    return {"ok": True, "order_id": order.id, "proof": proof_link}
+
+
+@router.get("/ops/needs-attention")
+def admin_ops_needs_attention(
+    low_stock_threshold: int = Query(2, ge=0, le=50),
+    include_low_stock: bool = Query(False),
+    stale_order_hours: int = Query(24, ge=1, le=168),
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(get_current_admin_user),
+):
+    """Operational queue for admins: stale orders + problematic products/stock."""
+    now = _utcnow()
+    stale_cutoff = now - timedelta(hours=stale_order_hours)
+
+    stale_orders = (
+        db.query(models.Order)
+        .filter(models.Order.status == models.OrderStatus.awaiting_payment.value)
+        .filter(models.Order.created_at <= stale_cutoff)
+        .order_by(models.Order.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+
+    products = (
+        db.query(models.Product)
+        .options(selectinload(models.Product.variants))
+        .order_by(models.Product.updated_at.desc().nullslast(), models.Product.created_at.desc())
+        .limit(800)
+        .all()
+    )
+
+    missing_cards = []
+    low_stock = []
+
+    for p in products:
+        variants = list(p.variants or [])
+        has_variants = len(variants) > 0
+        base_price = float(p.base_price or 0)
+        has_description = bool((p.description or "").strip())
+        has_image = bool((p.default_image or "").strip())
+
+        reasons = []
+        if not has_description:
+            reasons.append("no_description")
+        if not has_image:
+            reasons.append("no_image")
+        if base_price <= 0:
+            reasons.append("price_zero")
+        if not has_variants:
+            reasons.append("no_variants")
+
+        if reasons:
+            missing_cards.append(
+                {
+                    "product_id": p.id,
+                    "title": p.title,
+                    "visible": bool(p.visible),
+                    "reasons": reasons,
+                    "updated_at": p.updated_at.isoformat() + "Z" if getattr(p, "updated_at", None) else None,
+                }
+            )
+
+        if include_low_stock:
+            for v in variants:
+                stock = int(v.stock_quantity or 0)
+                if stock <= low_stock_threshold:
+                    low_stock.append(
+                        {
+                            "variant_id": v.id,
+                            "product_id": p.id,
+                            "title": p.title,
+                            "stock_quantity": stock,
+                            "is_out": stock <= 0,
+                        }
+                    )
+
+    missing_cards = missing_cards[:limit]
+    low_stock.sort(key=lambda x: (x["stock_quantity"], x["product_id"]))
+    low_stock = low_stock[:limit]
+
+    stale_without_proof = 0
+
+    stale_serialized = [
+        {
+            "order_id": o.id,
+            "created_at": o.created_at.isoformat() + "Z" if getattr(o, "created_at", None) else None,
+            "hours_waiting": round(max(0.0, (now - o.created_at).total_seconds()) / 3600, 1) if getattr(o, "created_at", None) else 0,
+            "total_amount": float(o.total_amount or 0),
+            "fio": o.fio,
+            "phone": o.phone,
+            "has_payment_proof": bool(o.payment_screenshot),
+        }
+        for o in stale_orders
+    ]
+
+    stale_without_proof = sum(1 for o in stale_serialized if not bool(o.get("has_payment_proof")))
+    severity_score = (
+        len(stale_serialized) * 3
+        + len(missing_cards) * 2
+        + len(low_stock) * 1
+    )
+
+    queue = []
+
+    for o in stale_serialized:
+        base_prio = 95 if not o.get("has_payment_proof") else 80
+        priority = base_prio + min(15, int((o.get("hours_waiting") or 0) // 24) * 2)
+        queue.append(
+            {
+                "type": "stale_order",
+                "priority": priority,
+                "title": f"Заказ #{o.get('order_id')} ожидает оплату",
+                "subtitle": f"Ожидает {o.get('hours_waiting', 0)}ч • {'без чека' if not o.get('has_payment_proof') else 'чек загружен'}",
+                "recommended_action": "Связаться с клиентом и обновить статус заказа",
+                "meta": {
+                    "order_id": o.get("order_id"),
+                    "has_payment_proof": bool(o.get("has_payment_proof")),
+                },
+            }
+        )
+
+    for item in missing_cards:
+        reasons = list(item.get("reasons") or [])
+        priority = 75 + min(20, len(reasons) * 5)
+        queue.append(
+            {
+                "type": "product_card",
+                "priority": priority,
+                "title": f"Карточка #{item.get('product_id')} требует доработки",
+                "subtitle": f"Причины: {', '.join(reasons)}",
+                "recommended_action": "Заполнить описание/фото/цену и проверить варианты",
+                "meta": {
+                    "product_id": item.get("product_id"),
+                    "reasons": reasons,
+                },
+            }
+        )
+
+    for item in low_stock:
+        stock = int(item.get("stock_quantity") or 0)
+        priority = 90 if stock <= 0 else 70
+        queue.append(
+            {
+                "type": "low_stock",
+                "priority": priority,
+                "title": f"Низкий остаток: {item.get('title')}",
+                "subtitle": f"Variant #{item.get('variant_id')} • остаток {stock}",
+                "recommended_action": "Пополнить остаток или скрыть недоступный вариант",
+                "meta": {
+                    "variant_id": item.get("variant_id"),
+                    "product_id": item.get("product_id"),
+                    "stock_quantity": stock,
+                },
+            }
+        )
+
+    queue.sort(key=lambda x: int(x.get("priority") or 0), reverse=True)
+    queue = queue[: max(limit * 3, 12)]
+
+    return {
+        "generated_at": now.isoformat() + "Z",
+        "thresholds": {
+            "low_stock_threshold": low_stock_threshold,
+            "include_low_stock": include_low_stock,
+            "stale_order_hours": stale_order_hours,
+        },
+        "counts": {
+            "stale_orders": len(stale_serialized),
+            "stale_orders_without_proof": stale_without_proof,
+            "products_missing_data": len(missing_cards),
+            "low_stock_variants": len(low_stock),
+        },
+        "severity_score": severity_score,
+        "items": {
+            "stale_orders": stale_serialized,
+            "products_missing_data": missing_cards,
+            "low_stock_variants": low_stock,
+        },
+        "queue": queue,
+    }

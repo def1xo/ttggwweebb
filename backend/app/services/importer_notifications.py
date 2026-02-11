@@ -33,6 +33,7 @@ COST_KEYWORDS_RE = re.compile(r'(?:закуп|себест|себестоимо�
 SIZE_RE = re.compile(r'размер(?:ы)?[:\s]*([0-9A-Za-zА-Яа-яЁё,;/\-\s]+)', flags=re.IGNORECASE)
 COLOR_RE = re.compile(r'цвет(?:а|ов)?[:\s]*([A-Za-zА-Яа-яЁё0-9,#\s\-]+)', flags=re.IGNORECASE)
 HASHTAG_RE = re.compile(r'#([\w\-А-Яа-яёЁ]+)', flags=re.UNICODE)
+STOCK_RE = re.compile(r'(?:остаток|в\s*наличии|наличие|stock|склад|qty|кол-?во|количество)[:\s\-]*([0-9]{1,5})', flags=re.IGNORECASE)
 
 
 def _send_telegram_message(chat_id: str, text: str) -> Optional[Dict[str, Any]]:
@@ -176,6 +177,28 @@ def _extract_hashtags(text: Optional[str]) -> List[str]:
     return HASHTAG_RE.findall(text)
 
 
+
+def _extract_stock_quantity(text: Optional[str], payload: Optional[Dict[str, Any]] = None) -> Optional[int]:
+    # explicit payload field has priority
+    if isinstance(payload, dict):
+        for key in ("stock_quantity", "stock", "qty", "quantity"):
+            if key in payload:
+                try:
+                    v = int(payload.get(key))
+                    return max(0, v)
+                except Exception:
+                    pass
+
+    if not text:
+        return None
+    m = STOCK_RE.search(text)
+    if m:
+        try:
+            return max(0, int(m.group(1)))
+        except Exception:
+            return None
+    return None
+
 def _normalize_image_urls(payload: Dict[str, Any]) -> List[str]:
     urls: List[str] = []
     if isinstance(payload.get("image_urls"), list):
@@ -274,6 +297,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
     sizes = _extract_sizes(text)
     colors = _extract_colors(text)
     hashtags = _extract_hashtags(text)
+    stock_quantity = _extract_stock_quantity(text, payload)
     visible = False if (is_draft or len(hashtags) == 0) else True
     category = None
     if hashtags:
@@ -287,7 +311,10 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
         if channel_message_id:
             existing = db.query(models.Product).filter(getattr(models.Product, "channel_message_id") == channel_message_id).one_or_none()
         if existing:
-            existing.name = title
+            if hasattr(existing, "title"):
+                existing.title = title
+            elif hasattr(existing, "name"):
+                existing.name = title
             if hasattr(existing, "description"):
                 existing.description = text[:4000]
             if hasattr(existing, "base_price"):
@@ -337,13 +364,22 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                                 db.add(pc)
                             except Exception:
                                 logger.exception("Could not create ProductCost")
+            if stock_quantity is not None:
+                for v in getattr(existing, "variants", []):
+                    try:
+                        v.stock_quantity = max(0, int(stock_quantity))
+                        db.add(v)
+                    except Exception:
+                        logger.exception("Could not set variant.stock_quantity")
             db.flush()
             db.commit()
             db.refresh(existing)
             return existing
-        duplicate = db.query(models.Product).filter(getattr(models.Product, "name") == title).one_or_none()
+        title_field = getattr(models.Product, "title", None) or getattr(models.Product, "name", None)
+        duplicate = db.query(models.Product).filter(title_field == title).one_or_none() if title_field is not None else None
         if duplicate:
-            logger.info("Deleting duplicate product id=%s name=%s", duplicate.id, duplicate.name)
+            duplicate_title = getattr(duplicate, "title", None) or getattr(duplicate, "name", None)
+            logger.info("Deleting duplicate product id=%s title=%s", duplicate.id, duplicate_title)
             try:
                 db.delete(duplicate)
                 db.flush()
@@ -359,7 +395,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
             idx += 1
         now = datetime.utcnow()
         prod_kwargs: Dict[str, Any] = {
-            "name": title,
+            "title": title,
             "slug": slug,
             "channel_message_id": channel_message_id,
             "visible": visible,
@@ -404,7 +440,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                     v_kwargs = {
                         "product_id": prod.id,
                         "price": sale_price,
-                        "stock_quantity": 0,
+                        "stock_quantity": (stock_quantity if stock_quantity is not None else 0),
                         "created_at": now,
                         "updated_at": now,
                         "size_id": getattr(size_obj, "id", None),
@@ -420,7 +456,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                 v_kwargs = {
                     "product_id": prod.id,
                     "price": sale_price,
-                    "stock_quantity": 0,
+                    "stock_quantity": (stock_quantity if stock_quantity is not None else 0),
                     "created_at": now,
                     "updated_at": now,
                     "size_id": getattr(size_obj, "id", None),
@@ -435,7 +471,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                 v_kwargs = {
                     "product_id": prod.id,
                     "price": sale_price,
-                    "stock_quantity": 0,
+                    "stock_quantity": (stock_quantity if stock_quantity is not None else 0),
                     "created_at": now,
                     "updated_at": now,
                     "color_id": getattr(color_obj, "id", None),
@@ -448,7 +484,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
             v_kwargs = {
                 "product_id": prod.id,
                 "price": sale_price,
-                "stock_quantity": 0,
+                "stock_quantity": (stock_quantity if stock_quantity is not None else 0),
                 "created_at": now,
                 "updated_at": now,
             }
