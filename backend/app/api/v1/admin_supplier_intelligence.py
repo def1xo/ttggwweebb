@@ -36,6 +36,16 @@ ERROR_CODE_INVALID_IMAGE = "invalid_image"
 ERROR_CODE_PARSE_FAILED = "parse_failed"
 ERROR_CODE_DB_CONFLICT = "db_conflict"
 ERROR_CODE_UNKNOWN = "unknown"
+TOP_FAILING_SOURCES_LIMIT = 5
+ERROR_SAMPLES_LIMIT = 3
+ERROR_MESSAGE_MAX_LEN = 500
+
+
+def _normalize_error_message(exc: Exception) -> str:
+    message = " ".join(str(exc).strip().split())
+    if len(message) > ERROR_MESSAGE_MAX_LEN:
+        return f"{message[:ERROR_MESSAGE_MAX_LEN - 3]}..."
+    return message
 
 
 def _classify_import_error(exc: Exception) -> str:
@@ -376,6 +386,7 @@ class ImportSourceReport(BaseModel):
     imported: int = 0
     errors: int = 0
     error_codes: dict[str, int] = Field(default_factory=dict)
+    error_samples: list[str] = Field(default_factory=list)
     last_error_message: str | None = None
 
 
@@ -393,28 +404,12 @@ def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
 
 def _register_source_error(report: ImportSourceReport, exc: Exception) -> None:
     code = _classify_import_error(exc)
+    message = _normalize_error_message(exc)
     report.errors += 1
-    report.last_error_message = str(exc)
+    report.last_error_message = message
     report.error_codes[code] = int(report.error_codes.get(code) or 0) + 1
-
-
-def _new_source_report(source_id: int, source_url: str) -> dict[str, object]:
-    return {
-        "source_id": source_id,
-        "url": source_url,
-        "imported": 0,
-        "errors": 0,
-        "error_codes": {},
-    }
-
-
-def _register_source_error(report: dict[str, object], exc: Exception) -> None:
-    code = _classify_import_error(exc)
-    report["errors"] = int(report.get("errors") or 0) + 1
-    report.setdefault("last_error_message", str(exc))
-    error_codes = dict(report.get("error_codes") or {})
-    error_codes[code] = int(error_codes.get(code) or 0) + 1
-    report["error_codes"] = error_codes
+    if message and message not in report.error_samples and len(report.error_samples) < ERROR_SAMPLES_LIMIT:
+        report.error_samples.append(message)
 
 
 
@@ -780,7 +775,11 @@ def import_products_from_sources(
 
         source_reports.append(report)
 
-    top_failing_sources = sorted((x for x in source_reports if x.errors > 0), key=lambda x: x.errors, reverse=True)[:5]
+    top_failing_sources = sorted(
+        (x for x in source_reports if x.errors > 0),
+        key=lambda x: x.errors,
+        reverse=True,
+    )[:TOP_FAILING_SOURCES_LIMIT]
     if top_failing_sources:
         logger.warning(
             "supplier import top failures: %s",

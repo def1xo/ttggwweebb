@@ -131,3 +131,26 @@ def test_register_source_error_tracks_error_codes():
     assert report.error_codes[asi.ERROR_CODE_NETWORK_TIMEOUT] == 2
     assert report.error_codes[asi.ERROR_CODE_PARSE_FAILED] == 1
     assert report.last_error_message == "parse failed"
+
+
+def test_register_source_error_limits_unique_error_samples_and_truncates_message():
+    report = asi._new_source_report(source_id=8, source_url="https://example.com/feed-2")
+
+    asi._register_source_error(report, RuntimeError("first timeout"))
+    asi._register_source_error(report, RuntimeError("second timeout"))
+    asi._register_source_error(report, RuntimeError("third timeout"))
+    asi._register_source_error(report, RuntimeError("fourth timeout"))
+
+    assert len(report.error_samples) == asi.ERROR_SAMPLES_LIMIT
+    assert report.error_samples == ["first timeout", "second timeout", "third timeout"]
+
+    huge = "x" * (asi.ERROR_MESSAGE_MAX_LEN + 50)
+    asi._register_source_error(report, RuntimeError(huge))
+    assert report.last_error_message is not None
+    assert len(report.last_error_message) == asi.ERROR_MESSAGE_MAX_LEN
+    assert report.last_error_message.endswith("...")
+
+
+def test_normalize_error_message_compacts_whitespace():
+    normalized = asi._normalize_error_message(RuntimeError("  too   many\n  spaces\tinside "))
+    assert normalized == "too many spaces inside"
