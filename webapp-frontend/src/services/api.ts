@@ -1307,6 +1307,23 @@ export async function patchAdminSupplierSource(id: number, payload: {
   }
 }
 
+
+
+export async function importProductsFromSupplierSources(payload: {
+  source_ids: number[];
+  max_items_per_source?: number;
+  dry_run?: boolean;
+  publish_visible?: boolean;
+  ai_style_description?: boolean;
+}) {
+  try {
+    const res = await axiosInstance.post("/api/admin/supplier-intelligence/import-products", payload);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function analyzeStoredSources(sourceIds: number[]) {
   try {
     const res = await axiosInstance.post("/api/admin/supplier-intelligence/analyze-sources", { source_ids: sourceIds });
@@ -1412,6 +1429,7 @@ api.patchAdminSupplierSource = patchAdminSupplierSource;
 api.bulkUpsertAdminSupplierSources = bulkUpsertAdminSupplierSources;
 api.analyzeSupplierLinks = analyzeSupplierLinks;
 api.analyzeStoredSources = analyzeStoredSources;
+api.importProductsFromSupplierSources = importProductsFromSupplierSources;
 api.reportClientError = reportClientError;
 
 export default api;

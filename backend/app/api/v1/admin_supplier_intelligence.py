@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -7,12 +9,16 @@ from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_current_admin_user, get_db
 from app.db import models
+from app.services.importer_notifications import slugify
 from app.services.supplier_intelligence import (
     SupplierOffer,
     estimate_market_price,
+    extract_catalog_items,
     fetch_tabular_preview,
+    generate_youth_description,
     map_category,
     pick_best_offer,
+    suggest_sale_price,
 )
 
 router = APIRouter(tags=["admin_supplier_intelligence"])
@@ -325,6 +331,24 @@ def analyze_stored_sources(payload: AnalyzeStoredSourcesIn, _admin=Depends(get_c
     return out
 
 
+
+
+class ImportProductsIn(BaseModel):
+    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=100)
+    max_items_per_source: int = Field(default=40, ge=1, le=200)
+    dry_run: bool = True
+    publish_visible: bool = False
+    ai_style_description: bool = True
+
+
+class ImportProductsOut(BaseModel):
+    created_categories: int
+    created_products: int
+    updated_products: int
+    created_variants: int
+    source_reports: list[dict[str, object]] = Field(default_factory=list)
+
+
 class OfferIn(BaseModel):
     supplier: str
     title: str
@@ -376,6 +400,191 @@ def get_best_offer(payload: BestOfferIn, _admin=Depends(get_current_admin_user))
         size=best.size,
         stock=best.stock,
         manager_url=best.manager_url,
+    )
+
+
+
+
+@router.post("/supplier-intelligence/import-products", response_model=ImportProductsOut)
+def import_products_from_sources(
+    payload: ImportProductsIn,
+    _admin=Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    source_ids = [int(x) for x in payload.source_ids]
+    sources = (
+        db.query(models.SupplierSource)
+        .filter(models.SupplierSource.id.in_(source_ids))
+        .filter(models.SupplierSource.active == True)  # noqa: E712
+        .all()
+    )
+
+    created_categories = 0
+    created_products = 0
+    updated_products = 0
+    created_variants = 0
+    source_reports: list[dict[str, object]] = []
+
+    def get_or_create_category(name: str) -> models.Category:
+        nonlocal created_categories
+        n = (name or "Разное").strip()[:255] or "Разное"
+        slug = (slugify(n) or n.lower().replace(" ", "-"))[:255]
+        c = db.query(models.Category).filter(models.Category.slug == slug).one_or_none()
+        if not c:
+            c = db.query(models.Category).filter(models.Category.name == n).one_or_none()
+        if c:
+            return c
+        c = models.Category(name=n, slug=slug)
+        db.add(c)
+        db.flush()
+        created_categories += 1
+        return c
+
+    def get_or_create_color(name: str | None) -> models.Color | None:
+        nm = (name or "").strip()
+        if not nm:
+            return None
+        s = (slugify(nm) or nm.lower())[:128]
+        x = db.query(models.Color).filter((models.Color.slug == s) | (models.Color.name == nm)).first()
+        if x:
+            return x
+        x = models.Color(name=nm, slug=s)
+        db.add(x)
+        db.flush()
+        return x
+
+    def get_or_create_size(name: str | None) -> models.Size | None:
+        nm = (name or "").strip()
+        if not nm:
+            return None
+        s = (slugify(nm) or nm.lower())[:64]
+        x = db.query(models.Size).filter((models.Size.slug == s) | (models.Size.name == nm)).first()
+        if x:
+            return x
+        x = models.Size(name=nm, slug=s)
+        db.add(x)
+        db.flush()
+        return x
+
+    for src in sources:
+        src_url = (src.source_url or "").strip()
+        if not src_url:
+            continue
+        report = {"source_id": int(src.id), "url": src_url, "imported": 0, "errors": 0}
+        try:
+            preview = fetch_tabular_preview(src_url, max_rows=max(5, payload.max_items_per_source + 1))
+            rows = preview.get("rows_preview") or []
+            items = extract_catalog_items(rows, max_items=payload.max_items_per_source)
+        except Exception as exc:
+            report["errors"] = 1
+            report["error_message"] = str(exc)
+            source_reports.append(report)
+            continue
+
+        for it in items:
+            try:
+                title = str(it.get("title") or "").strip()
+                if not title:
+                    continue
+                ds_price = float(it.get("dropship_price") or 0)
+                if ds_price <= 0:
+                    continue
+                cat_name = map_category(title)
+                category = get_or_create_category(cat_name)
+                slug_base = (slugify(title) or f"item-{category.id}")[:500]
+                slug = slug_base
+                p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
+                if not p:
+                    p = db.query(models.Product).filter(models.Product.title == title, models.Product.category_id == category.id).one_or_none()
+
+                desc = str(it.get("description") or "").strip()
+                if payload.ai_style_description and not desc:
+                    desc = generate_youth_description(title, cat_name, it.get("color"))
+                sale_price = suggest_sale_price(ds_price)
+                image_url = str(it.get("image_url") or "").strip() or None
+
+                if not p:
+                    # unique slug fallback
+                    n = 2
+                    while db.query(models.Product).filter(models.Product.slug == slug).first() is not None:
+                        slug = f"{slug_base[:490]}-{n}"
+                        n += 1
+                    p = models.Product(
+                        title=title,
+                        slug=slug,
+                        description=desc or None,
+                        base_price=Decimal(str(sale_price)),
+                        currency="RUB",
+                        category_id=category.id,
+                        default_image=image_url,
+                        visible=bool(payload.publish_visible),
+                    )
+                    db.add(p)
+                    db.flush()
+                    created_products += 1
+                else:
+                    changed = False
+                    if desc and not p.description:
+                        p.description = desc
+                        changed = True
+                    if sale_price > 0 and float(p.base_price or 0) <= 0:
+                        p.base_price = Decimal(str(sale_price))
+                        changed = True
+                    if image_url and not p.default_image:
+                        p.default_image = image_url
+                        changed = True
+                    if changed:
+                        db.add(p)
+                        updated_products += 1
+
+                size = get_or_create_size(it.get("size"))
+                color = get_or_create_color(it.get("color"))
+                variant = (
+                    db.query(models.ProductVariant)
+                    .filter(models.ProductVariant.product_id == p.id)
+                    .filter(models.ProductVariant.size_id == (size.id if size else None))
+                    .filter(models.ProductVariant.color_id == (color.id if color else None))
+                    .one_or_none()
+                )
+                stock_qty = int(it.get("stock") or 0)
+                if variant is None:
+                    variant = models.ProductVariant(
+                        product_id=p.id,
+                        size_id=size.id if size else None,
+                        color_id=color.id if color else None,
+                        price=Decimal(str(sale_price)),
+                        stock_quantity=max(0, stock_qty),
+                        images=[image_url] if image_url else None,
+                    )
+                    db.add(variant)
+                    db.flush()
+                    created_variants += 1
+                else:
+                    if float(variant.price or 0) <= 0 and sale_price > 0:
+                        variant.price = Decimal(str(sale_price))
+                    if stock_qty > 0 and int(variant.stock_quantity or 0) <= 0:
+                        variant.stock_quantity = stock_qty
+                    if image_url and not variant.images:
+                        variant.images = [image_url]
+                    db.add(variant)
+
+                report["imported"] = int(report.get("imported") or 0) + 1
+            except Exception:
+                report["errors"] = int(report.get("errors") or 0) + 1
+
+        source_reports.append(report)
+
+    if payload.dry_run:
+        db.rollback()
+    else:
+        db.commit()
+
+    return ImportProductsOut(
+        created_categories=created_categories,
+        created_products=created_products,
+        updated_products=updated_products,
+        created_variants=created_variants,
+        source_reports=source_reports,
     )
 
 

@@ -217,3 +217,107 @@ def pick_best_offer(
     if in_stock:
         return min(in_stock, key=lambda x: float(x.dropship_price))
     return min(sorted_offers, key=lambda x: float(x.dropship_price))
+
+
+def _norm(s: Any) -> str:
+    return str(s or "").strip()
+
+
+def _to_float(raw: Any) -> float | None:
+    s = _norm(raw).replace(" ", "").replace("₽", "").replace(",", ".")
+    m = re.search(r"-?\d+(?:\.\d+)?", s)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except Exception:
+        return None
+
+
+def _to_int(raw: Any) -> int | None:
+    f = _to_float(raw)
+    if f is None:
+        return None
+    try:
+        return int(round(f))
+    except Exception:
+        return None
+
+
+def _find_col(headers: list[str], candidates: tuple[str, ...]) -> int | None:
+    h = [x.strip().lower() for x in headers]
+    for i, col in enumerate(h):
+        if any(c in col for c in candidates):
+            return i
+    return None
+
+
+def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+
+    headers = [str(x or "").strip() for x in rows[0]]
+    body = rows[1:] if len(rows) > 1 else []
+
+    idx_title = _find_col(headers, ("товар", "назв", "title", "item", "модель"))
+    idx_price = _find_col(headers, ("дроп", "dropship", "цена", "price", "опт"))
+    idx_color = _find_col(headers, ("цвет", "color"))
+    idx_size = _find_col(headers, ("размер", "size"))
+    idx_stock = _find_col(headers, ("остат", "налич", "stock", "qty", "кол-во"))
+    idx_image = _find_col(headers, ("фото", "image", "img", "картин"))
+    idx_desc = _find_col(headers, ("опис", "desc", "description"))
+
+    # if header row is not real header, fallback to positional guess
+    if idx_title is None and body:
+        idx_title = 0
+    if idx_price is None and len(headers) >= 2:
+        idx_price = 1
+
+    out: list[dict[str, Any]] = []
+    for row in body:
+        if len(out) >= max_items:
+            break
+        title = _norm(row[idx_title]) if idx_title is not None and idx_title < len(row) else ""
+        if not title:
+            continue
+        price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
+        if price is None or price <= 0:
+            continue
+        color = _norm(row[idx_color]) if idx_color is not None and idx_color < len(row) else ""
+        size = _norm(row[idx_size]) if idx_size is not None and idx_size < len(row) else ""
+        stock = _to_int(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else None
+        image_url = _norm(row[idx_image]) if idx_image is not None and idx_image < len(row) else ""
+        description = _norm(row[idx_desc]) if idx_desc is not None and idx_desc < len(row) else ""
+
+        out.append({
+            "title": title,
+            "dropship_price": float(price),
+            "color": color or None,
+            "size": size or None,
+            "stock": stock,
+            "image_url": image_url or None,
+            "description": description or None,
+        })
+    return out
+
+
+def generate_youth_description(title: str, category_name: str | None = None, color: str | None = None) -> str:
+    t = _norm(title)
+    cat = _norm(category_name) or "лук"
+    clr = _norm(color)
+    mood = ""
+    if clr:
+        mood = f" Цвет: {clr}."
+    return (
+        f"{t} — вайбовый {cat.lower()} для повседневного стрит-стайла. "
+        f"Лёгко собирается в образ под универ, прогулки и вечерние вылазки.{mood} "
+        f"Сидит актуально, смотрится дорого, а носится каждый день без заморочек."
+    )
+
+
+def suggest_sale_price(dropship_price: float) -> float:
+    base = max(0.0, float(dropship_price))
+    if base <= 0:
+        return 0.0
+    # conservative markup for retail target
+    return round(base * 1.55, 0)

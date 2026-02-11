@@ -1,4 +1,4 @@
-from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, estimate_market_price, map_category, pick_best_offer
+from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, estimate_market_price, extract_catalog_items, generate_youth_description, map_category, pick_best_offer
 
 
 def test_estimate_market_price_ignores_fake_outliers():
@@ -26,3 +26,20 @@ def test_pick_best_offer_prefers_exact_color_and_size_then_price():
 
 def test_detect_source_kind_google_sheet():
     assert detect_source_kind("https://docs.google.com/spreadsheets/d/abc/edit") == "google_sheet"
+
+
+def test_extract_catalog_items_by_header():
+    rows = [
+        ["Товар", "Дроп цена", "Цвет", "Размер", "Наличие"],
+        ["Худи Alpha", "3990", "Черный", "M", "3"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["title"] == "Худи Alpha"
+    assert items[0]["dropship_price"] == 3990.0
+
+
+def test_generate_youth_description_mentions_title():
+    txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
+    assert "Худи Alpha" in txt
+    assert "стрит" in txt.lower()

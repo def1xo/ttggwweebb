@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, analyzeStoredSources, bulkUpsertAdminSupplierSources, createAdminSupplierSource, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, patchAdminSupplierSource, sendAdminSalesExportToTelegram, sendOrderProofToTelegram } from "../services/api";
+import api, { adminLogin, analyzeStoredSources, bulkUpsertAdminSupplierSources, createAdminSupplierSource, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, importProductsFromSupplierSources, patchAdminSupplierSource, sendAdminSalesExportToTelegram, sendOrderProofToTelegram } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -961,6 +961,11 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [bulkNote, setBulkNote] = useState("");
 
   const [analysis, setAnalysis] = useState<any[]>([]);
+  const [importDryRun, setImportDryRun] = useState(true);
+  const [importPublishVisible, setImportPublishVisible] = useState(false);
+  const [importUseAi, setImportUseAi] = useState(true);
+  const [importMaxItems, setImportMaxItems] = useState(40);
+  const [importReport, setImportReport] = useState<any | null>(null);
 
   const resetForm = () => {
     setEditingId(null);
@@ -1111,6 +1116,34 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
         <input className="input" placeholder="Общий контакт менеджера" value={bulkManagerContact} onChange={(e) => setBulkManagerContact(e.target.value)} />
         <input className="input" placeholder="Общая заметка" value={bulkNote} onChange={(e) => setBulkNote(e.target.value)} />
         <button className="btn" onClick={bulkAdd} disabled={!bulkLinks.trim()}>Массово добавить/обновить</button>
+      </div>
+
+      <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>
+        <div style={{ fontWeight: 800 }}>Импорт товаров из источников</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <input type="checkbox" checked={importDryRun} onChange={(e) => setImportDryRun(e.target.checked)} />
+            Dry-run (без записи в БД)
+          </label>
+          <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <input type="checkbox" checked={importPublishVisible} onChange={(e) => setImportPublishVisible(e.target.checked)} />
+            Делать товары видимыми
+          </label>
+        </div>
+        <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input type="checkbox" checked={importUseAi} onChange={(e) => setImportUseAi(e.target.checked)} />
+          AI-style описание для аудитории 15-25
+        </label>
+        <input className="input" type="number" min={1} max={200} value={importMaxItems} onChange={(e) => setImportMaxItems(Number(e.target.value || 40))} placeholder="Макс. товаров на источник" />
+        <button className="btn btn-primary" onClick={runImportProducts} disabled={items.length === 0}>Запустить импорт товаров</button>
+        {importReport ? (
+          <div className="card" style={{ padding: 10 }}>
+            <div style={{ fontWeight: 700 }}>Отчёт импорта</div>
+            <div className="small-muted" style={{ marginTop: 4 }}>
+              Категорий: +{importReport?.created_categories || 0} • Товаров: +{importReport?.created_products || 0} • Обновлено: {importReport?.updated_products || 0} • Вариантов: +{importReport?.created_variants || 0}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <div className="card" style={{ padding: 12, marginBottom: 12 }}>
