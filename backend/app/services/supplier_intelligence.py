@@ -145,6 +145,35 @@ def _normalize_google_sheet_csv(url: str) -> str:
     return export
 
 
+
+
+
+
+def _fix_common_mojibake(value: str) -> str:
+    s = str(value or "")
+    if not s:
+        return s
+    if "Ð" in s or "Ñ" in s:
+        try:
+            repaired = s.encode("latin-1").decode("utf-8")
+            if repaired.count("�") <= s.count("�"):
+                return repaired
+        except Exception:
+            return s
+    return s
+
+def _response_text(resp: requests.Response) -> str:
+    if not resp.content:
+        return ""
+    for enc in [resp.encoding, getattr(resp, "apparent_encoding", None), "utf-8", "cp1251", "latin-1"]:
+        if not enc:
+            continue
+        try:
+            return resp.content.decode(enc, errors="replace")
+        except Exception:
+            continue
+    return resp.text
+
 def fetch_tabular_preview(url: str, timeout_sec: int = 20, max_rows: int = 25) -> dict[str, Any]:
     kind = detect_source_kind(url)
     fetch_url = _normalize_google_sheet_csv(url) if kind == "google_sheet" else url
@@ -153,19 +182,19 @@ def fetch_tabular_preview(url: str, timeout_sec: int = 20, max_rows: int = 25) -
     resp = _http_get_with_retries(fetch_url, timeout_sec=timeout_sec, headers=headers, max_attempts=3)
 
     ct = (resp.headers.get("content-type") or "").lower()
-    body = resp.text
+    body = _response_text(resp)
 
     rows: list[list[str]] = []
     if "text/csv" in ct or fetch_url.endswith("format=csv"):
         reader = csv.reader(io.StringIO(body))
         for i, row in enumerate(reader):
-            rows.append([str(x).strip() for x in row])
+            rows.append([_fix_common_mojibake(str(x).strip()) for x in row])
             if i + 1 >= max_rows:
                 break
     else:
         parser = _SimpleTableParser()
         parser.feed(body)
-        rows = parser.rows[:max_rows]
+        rows = [[_fix_common_mojibake(x) for x in row] for row in parser.rows[:max_rows]]
 
     return {
         "kind": kind,
@@ -296,6 +325,28 @@ def _find_col(headers: list[str], candidates: tuple[str, ...]) -> int | None:
     return None
 
 
+
+
+def _find_col_priority(headers: list[str], groups: tuple[tuple[str, ...], ...]) -> int | None:
+    lowered = [x.strip().lower() for x in headers]
+    for group in groups:
+        idx = _find_col(lowered, group)
+        if idx is not None:
+            return idx
+    return None
+
+
+def _pick_price_column(headers: list[str]) -> int | None:
+    return _find_col_priority(
+        headers,
+        (
+            ("дроп", "dropship", "drop ship", "ds"),
+            ("drop",),
+            ("price", "цена", "стоим"),
+            ("опт", "wholesale"),
+        ),
+    )
+
 def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[dict[str, Any]]:
     if not rows:
         return []
@@ -304,7 +355,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
     body = rows[1:] if len(rows) > 1 else []
 
     idx_title = _find_col(headers, ("товар", "назв", "title", "item", "модель"))
-    idx_price = _find_col(headers, ("дроп", "dropship", "цена", "price", "опт"))
+    idx_price = _pick_price_column(headers)
     idx_color = _find_col(headers, ("цвет", "color"))
     idx_size = _find_col(headers, ("размер", "size"))
     idx_stock = _find_col(headers, ("остат", "налич", "stock", "qty", "кол-во"))

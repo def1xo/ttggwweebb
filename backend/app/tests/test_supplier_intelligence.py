@@ -41,6 +41,31 @@ def test_extract_catalog_items_by_header():
     assert items[0]["dropship_price"] == 3990.0
 
 
+
+
+def test_extract_catalog_items_prefers_dropship_price_over_wholesale():
+    rows = [
+        ["Товар", "Опт цена", "Дроп цена", "Цвет"],
+        ["Худи Alpha", "1200", "2500", "Черный"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 2500.0
+
+
+def test_extract_catalog_items_uses_wholesale_when_dropship_column_missing():
+    rows = [
+        ["Товар", "Опт цена", "Цвет"],
+        ["Худи Alpha", "1900", "Черный"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 1900.0
+
 def test_generate_youth_description_mentions_title():
     txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
     assert "Худи Alpha" in txt
@@ -154,3 +179,23 @@ def test_register_source_error_limits_unique_error_samples_and_truncates_message
 def test_normalize_error_message_compacts_whitespace():
     normalized = asi._normalize_error_message(RuntimeError("  too   many\n  spaces\tinside "))
     assert normalized == "too many spaces inside"
+
+
+def test_response_text_decodes_cp1251_payload():
+    class DummyResp:
+        content = "ЦЕНА ОПТ".encode("cp1251")
+        encoding = None
+        apparent_encoding = "windows-1251"
+        text = ""
+
+    assert si._response_text(DummyResp()) == "ЦЕНА ОПТ"
+
+
+def test_fix_common_mojibake_repairs_utf8_latin1_artifacts():
+    raw = "Ð¦ÐÐÐ ÐÐ ÐÐ"
+    fixed = si._fix_common_mojibake(raw)
+    assert "ЦЕНА" in fixed
+
+
+def test_fix_common_mojibake_keeps_clean_text_unchanged():
+    assert si._fix_common_mojibake("Цена дроп") == "Цена дроп"
