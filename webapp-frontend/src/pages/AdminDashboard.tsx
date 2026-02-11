@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, analyzeStoredSources, createAdminSupplierSource, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, patchAdminSupplierSource, sendAdminSalesExportToTelegram, sendOrderProofToTelegram } from "../services/api";
+import api, { adminLogin, analyzeStoredSources, bulkUpsertAdminSupplierSources, createAdminSupplierSource, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, patchAdminSupplierSource, sendAdminSalesExportToTelegram, sendOrderProofToTelegram } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -954,6 +954,11 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [managerName, setManagerName] = useState("");
   const [managerContact, setManagerContact] = useState("");
   const [note, setNote] = useState("");
+  const [bulkLinks, setBulkLinks] = useState("");
+  const [bulkSupplierName, setBulkSupplierName] = useState("");
+  const [bulkManagerName, setBulkManagerName] = useState("");
+  const [bulkManagerContact, setBulkManagerContact] = useState("");
+  const [bulkNote, setBulkNote] = useState("");
 
   const [analysis, setAnalysis] = useState<any[]>([]);
 
@@ -1044,6 +1049,32 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
     }
   };
 
+  const bulkAdd = async () => {
+    const links = bulkLinks
+      .split(/\n|,|;/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    if (!links.length) {
+      setMsg("Вставьте хотя бы одну ссылку");
+      return;
+    }
+    try {
+      const entries = links.map((url) => ({
+        source_url: url,
+        supplier_name: bulkSupplierName.trim() || undefined,
+        manager_name: bulkManagerName.trim() || undefined,
+        manager_contact: bulkManagerContact.trim() || undefined,
+        note: bulkNote.trim() || undefined,
+      }));
+      const res: any = await bulkUpsertAdminSupplierSources(entries);
+      setMsg(`Массово обработано: +${res?.created || 0} новых, ~${res?.updated || 0} обновлено, ${res?.skipped || 0} без изменений`);
+      setBulkLinks("");
+      load();
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось массово добавить источники");
+    }
+  };
+
   return (
     <div className="container" style={{ paddingTop: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
@@ -1066,7 +1097,24 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
         </div>
       </div>
 
+      <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>
+        <div style={{ fontWeight: 800 }}>Массовое добавление источников</div>
+        <textarea
+          className="input"
+          style={{ minHeight: 120 }}
+          placeholder="Вставьте ссылки (каждая с новой строки, либо через запятую/; )"
+          value={bulkLinks}
+          onChange={(e) => setBulkLinks(e.target.value)}
+        />
+        <input className="input" placeholder="Общий поставщик (опционально)" value={bulkSupplierName} onChange={(e) => setBulkSupplierName(e.target.value)} />
+        <input className="input" placeholder="Общий менеджер" value={bulkManagerName} onChange={(e) => setBulkManagerName(e.target.value)} />
+        <input className="input" placeholder="Общий контакт менеджера" value={bulkManagerContact} onChange={(e) => setBulkManagerContact(e.target.value)} />
+        <input className="input" placeholder="Общая заметка" value={bulkNote} onChange={(e) => setBulkNote(e.target.value)} />
+        <button className="btn" onClick={bulkAdd} disabled={!bulkLinks.trim()}>Массово добавить/обновить</button>
+      </div>
+
       <div className="card" style={{ padding: 12, marginBottom: 12 }}>
+
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 10 }}>
           <div style={{ fontWeight: 800 }}>Сохранённые источники</div>
           <div style={{ display: "flex", gap: 8 }}>

@@ -1274,6 +1274,23 @@ export async function deleteAdminSupplierSource(id: number) {
   }
 }
 
+
+
+export async function bulkUpsertAdminSupplierSources(entries: Array<{
+  source_url: string;
+  supplier_name?: string;
+  manager_name?: string;
+  manager_contact?: string;
+  note?: string;
+}>) {
+  try {
+    const res = await axiosInstance.post("/api/admin/supplier-intelligence/sources/bulk-upsert", { entries });
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function patchAdminSupplierSource(id: number, payload: {
   source_url?: string;
   supplier_name?: string;
@@ -1392,6 +1409,7 @@ api.getAdminSupplierSources = getAdminSupplierSources;
 api.createAdminSupplierSource = createAdminSupplierSource;
 api.deleteAdminSupplierSource = deleteAdminSupplierSource;
 api.patchAdminSupplierSource = patchAdminSupplierSource;
+api.bulkUpsertAdminSupplierSources = bulkUpsertAdminSupplierSources;
 api.analyzeSupplierLinks = analyzeSupplierLinks;
 api.analyzeStoredSources = analyzeStoredSources;
 api.reportClientError = reportClientError;

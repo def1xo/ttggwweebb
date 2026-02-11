@@ -45,6 +45,25 @@ class SupplierSourceOut(BaseModel):
     active: bool
 
 
+class SupplierSourceBulkEntryIn(BaseModel):
+    source_url: str = Field(min_length=5, max_length=2000)
+    supplier_name: str | None = Field(default=None, max_length=255)
+    manager_name: str | None = Field(default=None, max_length=255)
+    manager_contact: str | None = Field(default=None, max_length=255)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class SupplierSourceBulkUpsertIn(BaseModel):
+    entries: list[SupplierSourceBulkEntryIn] = Field(default_factory=list, min_items=1, max_items=200)
+
+
+class SupplierSourceBulkUpsertOut(BaseModel):
+    created: int
+    updated: int
+    skipped: int
+    items: list[SupplierSourceOut] = Field(default_factory=list)
+
+
 class AnalyzeLinksIn(BaseModel):
     links: list[str] = Field(default_factory=list, min_items=1, max_items=30)
 
@@ -134,6 +153,78 @@ def create_supplier_source(payload: SupplierSourceIn, _admin=Depends(get_current
         raise HTTPException(status_code=409, detail="source_url already exists")
     db.refresh(item)
     return _to_source_out(item)
+
+
+
+
+@router.post("/supplier-intelligence/sources/bulk-upsert", response_model=SupplierSourceBulkUpsertOut)
+def bulk_upsert_supplier_sources(
+    payload: SupplierSourceBulkUpsertIn,
+    _admin=Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    created = 0
+    updated = 0
+    skipped = 0
+    changed_items: list[models.SupplierSource] = []
+
+    for entry in payload.entries:
+        url = (entry.source_url or "").strip()
+        if not url:
+            skipped += 1
+            continue
+
+        item = db.query(models.SupplierSource).filter(models.SupplierSource.source_url == url).one_or_none()
+        if item is None:
+            item = models.SupplierSource(
+                source_url=url,
+                supplier_name=(entry.supplier_name or "").strip() or None,
+                manager_name=(entry.manager_name or "").strip() or None,
+                manager_contact=(entry.manager_contact or "").strip() or None,
+                note=(entry.note or "").strip() or None,
+                active=True,
+            )
+            db.add(item)
+            changed_items.append(item)
+            created += 1
+            continue
+
+        before = (
+            item.supplier_name,
+            item.manager_name,
+            item.manager_contact,
+            item.note,
+        )
+        item.supplier_name = (entry.supplier_name or "").strip() or item.supplier_name
+        item.manager_name = (entry.manager_name or "").strip() or item.manager_name
+        item.manager_contact = (entry.manager_contact or "").strip() or item.manager_contact
+        item.note = (entry.note or "").strip() or item.note
+        after = (item.supplier_name, item.manager_name, item.manager_contact, item.note)
+        if before != after:
+            db.add(item)
+            changed_items.append(item)
+            updated += 1
+        else:
+            skipped += 1
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="bulk upsert conflict")
+
+    for item in changed_items:
+        try:
+            db.refresh(item)
+        except Exception:
+            pass
+
+    return SupplierSourceBulkUpsertOut(
+        created=created,
+        updated=updated,
+        skipped=skipped,
+        items=[_to_source_out(x) for x in changed_items],
+    )
 
 
 @router.patch("/supplier-intelligence/sources/{source_id}", response_model=SupplierSourceOut)
