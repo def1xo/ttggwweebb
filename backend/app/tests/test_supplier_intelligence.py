@@ -1,3 +1,4 @@
+import app.api.v1.admin_supplier_intelligence as asi
 import app.services.supplier_intelligence as si
 from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, estimate_market_price, extract_catalog_items, generate_youth_description, map_category, pick_best_offer, print_signature_hamming, suggest_sale_price
 
@@ -39,6 +40,31 @@ def test_extract_catalog_items_by_header():
     assert items[0]["title"] == "Худи Alpha"
     assert items[0]["dropship_price"] == 3990.0
 
+
+
+
+def test_extract_catalog_items_prefers_dropship_price_over_wholesale():
+    rows = [
+        ["Товар", "Опт цена", "Дроп цена", "Цвет"],
+        ["Худи Alpha", "1200", "2500", "Черный"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 2500.0
+
+
+def test_extract_catalog_items_uses_wholesale_when_dropship_column_missing():
+    rows = [
+        ["Товар", "Опт цена", "Цвет"],
+        ["Худи Alpha", "1900", "Черный"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 1900.0
 
 def test_generate_youth_description_mentions_title():
     txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
@@ -110,3 +136,66 @@ def test_download_image_bytes_rejects_non_image_content(monkeypatch):
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "not an image" in str(exc)
+
+
+def test_classify_import_error_codes():
+    assert asi._classify_import_error(RuntimeError("request timeout on supplier")) == asi.ERROR_CODE_NETWORK_TIMEOUT
+    assert asi._classify_import_error(RuntimeError("content is not an image")) == asi.ERROR_CODE_INVALID_IMAGE
+    assert asi._classify_import_error(RuntimeError("parse error on source row")) == asi.ERROR_CODE_PARSE_FAILED
+    assert asi._classify_import_error(RuntimeError("429 too many requests")) == asi.ERROR_CODE_NETWORK_TIMEOUT
+
+
+def test_register_source_error_tracks_error_codes():
+    report = asi._new_source_report(source_id=7, source_url="https://example.com/feed")
+
+    asi._register_source_error(report, RuntimeError("request timeout"))
+    asi._register_source_error(report, RuntimeError("request timeout"))
+    asi._register_source_error(report, RuntimeError("parse failed"))
+
+    assert report.errors == 3
+    assert report.error_codes[asi.ERROR_CODE_NETWORK_TIMEOUT] == 2
+    assert report.error_codes[asi.ERROR_CODE_PARSE_FAILED] == 1
+    assert report.last_error_message == "parse failed"
+
+
+def test_register_source_error_limits_unique_error_samples_and_truncates_message():
+    report = asi._new_source_report(source_id=8, source_url="https://example.com/feed-2")
+
+    asi._register_source_error(report, RuntimeError("first timeout"))
+    asi._register_source_error(report, RuntimeError("second timeout"))
+    asi._register_source_error(report, RuntimeError("third timeout"))
+    asi._register_source_error(report, RuntimeError("fourth timeout"))
+
+    assert len(report.error_samples) == asi.ERROR_SAMPLES_LIMIT
+    assert report.error_samples == ["first timeout", "second timeout", "third timeout"]
+
+    huge = "x" * (asi.ERROR_MESSAGE_MAX_LEN + 50)
+    asi._register_source_error(report, RuntimeError(huge))
+    assert report.last_error_message is not None
+    assert len(report.last_error_message) == asi.ERROR_MESSAGE_MAX_LEN
+    assert report.last_error_message.endswith("...")
+
+
+def test_normalize_error_message_compacts_whitespace():
+    normalized = asi._normalize_error_message(RuntimeError("  too   many\n  spaces\tinside "))
+    assert normalized == "too many spaces inside"
+
+
+def test_response_text_decodes_cp1251_payload():
+    class DummyResp:
+        content = "ЦЕНА ОПТ".encode("cp1251")
+        encoding = None
+        apparent_encoding = "windows-1251"
+        text = ""
+
+    assert si._response_text(DummyResp()) == "ЦЕНА ОПТ"
+
+
+def test_fix_common_mojibake_repairs_utf8_latin1_artifacts():
+    raw = "Ð¦ÐÐÐ ÐÐ ÐÐ"
+    fixed = si._fix_common_mojibake(raw)
+    assert "ЦЕНА" in fixed
+
+
+def test_fix_common_mojibake_keeps_clean_text_unchanged():
+    assert si._fix_common_mojibake("Цена дроп") == "Цена дроп"
