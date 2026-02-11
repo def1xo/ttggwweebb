@@ -161,11 +161,11 @@ export default function ProductModal({
   };
 
   return (
-    <div className="modal-overlay" role="dialog" aria-modal="true" style={{ alignItems: "flex-start", overflowY: "auto", padding: "calc(14px + env(safe-area-inset-top)) 0 14px" }}>
-      <div className="modal card product-modal" style={{ maxWidth: 980, width: "min(96vw, 980px)", maxHeight: "94vh", overflowY: "auto" }}>
+    <div className="modal-overlay modal-overlay--product" role="dialog" aria-modal="true" style={{ alignItems: "flex-start", overflowY: "auto", padding: "calc(10px + env(safe-area-inset-top)) 0 calc(18px + env(safe-area-inset-bottom))" }}>
+      <div className="modal card product-modal product-modal-scroll" style={{ maxWidth: 980, width: "min(96vw, 980px)", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h2 style={{ margin: 0 }}>{product ? "Редактирование" : "Новый товар"}</h2>
-          <button className="btn ghost" onClick={onClose} aria-label="Close">
+          <button className="btn ghost product-modal__close" onClick={onClose} aria-label="Close">
             ✕
           </button>
         </div>

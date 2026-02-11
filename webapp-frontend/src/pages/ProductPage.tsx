@@ -119,6 +119,7 @@ export default function ProductPage() {
         await addCartItem(Number(variantId), 1);
         hapticImpact("light");
         notify("Добавлено в корзину", "success");
+        try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
       } catch {
         notify("Не удалось добавить в корзину", "error");
       }
@@ -164,7 +165,7 @@ export default function ProductPage() {
           </div>
           <button
             type="button"
-            className="btn ghost"
+            className="icon-like-btn"
             onClick={toggleFav}
             aria-label={isFavorite(Number(product?.id)) ? "Убрать из избранного" : "В избранное"}
             style={{ width: 44, height: 44, padding: 0, lineHeight: 0, display: "grid", placeItems: "center", overflow: "visible" }}
