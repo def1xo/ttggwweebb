@@ -838,6 +838,23 @@ def import_products_from_sources(
                     if uu and uu not in image_urls:
                         image_urls.append(uu)
 
+                # auto-enrich item gallery with similar photos from known supplier pool
+                if image_url and known_image_urls:
+                    try:
+                        sim_items = find_similar_images(image_url, known_image_urls, max_hamming_distance=5, limit=8)
+                        for sim in sim_items:
+                            sim_url = str(sim.get("image_url") or "").strip()
+                            if not sim_url or sim_url in image_urls:
+                                continue
+                            matched_meta = known_item_by_image_url.get(sim_url) or {}
+                            if _title_key(str(matched_meta.get("title") or "")) != _title_key(title):
+                                continue
+                            image_urls.append(sim_url)
+                            if len(image_urls) >= 8:
+                                break
+                    except Exception:
+                        pass
+
                 if not p:
                     # unique slug fallback
                     n = 2

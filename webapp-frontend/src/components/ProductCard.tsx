@@ -40,7 +40,7 @@ export default function ProductCard({ product }: Props) {
   const variantList = (product?.variants || []) as any[];
   const defaultVariant = variantList?.[0] || null;
 
-  const price = Number(product?.price ?? product?.base_price ?? defaultVariant?.price ?? 0);
+  const price = Number(product?.price ?? product?.min_variant_price ?? product?.base_price ?? defaultVariant?.price ?? 0);
 
   const meta = useMemo(() => {
     const sizes = sortSizes(
@@ -66,9 +66,11 @@ export default function ProductCard({ product }: Props) {
 
     const created = product?.created_at ? new Date(product.created_at) : null;
     const isNew = created ? Date.now() - created.getTime() < 7 * 24 * 60 * 60 * 1000 : false;
+    const inStock = Boolean(product?.has_stock ?? (variantList || []).some((v) => Number(v?.stock || 0) > 0));
+    const galleryCount = Number(product?.gallery_count || (Array.isArray(imgs) ? imgs.length : 0));
 
-    return { sizes, colors, sizeLabel, isNew };
-  }, [product, variantList]);
+    return { sizes, colors, sizeLabel, isNew, inStock, galleryCount };
+  }, [product, variantList, imgs]);
 
 
   const toggleFav = async (e: React.MouseEvent) => {
@@ -121,6 +123,8 @@ export default function ProductCard({ product }: Props) {
               <div className="chips">
                 {meta.sizeLabel ? <span className="chip">{meta.sizeLabel}</span> : null}
                 {meta.colors.length ? <span className="chip">{meta.colors.length} цвет(а)</span> : null}
+                {meta.galleryCount > 1 ? <span className="chip">{meta.galleryCount} фото</span> : null}
+                {!meta.inStock ? <span className="chip">нет в наличии</span> : null}
               </div>
               <div style={{ display: "flex", gap: 6 }}>
                 {meta.colors.slice(0, 2).map((c) => (
