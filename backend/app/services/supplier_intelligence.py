@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import os
 import re
 import statistics
 import time
@@ -426,6 +428,75 @@ def generate_youth_description(title: str, category_name: str | None = None, col
         f"Лёгко собирается в образ под универ, прогулки и вечерние вылазки.{mood} "
         f"Сидит актуально, смотрится дорого, а носится каждый день без заморочек."
     )
+
+
+def generate_ai_product_description(
+    title: str,
+    category_name: str | None = None,
+    color: str | None = None,
+    *,
+    max_chars: int = 420,
+) -> str:
+    """Generate unique product copy via free-compatible OpenRouter model with safe fallback."""
+    openrouter_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+    if not openrouter_key:
+        return generate_youth_description(title, category_name, color)
+
+    prompt = {
+        "title": _norm(title),
+        "category": _norm(category_name) or "streetwear",
+        "color": _norm(color) or "",
+        "requirements": [
+            "Пиши по-русски для аудитории 15-25",
+            "Сделай описание уникальным, без шаблонных повторов",
+            "2-4 коротких предложения",
+            "Без мата, без обещаний медицинских/гарантийных эффектов",
+            "Не используй markdown/emoji",
+        ],
+    }
+    try:
+        resp = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            timeout=(4.0, 25.0),
+            headers={
+                "Authorization": f"Bearer {openrouter_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": os.getenv("OPENROUTER_MODEL", "openrouter/auto"),
+                "temperature": 0.9,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Ты коммерческий копирайтер для e-commerce. Пиши нативно и уникально.",
+                    },
+                    {
+                        "role": "user",
+                        "content": "Сгенерируй описание товара в JSON с полем description. Данные: " + json.dumps(prompt, ensure_ascii=False),
+                    },
+                ],
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json() if resp.content else {}
+        txt = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        raw = str(txt or "").strip()
+        if raw.startswith("{"):
+            try:
+                parsed = json.loads(raw)
+                raw = str(parsed.get("description") or "").strip()
+            except Exception:
+                pass
+        raw = " ".join(raw.split())
+        if raw:
+            return raw[:max_chars]
+    except Exception:
+        pass
+    return generate_youth_description(title, category_name, color)
 
 
 MIN_MARKUP_RATIO = 1.40

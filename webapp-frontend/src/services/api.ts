@@ -1344,6 +1344,8 @@ export async function importProductsFromSupplierSources(payload: {
   dry_run?: boolean;
   publish_visible?: boolean;
   ai_style_description?: boolean;
+  ai_description_enabled?: boolean;
+  ai_description_provider?: string;
   use_avito_pricing?: boolean;
   avito_max_pages?: number;
 }) {

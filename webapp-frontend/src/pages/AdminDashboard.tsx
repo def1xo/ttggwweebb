@@ -978,6 +978,7 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [importDryRun, setImportDryRun] = useState(true);
   const [importPublishVisible, setImportPublishVisible] = useState(false);
   const [importUseAi, setImportUseAi] = useState(true);
+  const [importUseAiOriginalDescriptions, setImportUseAiOriginalDescriptions] = useState(true);
   const [importUseAvitoPricing, setImportUseAvitoPricing] = useState(true);
   const [importAvitoPages, setImportAvitoPages] = useState(1);
   const [importMaxItems, setImportMaxItems] = useState(40);
@@ -1135,6 +1136,8 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
         dry_run: Boolean(importDryRun),
         publish_visible: Boolean(importPublishVisible),
         ai_style_description: Boolean(importUseAi),
+        ai_description_enabled: Boolean(importUseAiOriginalDescriptions),
+        ai_description_provider: "openrouter",
         use_avito_pricing: Boolean(importUseAvitoPricing),
         avito_max_pages: Math.max(1, Math.min(3, Number(importAvitoPages) || 1)),
       };
@@ -1260,6 +1263,15 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
         <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input type="checkbox" checked={importUseAi} onChange={(e) => setImportUseAi(e.target.checked)} />
           AI-style описание для аудитории 15-25
+        </label>
+        <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={importUseAiOriginalDescriptions}
+            onChange={(e) => setImportUseAiOriginalDescriptions(e.target.checked)}
+            disabled={!importUseAi}
+          />
+          Уникальные описания через ИИ (OpenRouter), fallback на скрипт
         </label>
         <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input type="checkbox" checked={importUseAvitoPricing} onChange={(e) => setImportUseAvitoPricing(e.target.checked)} />

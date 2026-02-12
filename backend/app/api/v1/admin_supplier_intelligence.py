@@ -21,6 +21,7 @@ from app.services.supplier_intelligence import (
     extract_catalog_items,
     extract_image_urls_from_html_page,
     fetch_tabular_preview,
+    generate_ai_product_description,
     generate_youth_description,
     image_print_signature_from_url,
     map_category,
@@ -377,7 +378,9 @@ class ImportProductsIn(BaseModel):
     dry_run: bool = True
     publish_visible: bool = False
     ai_style_description: bool = True
-    use_avito_pricing: bool = False
+    ai_description_provider: str = Field(default="openrouter", max_length=64)
+    ai_description_enabled: bool = True
+    use_avito_pricing: bool = True
     avito_max_pages: int = Field(default=1, ge=1, le=3)
 
 
@@ -672,7 +675,10 @@ def import_products_from_sources(
 
                 desc = str(it.get("description") or "").strip()
                 if payload.ai_style_description and not desc:
-                    desc = generate_youth_description(title, cat_name, it.get("color"))
+                    if payload.ai_description_enabled and payload.ai_description_provider.lower() == "openrouter":
+                        desc = generate_ai_product_description(title, cat_name, it.get("color"))
+                    else:
+                        desc = generate_youth_description(title, cat_name, it.get("color"))
                 sale_price = pick_sale_price(title, ds_price)
                 image_url = str(it.get("image_url") or "").strip() or None
                 if not image_url and "t.me/" in src_url:

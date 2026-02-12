@@ -1,6 +1,6 @@
 import app.api.v1.admin_supplier_intelligence as asi
 import app.services.supplier_intelligence as si
-from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, ensure_min_markup_price, estimate_market_price, extract_catalog_items, generate_youth_description, map_category, pick_best_offer, print_signature_hamming, suggest_sale_price
+from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, ensure_min_markup_price, estimate_market_price, extract_catalog_items, generate_ai_product_description, generate_youth_description, map_category, pick_best_offer, print_signature_hamming, suggest_sale_price
 
 
 def test_estimate_market_price_ignores_fake_outliers():
@@ -95,6 +95,34 @@ def test_generate_youth_description_mentions_title():
     txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
     assert "Худи Alpha" in txt
     assert "стрит" in txt.lower()
+
+
+def test_generate_ai_product_description_falls_back_without_key(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    txt = generate_ai_product_description("Худи Alpha", "Кофты", "черный")
+    assert "Худи Alpha" in txt
+
+
+def test_generate_ai_product_description_uses_openrouter_response(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    class DummyResp:
+        content = b"ok"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {"message": {"content": '{"description":"Уникальное описание худи без шаблонов."}'}}
+                ]
+            }
+
+    monkeypatch.setattr(si.requests, "post", lambda *a, **k: DummyResp())
+
+    txt = generate_ai_product_description("Худи Alpha", "Кофты", "черный")
+    assert txt == "Уникальное описание худи без шаблонов."
 
 
 def test_suggest_sale_price_markup():
