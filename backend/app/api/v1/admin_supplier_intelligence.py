@@ -44,12 +44,51 @@ TOP_FAILING_SOURCES_LIMIT = 5
 ERROR_SAMPLES_LIMIT = 3
 ERROR_MESSAGE_MAX_LEN = 500
 
+COLOR_TOKENS = {
+    "красный", "красная", "красное", "красные",
+    "синий", "синяя", "синее", "синие",
+    "черный", "черная", "черное", "черные",
+    "белый", "белая", "белое", "белые",
+    "зеленый", "зеленая", "зеленое", "зеленые",
+    "серый", "серая", "серое", "серые",
+    "розовый", "розовая", "розовое", "розовые",
+    "фиолетовый", "фиолетовая", "фиолетовое", "фиолетовые",
+    "желтый", "желтая", "желтое", "желтые",
+    "голубой", "голубая", "голубое", "голубые",
+    "orange", "red", "blue", "black", "white", "green", "grey", "gray", "pink", "purple", "yellow",
+}
+
 
 def _normalize_error_message(exc: Exception) -> str:
     message = " ".join(str(exc).strip().split())
     if len(message) > ERROR_MESSAGE_MAX_LEN:
         return f"{message[:ERROR_MESSAGE_MAX_LEN - 3]}..."
     return message
+
+
+def _canonical_product_title(raw_title: str | None, explicit_color: str | None = None) -> str:
+    title = " ".join(str(raw_title or "").strip().split())
+    if not title:
+        return ""
+    tokens = [t for t in re.split(r"\s+", title) if t]
+    while len(tokens) > 1:
+        tail = re.sub(r"[^a-zA-Zа-яА-ЯёЁ]", "", tokens[-1]).lower()
+        if not tail:
+            tokens.pop()
+            continue
+        if tail in COLOR_TOKENS:
+            tokens.pop()
+            continue
+        break
+    if explicit_color:
+        color_parts = [re.sub(r"[^a-zA-Zа-яА-ЯёЁ]", "", x).lower() for x in str(explicit_color).split()]
+        color_parts = [x for x in color_parts if x]
+        if color_parts and len(tokens) >= len(color_parts):
+            tail_parts = [re.sub(r"[^a-zA-Zа-яА-ЯёЁ]", "", x).lower() for x in tokens[-len(color_parts):]]
+            if tail_parts == color_parts:
+                tokens = tokens[:-len(color_parts)]
+    out = " ".join(tokens).strip()
+    return out if len(out) >= 3 else title
 
 
 def _classify_import_error(exc: Exception) -> str:
@@ -638,8 +677,8 @@ def import_products_from_sources(
     known_image_urls: list[str] = []
     known_item_by_image_url: dict[str, dict[str, object]] = {}
 
-    def _title_key(raw_title: str | None) -> str:
-        return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
+    def _title_key(raw_title: str | None, raw_color: str | None = None) -> str:
+        return re.sub(r"\s+", " ", _canonical_product_title(raw_title, raw_color).strip().lower())
 
     def _is_placeholder_title(raw_title: str | None) -> bool:
         return _title_key(raw_title).startswith("позиция из tg #")
@@ -736,6 +775,7 @@ def import_products_from_sources(
             source_items_map[int(src.id)] = items
             for it in items:
                 title = str(it.get("title") or "").strip()
+                title_for_group = _canonical_product_title(title, it.get("color"))
                 ds_price = float(it.get("dropship_price") or 0)
                 if title and ds_price > 0 and not _is_placeholder_title(title):
                     k = _title_key(title)
@@ -803,22 +843,23 @@ def import_products_from_sources(
                     # skip generic TG placeholders and unresolved items instead of polluting catalog
                     continue
 
-                min_dropship = title_min_dropship.get(_title_key(title))
-                cat_name = map_category(title)
+                min_dropship = title_min_dropship.get(_title_key(title, it.get("color")))
+                cat_name = map_category(title_for_group or title)
                 category = get_or_create_category(cat_name)
-                slug_base = (slugify(title) or f"item-{category.id}")[:500]
+                effective_title = (title_for_group or title).strip()
+                slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
                 p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
                 if not p:
-                    p = db.query(models.Product).filter(models.Product.title == title, models.Product.category_id == category.id).one_or_none()
+                    p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
 
                 desc = str(it.get("description") or "").strip()
                 if payload.ai_style_description and not desc:
                     if payload.ai_description_enabled and payload.ai_description_provider.lower() == "openrouter":
-                        desc = generate_ai_product_description(title, cat_name, it.get("color"))
+                        desc = generate_ai_product_description(effective_title, cat_name, it.get("color"))
                     else:
-                        desc = generate_youth_description(title, cat_name, it.get("color"))
-                sale_price = pick_sale_price(title, ds_price, min_dropship_price=min_dropship)
+                        desc = generate_youth_description(effective_title, cat_name, it.get("color"))
+                sale_price = pick_sale_price(effective_title, ds_price, min_dropship_price=min_dropship)
                 row_image_urls = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
                 image_url = str(it.get("image_url") or "").strip() or None
                 if not image_url and row_image_urls:
@@ -862,7 +903,7 @@ def import_products_from_sources(
                         slug = f"{slug_base[:490]}-{n}"
                         n += 1
                     p = models.Product(
-                        title=title,
+                        title=effective_title,
                         slug=slug,
                         description=desc or None,
                         base_price=Decimal(str(sale_price)),
