@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import os
 import re
 import statistics
 import time
@@ -145,6 +147,35 @@ def _normalize_google_sheet_csv(url: str) -> str:
     return export
 
 
+
+
+
+
+def _fix_common_mojibake(value: str) -> str:
+    s = str(value or "")
+    if not s:
+        return s
+    if "Ð" in s or "Ñ" in s:
+        try:
+            repaired = s.encode("latin-1").decode("utf-8")
+            if repaired.count("�") <= s.count("�"):
+                return repaired
+        except Exception:
+            return s
+    return s
+
+def _response_text(resp: requests.Response) -> str:
+    if not resp.content:
+        return ""
+    for enc in [resp.encoding, getattr(resp, "apparent_encoding", None), "utf-8", "cp1251", "latin-1"]:
+        if not enc:
+            continue
+        try:
+            return resp.content.decode(enc, errors="replace")
+        except Exception:
+            continue
+    return resp.text
+
 def fetch_tabular_preview(url: str, timeout_sec: int = 20, max_rows: int = 25) -> dict[str, Any]:
     kind = detect_source_kind(url)
     fetch_url = _normalize_google_sheet_csv(url) if kind == "google_sheet" else url
@@ -153,19 +184,19 @@ def fetch_tabular_preview(url: str, timeout_sec: int = 20, max_rows: int = 25) -
     resp = _http_get_with_retries(fetch_url, timeout_sec=timeout_sec, headers=headers, max_attempts=3)
 
     ct = (resp.headers.get("content-type") or "").lower()
-    body = resp.text
+    body = _response_text(resp)
 
     rows: list[list[str]] = []
     if "text/csv" in ct or fetch_url.endswith("format=csv"):
         reader = csv.reader(io.StringIO(body))
         for i, row in enumerate(reader):
-            rows.append([str(x).strip() for x in row])
+            rows.append([_fix_common_mojibake(str(x).strip()) for x in row])
             if i + 1 >= max_rows:
                 break
     else:
         parser = _SimpleTableParser()
         parser.feed(body)
-        rows = parser.rows[:max_rows]
+        rows = [[_fix_common_mojibake(x) for x in row] for row in parser.rows[:max_rows]]
 
     return {
         "kind": kind,
@@ -288,6 +319,54 @@ def _to_int(raw: Any) -> int | None:
         return None
 
 
+def _split_image_urls(raw: Any) -> list[str]:
+    txt = _norm(raw)
+    if not txt:
+        return []
+    out: list[str] = []
+    for chunk in re.split(r"[\s,;|]+", txt):
+        u = (chunk or "").strip()
+        if not u:
+            continue
+        if not re.match(r"^https?://", u, flags=re.I):
+            continue
+        if u not in out:
+            out.append(u)
+    return out
+
+
+def split_size_tokens(raw: Any) -> list[str]:
+    txt = _norm(raw).upper()
+    if not txt:
+        return []
+    txt = txt.replace("РАЗМЕР", " ").replace("SIZE", " ")
+    out: list[str] = []
+    for chunk in re.split(r"[\s,;|/]+", txt):
+        token = chunk.strip().strip(".")
+        if not token:
+            continue
+        if "-" in token and re.match(r"^[0-9]{2,3}-[0-9]{2,3}$", token):
+            a, b = token.split("-", 1)
+            try:
+                aa = int(a)
+                bb = int(b)
+                if aa <= bb and bb - aa <= 6:
+                    for size_num in range(aa, bb + 1):
+                        val = str(size_num)
+                        if val not in out:
+                            out.append(val)
+                    continue
+            except Exception:
+                pass
+        cleaned = re.sub(r"[^A-Z0-9+-]", "", token)
+        if not cleaned:
+            continue
+        if re.match(r"^(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3})$", cleaned):
+            if cleaned not in out:
+                out.append(cleaned)
+    return out
+
+
 def _find_col(headers: list[str], candidates: tuple[str, ...]) -> int | None:
     h = [x.strip().lower() for x in headers]
     for i, col in enumerate(h):
@@ -295,6 +374,46 @@ def _find_col(headers: list[str], candidates: tuple[str, ...]) -> int | None:
             return i
     return None
 
+
+
+
+def _find_col_priority(headers: list[str], groups: tuple[tuple[str, ...], ...]) -> int | None:
+    lowered = [x.strip().lower() for x in headers]
+    for group in groups:
+        idx = _find_col(lowered, group)
+        if idx is not None:
+            return idx
+    return None
+
+
+
+
+def _is_non_purchase_price_header(header: str) -> bool:
+    h = (header or "").strip().lower()
+    if not h:
+        return False
+    blocked_tokens = ("ррц", "rrc", "мрц", "mrc", "розниц", "retail", "market")
+    return any(token in h for token in blocked_tokens)
+
+def _pick_price_column(headers: list[str]) -> int | None:
+    normalized = [str(x or "").strip().lower() for x in headers]
+
+    # 1) explicit dropship column always wins
+    for i, col in enumerate(normalized):
+        if any(token in col for token in ("дроп", "dropship", "drop ship", "drop")):
+            return i
+
+    # 2) fallback to generic purchase-like price columns, but skip RRC/MRC/retail
+    generic = _find_col_priority(headers, (("price", "цена", "стоим", "опт", "wholesale"),))
+    if generic is not None and not _is_non_purchase_price_header(normalized[generic]):
+        return generic
+
+    for i, col in enumerate(normalized):
+        if _is_non_purchase_price_header(col):
+            continue
+        if any(token in col for token in ("опт", "wholesale", "price", "цена", "стоим")):
+            return i
+    return None
 
 def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[dict[str, Any]]:
     if not rows:
@@ -304,7 +423,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
     body = rows[1:] if len(rows) > 1 else []
 
     idx_title = _find_col(headers, ("товар", "назв", "title", "item", "модель"))
-    idx_price = _find_col(headers, ("дроп", "dropship", "цена", "price", "опт"))
+    idx_price = _pick_price_column(headers)
     idx_color = _find_col(headers, ("цвет", "color"))
     idx_size = _find_col(headers, ("размер", "size"))
     idx_stock = _find_col(headers, ("остат", "налич", "stock", "qty", "кол-во"))
@@ -331,6 +450,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         size = _norm(row[idx_size]) if idx_size is not None and idx_size < len(row) else ""
         stock = _to_int(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else None
         image_url = _norm(row[idx_image]) if idx_image is not None and idx_image < len(row) else ""
+        image_urls = _split_image_urls(image_url)
         description = _norm(row[idx_desc]) if idx_desc is not None and idx_desc < len(row) else ""
 
         out.append({
@@ -340,6 +460,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             "size": size or None,
             "stock": stock,
             "image_url": image_url or None,
+            "image_urls": image_urls,
             "description": description or None,
         })
     return out
@@ -359,12 +480,95 @@ def generate_youth_description(title: str, category_name: str | None = None, col
     )
 
 
+def generate_ai_product_description(
+    title: str,
+    category_name: str | None = None,
+    color: str | None = None,
+    *,
+    max_chars: int = 420,
+) -> str:
+    """Generate unique product copy via free-compatible OpenRouter model with safe fallback."""
+    openrouter_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+    if not openrouter_key:
+        return generate_youth_description(title, category_name, color)
+
+    prompt = {
+        "title": _norm(title),
+        "category": _norm(category_name) or "streetwear",
+        "color": _norm(color) or "",
+        "requirements": [
+            "Пиши по-русски для аудитории 15-25",
+            "Сделай описание уникальным, без шаблонных повторов",
+            "2-4 коротких предложения",
+            "Без мата, без обещаний медицинских/гарантийных эффектов",
+            "Не используй markdown/emoji",
+        ],
+    }
+    try:
+        resp = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            timeout=(4.0, 25.0),
+            headers={
+                "Authorization": f"Bearer {openrouter_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": os.getenv("OPENROUTER_MODEL", "openrouter/auto"),
+                "temperature": 0.9,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Ты коммерческий копирайтер для e-commerce. Пиши нативно и уникально.",
+                    },
+                    {
+                        "role": "user",
+                        "content": "Сгенерируй описание товара в JSON с полем description. Данные: " + json.dumps(prompt, ensure_ascii=False),
+                    },
+                ],
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json() if resp.content else {}
+        txt = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        raw = str(txt or "").strip()
+        if raw.startswith("{"):
+            try:
+                parsed = json.loads(raw)
+                raw = str(parsed.get("description") or "").strip()
+            except Exception:
+                pass
+        raw = " ".join(raw.split())
+        if raw:
+            return raw[:max_chars]
+    except Exception:
+        pass
+    return generate_youth_description(title, category_name, color)
+
+
+MIN_MARKUP_RATIO = 1.40
+DEFAULT_MARKUP_RATIO = 1.55
+
+
+def ensure_min_markup_price(candidate_price: float | None, dropship_price: float, min_markup_ratio: float = MIN_MARKUP_RATIO) -> float:
+    base = max(0.0, float(dropship_price or 0.0))
+    floor = round(base * float(min_markup_ratio), 0) if base > 0 else 0.0
+    candidate = max(0.0, float(candidate_price or 0.0))
+    if candidate <= 0:
+        return float(floor)
+    return float(max(candidate, floor))
+
+
 def suggest_sale_price(dropship_price: float) -> float:
     base = max(0.0, float(dropship_price))
     if base <= 0:
         return 0.0
     # conservative markup for retail target
-    return round(base * 1.55, 0)
+    suggested = round(base * DEFAULT_MARKUP_RATIO, 0)
+    return ensure_min_markup_price(suggested, base)
 
 
 def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: int = 20) -> list[str]:
@@ -478,7 +682,7 @@ def _extract_prices_from_text(text: str) -> list[float]:
     return out
 
 
-def avito_market_scan(query: str, max_pages: int = 1, timeout_sec: int = 20) -> dict[str, Any]:
+def avito_market_scan(query: str, max_pages: int = 1, timeout_sec: int = 20, only_new: bool = True) -> dict[str, Any]:
     """Best-effort scan of Avito search pages (can fail due to anti-bot)."""
     q = (query or "").strip()
     if not q:
@@ -494,7 +698,8 @@ def avito_market_scan(query: str, max_pages: int = 1, timeout_sec: int = 20) -> 
     pages = max(1, min(int(max_pages or 1), 3))
     for page in range(1, pages + 1):
         try:
-            url = f"https://www.avito.ru/rossiya?cd=1&p={page}&q={requests.utils.quote(q)}"
+            q_for_search = f"{q} новый" if only_new and "нов" not in q.lower() else q
+            url = f"https://www.avito.ru/rossiya?cd=1&p={page}&q={requests.utils.quote(q_for_search)}"
             r = _http_get_with_retries(url, timeout_sec=timeout_sec, headers=headers, max_attempts=3)
             txt = r.text or ""
             found = _extract_prices_from_text(txt)
@@ -525,3 +730,47 @@ def print_signature_hamming(a: str | None, b: str | None) -> int | None:
         return sum(1 for x, y in zip(aa, bb) if x != y)
     except Exception:
         return None
+
+
+def find_similar_images(
+    reference_image_url: str,
+    candidate_image_urls: list[str],
+    *,
+    max_hamming_distance: int = 8,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Return visually similar images by average-hash signature + color hint."""
+    ref_url = (reference_image_url or "").strip()
+    if not ref_url:
+        return []
+    ref_sig = image_print_signature_from_url(ref_url)
+    if not ref_sig:
+        return []
+    ref_color = dominant_color_name_from_url(ref_url)
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in candidate_image_urls:
+        cand_url = (raw or "").strip()
+        if not cand_url or cand_url in seen or cand_url == ref_url:
+            continue
+        seen.add(cand_url)
+        cand_sig = image_print_signature_from_url(cand_url)
+        dist = print_signature_hamming(ref_sig, cand_sig)
+        if dist is None or dist > int(max_hamming_distance):
+            continue
+        cand_color = dominant_color_name_from_url(cand_url)
+        score = max(0.0, 1.0 - (float(dist) / max(1.0, float(max_hamming_distance))))
+        if ref_color and cand_color and ref_color == cand_color:
+            score = min(1.0, score + 0.08)
+        out.append(
+            {
+                "image_url": cand_url,
+                "distance": int(dist),
+                "similarity": round(score, 4),
+                "dominant_color": cand_color,
+            }
+        )
+
+    out.sort(key=lambda x: (x.get("distance", 999), -float(x.get("similarity") or 0.0)))
+    return out[: max(1, int(limit))]

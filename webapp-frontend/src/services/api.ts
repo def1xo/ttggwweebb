@@ -1338,12 +1338,29 @@ export async function analyzeImages(imageUrls: string[]) {
   }
 }
 
+export async function findSimilarImagesInSources(payload: {
+  reference_image_url: string;
+  source_ids: number[];
+  per_source_limit?: number;
+  max_hamming_distance?: number;
+  max_results?: number;
+}) {
+  try {
+    const res = await axiosInstance.post("/api/admin/supplier-intelligence/find-similar-images", payload);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function importProductsFromSupplierSources(payload: {
   source_ids: number[];
   max_items_per_source?: number;
   dry_run?: boolean;
   publish_visible?: boolean;
   ai_style_description?: boolean;
+  ai_description_enabled?: boolean;
+  ai_description_provider?: string;
   use_avito_pricing?: boolean;
   avito_max_pages?: number;
 }) {
@@ -1393,6 +1410,51 @@ export async function deleteCategory(id: number) {
   }
 }
 
+
+export async function getAdminNews(limit = 100) {
+  try {
+    const res = await axiosInstance.get(`/api/admin/news?limit=${limit}`);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function createAdminNews(payload: { title: string; text?: string; images?: string[] }) {
+  try {
+    const res = await axiosInstance.post('/api/admin/news', payload);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function patchAdminNews(id: number, payload: { title: string; text?: string; images?: string[] }) {
+  try {
+    const res = await axiosInstance.patch(`/api/admin/news/${id}`, payload);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function deleteAdminNews(id: number) {
+  try {
+    const res = await axiosInstance.delete(`/api/admin/news/${id}`);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
+export async function sendAdminCatalogToTelegram(payload: { template?: string; only_visible?: boolean; limit?: number }) {
+  try {
+    const res = await axiosInstance.post('/api/admin/catalog/send-to-telegram', payload);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
 
 
 const api: any = axiosInstance;
@@ -1464,6 +1526,12 @@ api.importProductsFromSupplierSources = importProductsFromSupplierSources;
 api.avitoMarketScan = avitoMarketScan;
 api.telegramMediaPreview = telegramMediaPreview;
 api.analyzeImages = analyzeImages;
+api.findSimilarImagesInSources = findSimilarImagesInSources;
+api.getAdminNews = getAdminNews;
+api.createAdminNews = createAdminNews;
+api.patchAdminNews = patchAdminNews;
+api.deleteAdminNews = deleteAdminNews;
+api.sendAdminCatalogToTelegram = sendAdminCatalogToTelegram;
 api.reportClientError = reportClientError;
 
 export default api;

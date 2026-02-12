@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -12,21 +14,94 @@ from app.db import models
 from app.services.importer_notifications import slugify
 from app.services.supplier_intelligence import (
     SupplierOffer,
+    ensure_min_markup_price,
     estimate_market_price,
     avito_market_scan,
     dominant_color_name_from_url,
     extract_catalog_items,
     extract_image_urls_from_html_page,
     fetch_tabular_preview,
+    generate_ai_product_description,
     generate_youth_description,
     image_print_signature_from_url,
     map_category,
+    find_similar_images,
     pick_best_offer,
     print_signature_hamming,
+    split_size_tokens,
     suggest_sale_price,
 )
 
 router = APIRouter(tags=["admin_supplier_intelligence"])
+logger = logging.getLogger(__name__)
+
+ERROR_CODE_NETWORK_TIMEOUT = "network_timeout"
+ERROR_CODE_INVALID_IMAGE = "invalid_image"
+ERROR_CODE_PARSE_FAILED = "parse_failed"
+ERROR_CODE_DB_CONFLICT = "db_conflict"
+ERROR_CODE_UNKNOWN = "unknown"
+TOP_FAILING_SOURCES_LIMIT = 5
+ERROR_SAMPLES_LIMIT = 3
+ERROR_MESSAGE_MAX_LEN = 500
+
+COLOR_TOKENS = {
+    "красный", "красная", "красное", "красные",
+    "синий", "синяя", "синее", "синие",
+    "черный", "черная", "черное", "черные",
+    "белый", "белая", "белое", "белые",
+    "зеленый", "зеленая", "зеленое", "зеленые",
+    "серый", "серая", "серое", "серые",
+    "розовый", "розовая", "розовое", "розовые",
+    "фиолетовый", "фиолетовая", "фиолетовое", "фиолетовые",
+    "желтый", "желтая", "желтое", "желтые",
+    "голубой", "голубая", "голубое", "голубые",
+    "orange", "red", "blue", "black", "white", "green", "grey", "gray", "pink", "purple", "yellow",
+}
+
+
+def _normalize_error_message(exc: Exception) -> str:
+    message = " ".join(str(exc).strip().split())
+    if len(message) > ERROR_MESSAGE_MAX_LEN:
+        return f"{message[:ERROR_MESSAGE_MAX_LEN - 3]}..."
+    return message
+
+
+def _canonical_product_title(raw_title: str | None, explicit_color: str | None = None) -> str:
+    title = " ".join(str(raw_title or "").strip().split())
+    if not title:
+        return ""
+    tokens = [t for t in re.split(r"\s+", title) if t]
+    while len(tokens) > 1:
+        tail = re.sub(r"[^a-zA-Zа-яА-ЯёЁ]", "", tokens[-1]).lower()
+        if not tail:
+            tokens.pop()
+            continue
+        if tail in COLOR_TOKENS:
+            tokens.pop()
+            continue
+        break
+    if explicit_color:
+        color_parts = [re.sub(r"[^a-zA-Zа-яА-ЯёЁ]", "", x).lower() for x in str(explicit_color).split()]
+        color_parts = [x for x in color_parts if x]
+        if color_parts and len(tokens) >= len(color_parts):
+            tail_parts = [re.sub(r"[^a-zA-Zа-яА-ЯёЁ]", "", x).lower() for x in tokens[-len(color_parts):]]
+            if tail_parts == color_parts:
+                tokens = tokens[:-len(color_parts)]
+    out = " ".join(tokens).strip()
+    return out if len(out) >= 3 else title
+
+
+def _classify_import_error(exc: Exception) -> str:
+    if isinstance(exc, IntegrityError):
+        return ERROR_CODE_DB_CONFLICT
+    message = str(exc).lower()
+    if any(token in message for token in ("timeout", "timed out", "connection", "429", "too many requests")):
+        return ERROR_CODE_NETWORK_TIMEOUT
+    if "not an image" in message or "invalid image" in message:
+        return ERROR_CODE_INVALID_IMAGE
+    if "parse" in message:
+        return ERROR_CODE_PARSE_FAILED
+    return ERROR_CODE_UNKNOWN
 
 
 class SupplierSourceIn(BaseModel):
@@ -344,8 +419,20 @@ class ImportProductsIn(BaseModel):
     dry_run: bool = True
     publish_visible: bool = False
     ai_style_description: bool = True
-    use_avito_pricing: bool = False
+    ai_description_provider: str = Field(default="openrouter", max_length=64)
+    ai_description_enabled: bool = True
+    use_avito_pricing: bool = True
     avito_max_pages: int = Field(default=1, ge=1, le=3)
+
+
+class ImportSourceReport(BaseModel):
+    source_id: int
+    url: str
+    imported: int = 0
+    errors: int = 0
+    error_codes: dict[str, int] = Field(default_factory=dict)
+    error_samples: list[str] = Field(default_factory=list)
+    last_error_message: str | None = None
 
 
 class ImportProductsOut(BaseModel):
@@ -353,7 +440,21 @@ class ImportProductsOut(BaseModel):
     created_products: int
     updated_products: int
     created_variants: int
-    source_reports: list[dict[str, object]] = Field(default_factory=list)
+    source_reports: list[ImportSourceReport] = Field(default_factory=list)
+
+
+def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
+    return ImportSourceReport(source_id=source_id, url=source_url)
+
+
+def _register_source_error(report: ImportSourceReport, exc: Exception) -> None:
+    code = _classify_import_error(exc)
+    message = _normalize_error_message(exc)
+    report.errors += 1
+    report.last_error_message = message
+    report.error_codes[code] = int(report.error_codes.get(code) or 0) + 1
+    if message and message not in report.error_samples and len(report.error_samples) < ERROR_SAMPLES_LIMIT:
+        report.error_samples.append(message)
 
 
 
@@ -388,6 +489,23 @@ class ImageAnalysisIn(BaseModel):
 class ImageAnalysisOut(BaseModel):
     image_url: str
     print_signature: str | None = None
+    dominant_color: str | None = None
+
+
+class SimilarImagesIn(BaseModel):
+    reference_image_url: str = Field(min_length=5, max_length=2000)
+    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=200)
+    per_source_limit: int = Field(default=15, ge=1, le=60)
+    max_hamming_distance: int = Field(default=8, ge=1, le=20)
+    max_results: int = Field(default=20, ge=1, le=100)
+
+
+class SimilarImageOut(BaseModel):
+    source_id: int
+    source_url: str
+    image_url: str
+    distance: int
+    similarity: float
     dominant_color: str | None = None
 
 
@@ -431,6 +549,50 @@ def analyze_images(payload: ImageAnalysisIn, _admin=Depends(get_current_admin_us
         color = dominant_color_name_from_url(url)
         out.append(ImageAnalysisOut(image_url=url, print_signature=sig, dominant_color=color))
     return out
+
+
+@router.post("/supplier-intelligence/find-similar-images", response_model=list[SimilarImageOut])
+def find_similar_images_in_sources(
+    payload: SimilarImagesIn,
+    _admin=Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    source_ids = [int(x) for x in payload.source_ids if int(x) > 0]
+    if not source_ids:
+        return []
+    sources = (
+        db.query(models.SupplierSource)
+        .filter(models.SupplierSource.id.in_(source_ids), models.SupplierSource.active.is_(True))
+        .all()
+    )
+    out: list[SimilarImageOut] = []
+    for src in sources:
+        src_url = (src.source_url or "").strip()
+        if not src_url:
+            continue
+        try:
+            candidate_urls = extract_image_urls_from_html_page(src_url, limit=payload.per_source_limit)
+            matches = find_similar_images(
+                payload.reference_image_url,
+                candidate_urls,
+                max_hamming_distance=payload.max_hamming_distance,
+                limit=payload.max_results,
+            )
+            for item in matches:
+                out.append(
+                    SimilarImageOut(
+                        source_id=int(src.id),
+                        source_url=src_url,
+                        image_url=str(item.get("image_url") or ""),
+                        distance=int(item.get("distance") or 0),
+                        similarity=float(item.get("similarity") or 0.0),
+                        dominant_color=(str(item.get("dominant_color")) if item.get("dominant_color") else None),
+                    )
+                )
+        except Exception:
+            continue
+    out.sort(key=lambda x: (x.distance, -x.similarity))
+    return out[: payload.max_results]
 
 
 class OfferIn(BaseModel):
@@ -507,9 +669,19 @@ def import_products_from_sources(
     created_products = 0
     updated_products = 0
     created_variants = 0
-    source_reports: list[dict[str, object]] = []
+    source_reports: list[ImportSourceReport] = []
     signature_product_map: dict[str, int] = {}
     avito_price_cache: dict[str, float | None] = {}
+    source_items_map: dict[int, list[dict[str, object]]] = {}
+    title_min_dropship: dict[str, float] = {}
+    known_image_urls: list[str] = []
+    known_item_by_image_url: dict[str, dict[str, object]] = {}
+
+    def _title_key(raw_title: str | None, raw_color: str | None = None) -> str:
+        return re.sub(r"\s+", " ", _canonical_product_title(raw_title, raw_color).strip().lower())
+
+    def _is_placeholder_title(raw_title: str | None) -> bool:
+        return _title_key(raw_title).startswith("позиция из tg #")
 
     def get_or_create_category(name: str) -> models.Category:
         nonlocal created_categories
@@ -564,67 +736,165 @@ def import_products_from_sources(
                 return db.query(models.Product).filter(models.Product.id == pid).one_or_none()
         return None
 
-    def pick_sale_price(title: str, dropship_price: float) -> float:
+    def pick_sale_price(title: str, dropship_price: float, min_dropship_price: float | None = None) -> float:
+        base = float(min_dropship_price or 0) if float(min_dropship_price or 0) > 0 else float(dropship_price or 0)
+        if base <= 0:
+            base = float(dropship_price or 0)
         if payload.use_avito_pricing:
             key = (title or "").strip().lower()
             if key not in avito_price_cache:
-                scan = avito_market_scan(title, max_pages=payload.avito_max_pages)
+                scan = avito_market_scan(title, max_pages=payload.avito_max_pages, only_new=True)
                 avito_price_cache[key] = float(scan.get("suggested")) if scan.get("suggested") is not None else None
             suggested = avito_price_cache.get(key)
             if suggested and suggested > 0:
-                return float(suggested)
-        return suggest_sale_price(dropship_price)
+                return ensure_min_markup_price(float(suggested), base)
+        return ensure_min_markup_price(round(base * 1.4, 0), base)
 
+    # pre-scan all selected sources to get minimal закупка per title and known image pool
     for src in sources:
         src_url = (src.source_url or "").strip()
         if not src_url:
+            source_items_map[int(src.id)] = []
             continue
-        report = {"source_id": int(src.id), "url": src_url, "imported": 0, "errors": 0}
         try:
             preview = fetch_tabular_preview(src_url, max_rows=max(5, payload.max_items_per_source + 1))
             rows = preview.get("rows_preview") or []
             items = extract_catalog_items(rows, max_items=payload.max_items_per_source)
             if not items and "t.me/" in src_url:
-                # fallback for telegram channels/pages: create image-first pseudo items
                 imgs = extract_image_urls_from_html_page(src_url, limit=min(payload.max_items_per_source, 30))
                 items = [
-                    {"title": f"Позиция из TG #{i+1}", "dropship_price": 0.0, "image_url": u}
+                    {
+                        "title": f"Позиция из TG #{i+1}",
+                        "dropship_price": 0.0,
+                        "image_url": u,
+                        "image_urls": [u],
+                        "__tg_fallback__": True,
+                    }
                     for i, u in enumerate(imgs)
                 ]
+            source_items_map[int(src.id)] = items
+            for it in items:
+                title = str(it.get("title") or "").strip()
+                title_for_group = _canonical_product_title(title, it.get("color"))
+                ds_price = float(it.get("dropship_price") or 0)
+                if title and ds_price > 0 and not _is_placeholder_title(title):
+                    k = _title_key(title)
+                    prev = title_min_dropship.get(k)
+                    title_min_dropship[k] = ds_price if prev is None else min(prev, ds_price)
+                row_image_urls = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
+                image_url = str(it.get("image_url") or "").strip()
+                pool = [image_url, *row_image_urls]
+                if title and ds_price > 0 and not _is_placeholder_title(title):
+                    for u in pool:
+                        uu = str(u or "").strip()
+                        if not uu:
+                            continue
+                        if uu not in known_item_by_image_url:
+                            known_item_by_image_url[uu] = dict(it)
+                            known_image_urls.append(uu)
+        except Exception:
+            source_items_map[int(src.id)] = []
+
+    for src in sources:
+        src_url = (src.source_url or "").strip()
+        if not src_url:
+            continue
+        report = _new_source_report(source_id=int(src.id), source_url=src_url)
+        try:
+            items = source_items_map.get(int(src.id), [])
         except Exception as exc:
-            report["errors"] = 1
-            report["error_message"] = str(exc)
+            _register_source_error(report, exc)
             source_reports.append(report)
             continue
 
         for it in items:
             try:
                 title = str(it.get("title") or "").strip()
-                if not title:
-                    continue
                 ds_price = float(it.get("dropship_price") or 0)
-                if ds_price <= 0:
-                    # if no dropship price in source row, keep minimal placeholder for dry-run/preview flows
-                    ds_price = 1.0
-                cat_name = map_category(title)
+                is_tg_fallback = bool(it.get("__tg_fallback__")) or _is_placeholder_title(title)
+                if is_tg_fallback:
+                    fallback_ref = str(it.get("image_url") or "").strip()
+                    if not fallback_ref:
+                        fallback_images = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
+                        fallback_ref = fallback_images[0] if fallback_images else ""
+                    matched_item: dict[str, object] | None = None
+                    if fallback_ref and known_image_urls:
+                        best = find_similar_images(
+                            fallback_ref,
+                            known_image_urls,
+                            max_hamming_distance=7,
+                            limit=1,
+                        )
+                        if best:
+                            matched_item = known_item_by_image_url.get(str(best[0].get("image_url") or ""))
+                    if matched_item:
+                        if not title or _is_placeholder_title(title):
+                            title = str(matched_item.get("title") or "").strip()
+                        if ds_price <= 0:
+                            ds_price = float(matched_item.get("dropship_price") or 0)
+                        if not it.get("color") and matched_item.get("color"):
+                            it["color"] = matched_item.get("color")
+                        if not it.get("size") and matched_item.get("size"):
+                            it["size"] = matched_item.get("size")
+                        if not it.get("description") and matched_item.get("description"):
+                            it["description"] = matched_item.get("description")
+
+                if not title or ds_price <= 0:
+                    # skip generic TG placeholders and unresolved items instead of polluting catalog
+                    continue
+
+                min_dropship = title_min_dropship.get(_title_key(title, it.get("color")))
+                cat_name = map_category(title_for_group or title)
                 category = get_or_create_category(cat_name)
-                slug_base = (slugify(title) or f"item-{category.id}")[:500]
+                effective_title = (title_for_group or title).strip()
+                slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
                 p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
                 if not p:
-                    p = db.query(models.Product).filter(models.Product.title == title, models.Product.category_id == category.id).one_or_none()
+                    p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
 
                 desc = str(it.get("description") or "").strip()
                 if payload.ai_style_description and not desc:
-                    desc = generate_youth_description(title, cat_name, it.get("color"))
-                sale_price = pick_sale_price(title, ds_price)
+                    if payload.ai_description_enabled and payload.ai_description_provider.lower() == "openrouter":
+                        desc = generate_ai_product_description(effective_title, cat_name, it.get("color"))
+                    else:
+                        desc = generate_youth_description(effective_title, cat_name, it.get("color"))
+                sale_price = pick_sale_price(effective_title, ds_price, min_dropship_price=min_dropship)
+                row_image_urls = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
                 image_url = str(it.get("image_url") or "").strip() or None
+                if not image_url and row_image_urls:
+                    image_url = row_image_urls[0]
                 if not image_url and "t.me/" in src_url:
                     try:
                         tg_imgs = extract_image_urls_from_html_page(src_url, limit=3)
                         image_url = tg_imgs[0] if tg_imgs else None
+                        if tg_imgs:
+                            row_image_urls = [str(x).strip() for x in tg_imgs if str(x).strip()]
                     except Exception:
                         image_url = None
+
+                image_urls: list[str] = []
+                for u in [image_url, *row_image_urls]:
+                    uu = str(u or "").strip()
+                    if uu and uu not in image_urls:
+                        image_urls.append(uu)
+
+                # auto-enrich item gallery with similar photos from known supplier pool
+                if image_url and known_image_urls:
+                    try:
+                        sim_items = find_similar_images(image_url, known_image_urls, max_hamming_distance=5, limit=8)
+                        for sim in sim_items:
+                            sim_url = str(sim.get("image_url") or "").strip()
+                            if not sim_url or sim_url in image_urls:
+                                continue
+                            matched_meta = known_item_by_image_url.get(sim_url) or {}
+                            if _title_key(str(matched_meta.get("title") or "")) != _title_key(title):
+                                continue
+                            image_urls.append(sim_url)
+                            if len(image_urls) >= 8:
+                                break
+                    except Exception:
+                        pass
 
                 if not p:
                     # unique slug fallback
@@ -633,7 +903,7 @@ def import_products_from_sources(
                         slug = f"{slug_base[:490]}-{n}"
                         n += 1
                     p = models.Product(
-                        title=title,
+                        title=effective_title,
                         slug=slug,
                         description=desc or None,
                         base_price=Decimal(str(sale_price)),
@@ -644,6 +914,9 @@ def import_products_from_sources(
                     )
                     db.add(p)
                     db.flush()
+                    if image_urls:
+                        for idx, img_u in enumerate(image_urls[:8]):
+                            db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
                     created_products += 1
                 else:
                     changed = False
@@ -656,6 +929,23 @@ def import_products_from_sources(
                     if image_url and not p.default_image:
                         p.default_image = image_url
                         changed = True
+                    if image_urls:
+                        existing_urls = {
+                            str(x.url).strip()
+                            for x in db.query(models.ProductImage).filter(models.ProductImage.product_id == p.id).all()
+                            if str(x.url).strip()
+                        }
+                        next_sort = int(
+                            db.query(models.ProductImage)
+                            .filter(models.ProductImage.product_id == p.id)
+                            .count()
+                        )
+                        for img_u in image_urls[:8]:
+                            if img_u in existing_urls:
+                                continue
+                            db.add(models.ProductImage(product_id=p.id, url=img_u, sort=next_sort))
+                            next_sort += 1
+                            changed = True
                     if changed:
                         db.add(p)
                         updated_products += 1
@@ -671,54 +961,76 @@ def import_products_from_sources(
                 detected_color = dominant_color_name_from_url(image_url) if image_url else None
                 src_color = it.get("color") or detected_color
 
-                size = get_or_create_size(it.get("size"))
+                size_tokens = split_size_tokens(it.get("size"))
+                if not size_tokens:
+                    size_tokens = [""]
                 color = get_or_create_color(src_color)
-                variant = (
-                    db.query(models.ProductVariant)
-                    .filter(models.ProductVariant.product_id == p.id)
-                    .filter(models.ProductVariant.size_id == (size.id if size else None))
-                    .filter(models.ProductVariant.color_id == (color.id if color else None))
-                    .one_or_none()
-                )
                 stock_qty = int(it.get("stock") or 0)
-                if variant is None:
-                    variant = models.ProductVariant(
-                        product_id=p.id,
-                        size_id=size.id if size else None,
-                        color_id=color.id if color else None,
-                        price=Decimal(str(sale_price)),
-                        stock_quantity=max(0, stock_qty),
-                        images=[image_url] if image_url else None,
-                    )
-                    try:
-                        with db.begin_nested():
-                            db.add(variant)
-                            db.flush()
-                        created_variants += 1
-                    except IntegrityError:
-                        variant = (
-                            db.query(models.ProductVariant)
-                            .filter(models.ProductVariant.product_id == p.id)
-                            .filter(models.ProductVariant.size_id == (size.id if size else None))
-                            .filter(models.ProductVariant.color_id == (color.id if color else None))
-                            .one_or_none()
-                        )
-                        if variant is None:
-                            raise
-                else:
-                    if float(variant.price or 0) <= 0 and sale_price > 0:
-                        variant.price = Decimal(str(sale_price))
-                    if stock_qty > 0 and int(variant.stock_quantity or 0) <= 0:
-                        variant.stock_quantity = stock_qty
-                    if image_url and not variant.images:
-                        variant.images = [image_url]
-                    db.add(variant)
+                per_size_stock = stock_qty // len(size_tokens) if stock_qty > 0 and len(size_tokens) > 1 else stock_qty
 
-                report["imported"] = int(report.get("imported") or 0) + 1
-            except Exception:
-                report["errors"] = int(report.get("errors") or 0) + 1
+                for size_name in size_tokens:
+                    size = get_or_create_size(size_name) if size_name else None
+                    variant = (
+                        db.query(models.ProductVariant)
+                        .filter(models.ProductVariant.product_id == p.id)
+                        .filter(models.ProductVariant.size_id == (size.id if size else None))
+                        .filter(models.ProductVariant.color_id == (color.id if color else None))
+                        .one_or_none()
+                    )
+                    if variant is None:
+                        variant = models.ProductVariant(
+                            product_id=p.id,
+                            size_id=size.id if size else None,
+                            color_id=color.id if color else None,
+                            price=Decimal(str(sale_price)),
+                            stock_quantity=max(0, per_size_stock),
+                            images=image_urls or ([image_url] if image_url else None),
+                        )
+                        try:
+                            with db.begin_nested():
+                                db.add(variant)
+                                db.flush()
+                            created_variants += 1
+                        except IntegrityError:
+                            variant = (
+                                db.query(models.ProductVariant)
+                                .filter(models.ProductVariant.product_id == p.id)
+                                .filter(models.ProductVariant.size_id == (size.id if size else None))
+                                .filter(models.ProductVariant.color_id == (color.id if color else None))
+                                .one_or_none()
+                            )
+                            if variant is None:
+                                raise
+                    else:
+                        if float(variant.price or 0) <= 0 and sale_price > 0:
+                            variant.price = Decimal(str(sale_price))
+                        if per_size_stock > 0 and int(variant.stock_quantity or 0) <= 0:
+                            variant.stock_quantity = per_size_stock
+                        if image_urls and not variant.images:
+                            variant.images = image_urls
+                        elif image_url and not variant.images:
+                            variant.images = [image_url]
+                        db.add(variant)
+
+                report.imported += 1
+            except Exception as exc:
+                _register_source_error(report, exc)
 
         source_reports.append(report)
+
+    top_failing_sources = sorted(
+        (x for x in source_reports if x.errors > 0),
+        key=lambda x: x.errors,
+        reverse=True,
+    )[:TOP_FAILING_SOURCES_LIMIT]
+    if top_failing_sources:
+        logger.warning(
+            "supplier import top failures: %s",
+            [
+                {"source_id": x.source_id, "url": x.url, "errors": x.errors, "error_codes": x.error_codes}
+                for x in top_failing_sources
+            ],
+        )
 
     if payload.dry_run:
         db.rollback()
