@@ -1,13 +1,12 @@
-﻿# backend/app/tests/test_commissions.py
-import pytest
 from decimal import Decimal
+
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import Base, User, Manager, Assistant, Product, ProductVariant, Order, OrderItem, PromoCode
-from app.services.commissions import calculate_and_record_commissions
+from app.db.models import Base, Commission, ManagerAssistant, Order, User, UserRole
+from app.services.commissions import compute_and_apply_commissions
 
-# Use in-memory SQLite for tests
 TEST_DB = "sqlite:///:memory:"
 
 
@@ -24,93 +23,111 @@ def db_session():
         Base.metadata.drop_all(engine)
 
 
-def test_manager_and_assistant_commission_simple(db_session):
-    # create manager user
-    manager_user = User(telegram_id="mgr1", username="mgr1", role='manager', balance=Decimal('0.00'))
-    db_session.add(manager_user)
+def test_compute_and_apply_commissions_manager_and_assistant_first_n(db_session):
+    manager_user = User(
+        telegram_id=101,
+        username="mgr1",
+        role=UserRole.manager,
+        balance=Decimal("0.00"),
+        first_n_count=3,
+        first_n_rate=Decimal("0.10"),
+        ongoing_rate=Decimal("0.05"),
+    )
+    assistant_user = User(
+        telegram_id=102,
+        username="ast1",
+        role=UserRole.assistant,
+        balance=Decimal("0.00"),
+    )
+    customer_user = User(
+        telegram_id=103,
+        username="cust1",
+        role=UserRole.user,
+        balance=Decimal("0.00"),
+    )
+    db_session.add_all([manager_user, assistant_user, customer_user])
     db_session.flush()
 
-    manager = Manager(user_id=manager_user.id, first_n_count=3, first_n_rate=Decimal('0.10'), ongoing_rate=Decimal('0.05'), assistant_max_rate=Decimal('0.10'))
-    db_session.add(manager)
+    db_session.add(ManagerAssistant(manager_id=manager_user.id, assistant_id=assistant_user.id, percent=10))
     db_session.flush()
 
-    manager_user.manager_id = manager.id
-    db_session.flush()
-
-    # create assistant
-    assistant_user = User(telegram_id="ast1", username="ast1", role='assistant', balance=Decimal('0.00'))
-    db_session.add(assistant_user)
-    db_session.flush()
-
-    assistant = Assistant(user_id=assistant_user.id, manager_id=manager.id, assigned_rate=Decimal('0.10'))
-    db_session.add(assistant)
-    db_session.flush()
-
-    assistant_user.assistant_id = assistant.id
-    db_session.flush()
-
-    # create customer and bind to assistant via promo (simulate binding)
-    customer = User(telegram_id="cust1", username="cust1", role='customer', balance=Decimal('0.00'),
-                    bound_owner_id=assistant_user.id, bound_owner_type='assistant')
-    db_session.add(customer)
-    db_session.flush()
-
-    # create an order (first paid order)
-    order = Order(user_id=customer.id, status='paid', total_amount=Decimal('10000.00'), manager_id=None, assistant_id=None)
+    order = Order(
+        user_id=customer_user.id,
+        manager_id=manager_user.id,
+        assistant_id=assistant_user.id,
+        status="paid",
+        total_amount=Decimal("10000.00"),
+    )
     db_session.add(order)
     db_session.flush()
 
-    # call commission calc
-    calculate_and_record_commissions(db_session, order.id, commit=True)
+    created = compute_and_apply_commissions(db_session, order, admin_user_id=None, update_order_status=True)
+    db_session.commit()
 
-    # reload entities
     db_session.refresh(manager_user)
     db_session.refresh(assistant_user)
 
-    # manager should have received 10% of 10000 = 1000.00
-    assert manager_user.balance == Decimal('1000.00')
+    assert manager_user.balance == Decimal("900.00")
+    assert assistant_user.balance == Decimal("100.00")
 
-    # Commission records: 2 entries (manager credited, assistant owed)
-    records = db_session.query(models.CommissionRecord).filter(models.CommissionRecord.order_id == order.id).all()
-    assert len(records) == 2
-    mgr_rec = [r for r in records if r.role == 'manager'][0]
-    ast_rec = [r for r in records if r.role == 'assistant'][0]
-    assert mgr_rec.amount == Decimal('1000.00')
-    # assistant gets 10% of manager gross = 1000 * 0.10 = 100.00
-    assert ast_rec.amount == Decimal('100.00')
+    manager_record = next(c for c in created if c.role == "manager")
+    assistant_record = next(c for c in created if c.role == "assistant")
+    admin_record = next(c for c in created if c.role == "admin")
+
+    assert manager_record.base_amount == Decimal("1000.00")
+    assert manager_record.amount == Decimal("900.00")
+    assert assistant_record.amount == Decimal("100.00")
+    assert admin_record.amount == Decimal("9000.00")
 
 
-def test_manager_ongoing_rate_after_three(db_session):
-    # create manager user and manager
-    manager_user = User(telegram_id="mgr2", username="mgr2", role='manager', balance=Decimal('0.00'))
-    db_session.add(manager_user)
+def test_compute_and_apply_commissions_uses_ongoing_rate_after_first_n(db_session):
+    manager_user = User(
+        telegram_id=201,
+        username="mgr2",
+        role=UserRole.manager,
+        balance=Decimal("0.00"),
+        first_n_count=3,
+        first_n_rate=Decimal("0.10"),
+        ongoing_rate=Decimal("0.05"),
+    )
+    customer_user = User(
+        telegram_id=202,
+        username="cust2",
+        role=UserRole.user,
+        balance=Decimal("0.00"),
+    )
+    db_session.add_all([manager_user, customer_user])
     db_session.flush()
-    manager = Manager(user_id=manager_user.id, first_n_count=3, first_n_rate=Decimal('0.10'), ongoing_rate=Decimal('0.05'), assistant_max_rate=Decimal('0.10'))
-    db_session.add(manager)
-    db_session.flush()
-    manager_user.manager_id = manager.id
-    db_session.flush()
 
-    # customer bound to manager
-    customer = User(telegram_id="cust2", username="cust2", role='customer', balance=Decimal('0.00'),
-                    bound_owner_id=manager_user.id, bound_owner_type='manager')
-    db_session.add(customer)
-    db_session.flush()
-
-    # create 3 prior paid orders for this customer under this manager
     for _ in range(3):
-        past_order = Order(user_id=customer.id, status='paid', total_amount=Decimal('100.00'), manager_id=manager.id)
-        db_session.add(past_order)
+        db_session.add(
+            Order(
+                user_id=customer_user.id,
+                manager_id=manager_user.id,
+                status="paid",
+                total_amount=Decimal("100.00"),
+            )
+        )
     db_session.flush()
 
-    # new order (4th) should be at ongoing_rate 5%
-    order = Order(user_id=customer.id, status='paid', total_amount=Decimal('200.00'))
-    db_session.add(order)
+    current_order = Order(
+        user_id=customer_user.id,
+        manager_id=manager_user.id,
+        status="paid",
+        total_amount=Decimal("200.00"),
+    )
+    db_session.add(current_order)
     db_session.flush()
 
-    calculate_and_record_commissions(db_session, order.id, commit=True)
+    compute_and_apply_commissions(db_session, current_order, admin_user_id=None, update_order_status=True)
+    db_session.commit()
 
     db_session.refresh(manager_user)
-    # manager should be credited with 5% of 200 = 10.00
-    assert manager_user.balance == Decimal('10.00')
+    assert manager_user.balance == Decimal("10.00")
 
+    manager_commission = (
+        db_session.query(Commission)
+        .filter(Commission.order_id == current_order.id, Commission.role == "manager")
+        .one()
+    )
+    assert manager_commission.amount == Decimal("10.00")
