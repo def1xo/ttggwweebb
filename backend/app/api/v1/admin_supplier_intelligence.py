@@ -91,6 +91,27 @@ def _canonical_product_title(raw_title: str | None, explicit_color: str | None =
     return out if len(out) >= 3 else title
 
 
+def _pick_product_id_by_signature(
+    candidate_signatures: list[tuple[int, str | None]],
+    target_signature: str | None,
+    max_distance: int = 6,
+) -> int | None:
+    if not candidate_signatures:
+        return None
+    if not target_signature:
+        return int(candidate_signatures[0][0])
+    best_id: int | None = None
+    best_dist: int | None = None
+    for pid, cand_sig in candidate_signatures:
+        dist = print_signature_hamming(target_signature, cand_sig)
+        if dist is None or dist > int(max_distance):
+            continue
+        if best_dist is None or dist < best_dist:
+            best_dist = dist
+            best_id = int(pid)
+    return best_id
+
+
 def _classify_import_error(exc: Exception) -> str:
     if isinstance(exc, IntegrityError):
         return ERROR_CODE_DB_CONFLICT
@@ -671,6 +692,7 @@ def import_products_from_sources(
     created_variants = 0
     source_reports: list[ImportSourceReport] = []
     signature_product_map: dict[str, int] = {}
+    title_product_candidates: dict[str, list[tuple[int, str | None]]] = {}
     avito_price_cache: dict[str, float | None] = {}
     source_items_map: dict[int, list[dict[str, object]]] = {}
     title_min_dropship: dict[str, float] = {}
@@ -735,6 +757,17 @@ def import_products_from_sources(
             if dist is not None and dist <= 6:
                 return db.query(models.Product).filter(models.Product.id == pid).one_or_none()
         return None
+
+    def remember_product_candidate(title_key: str, product_id: int, signature: str | None) -> None:
+        if not title_key:
+            return
+        bucket = title_product_candidates.setdefault(title_key, [])
+        for idx, (pid, psig) in enumerate(bucket):
+            if int(pid) == int(product_id):
+                if signature and not psig:
+                    bucket[idx] = (int(product_id), signature)
+                return
+        bucket.append((int(product_id), signature))
 
     def pick_sale_price(title: str, dropship_price: float, min_dropship_price: float | None = None) -> float:
         base = float(min_dropship_price or 0) if float(min_dropship_price or 0) > 0 else float(dropship_price or 0)
@@ -843,7 +876,8 @@ def import_products_from_sources(
                     # skip generic TG placeholders and unresolved items instead of polluting catalog
                     continue
 
-                min_dropship = title_min_dropship.get(_title_key(title, it.get("color")))
+                base_title_key = _title_key(title, it.get("color"))
+                min_dropship = title_min_dropship.get(base_title_key)
                 cat_name = map_category(title_for_group or title)
                 category = get_or_create_category(cat_name)
                 effective_title = (title_for_group or title).strip()
@@ -950,13 +984,26 @@ def import_products_from_sources(
                         db.add(p)
                         updated_products += 1
 
-                # image-based analysis: same print with different colors -> same product, new color variants
                 sig = image_print_signature_from_url(image_url) if image_url else None
+                candidate_pid = _pick_product_id_by_signature(
+                    title_product_candidates.get(base_title_key, []),
+                    sig,
+                    max_distance=6,
+                )
+                if candidate_pid and (not p or int(p.id) != int(candidate_pid)):
+                    matched_p = db.query(models.Product).filter(models.Product.id == int(candidate_pid)).one_or_none()
+                    if matched_p is not None:
+                        p = matched_p
+
+                # image-based analysis: same print with different colors -> same product, new color variants
                 same_print_product = find_product_by_signature(sig)
                 if same_print_product and (not p or p.id != same_print_product.id):
                     p = same_print_product
                 elif sig and p:
                     signature_product_map[sig] = int(p.id)
+
+                if p:
+                    remember_product_candidate(base_title_key, int(p.id), sig)
 
                 detected_color = dominant_color_name_from_url(image_url) if image_url else None
                 src_color = it.get("color") or detected_color

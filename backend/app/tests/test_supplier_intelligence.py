@@ -283,6 +283,20 @@ def test_canonical_product_title_respects_explicit_color_suffix():
     assert asi._canonical_product_title("Зип Balenciaga синий", "синий") == "Зип Balenciaga"
 
 
+def test_pick_product_id_by_signature_prefers_closest_candidate():
+    out = asi._pick_product_id_by_signature(
+        [(11, "aaaa"), (22, "aaab"), (33, "bbbb")],
+        "aaab",
+        max_distance=3,
+    )
+    assert out == 22
+
+
+def test_pick_product_id_by_signature_falls_back_to_first_without_target_sig():
+    out = asi._pick_product_id_by_signature([(11, "aaaa"), (22, "aaab")], None, max_distance=3)
+    assert out == 11
+
+
 def test_response_text_decodes_cp1251_payload():
     class DummyResp:
         content = "ЦЕНА ОПТ".encode("cp1251")
