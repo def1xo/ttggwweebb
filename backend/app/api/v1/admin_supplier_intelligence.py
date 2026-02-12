@@ -632,6 +632,7 @@ def import_products_from_sources(
     created_variants = 0
     source_reports: list[ImportSourceReport] = []
     signature_product_map: dict[str, int] = {}
+    title_product_candidates: dict[str, list[tuple[int, str | None]]] = {}
     avito_price_cache: dict[str, float | None] = {}
     source_items_map: dict[int, list[dict[str, object]]] = {}
     title_min_dropship: dict[str, float] = {}
@@ -806,11 +807,12 @@ def import_products_from_sources(
                 min_dropship = title_min_dropship.get(_title_key(title))
                 cat_name = map_category(title)
                 category = get_or_create_category(cat_name)
-                slug_base = (slugify(title) or f"item-{category.id}")[:500]
+                effective_title = (title_for_group or title).strip()
+                slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
                 p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
                 if not p:
-                    p = db.query(models.Product).filter(models.Product.title == title, models.Product.category_id == category.id).one_or_none()
+                    p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
 
                 desc = str(it.get("description") or "").strip()
                 if payload.ai_style_description and not desc:
@@ -862,7 +864,7 @@ def import_products_from_sources(
                         slug = f"{slug_base[:490]}-{n}"
                         n += 1
                     p = models.Product(
-                        title=title,
+                        title=effective_title,
                         slug=slug,
                         description=desc or None,
                         base_price=Decimal(str(sale_price)),
@@ -909,13 +911,26 @@ def import_products_from_sources(
                         db.add(p)
                         updated_products += 1
 
-                # image-based analysis: same print with different colors -> same product, new color variants
                 sig = image_print_signature_from_url(image_url) if image_url else None
+                candidate_pid = _pick_product_id_by_signature(
+                    title_product_candidates.get(base_title_key, []),
+                    sig,
+                    max_distance=6,
+                )
+                if candidate_pid and (not p or int(p.id) != int(candidate_pid)):
+                    matched_p = db.query(models.Product).filter(models.Product.id == int(candidate_pid)).one_or_none()
+                    if matched_p is not None:
+                        p = matched_p
+
+                # image-based analysis: same print with different colors -> same product, new color variants
                 same_print_product = find_product_by_signature(sig)
                 if same_print_product and (not p or p.id != same_print_product.id):
                     p = same_print_product
                 elif sig and p:
                     signature_product_map[sig] = int(p.id)
+
+                if p:
+                    remember_product_candidate(base_title_key, int(p.id), sig)
 
                 detected_color = dominant_color_name_from_url(image_url) if image_url else None
                 src_color = it.get("color") or detected_color
