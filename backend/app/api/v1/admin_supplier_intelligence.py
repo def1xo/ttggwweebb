@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,12 +13,14 @@ from app.db import models
 from app.services.importer_notifications import slugify
 from app.services.supplier_intelligence import (
     SupplierOffer,
+    ensure_min_markup_price,
     estimate_market_price,
     avito_market_scan,
     dominant_color_name_from_url,
     extract_catalog_items,
     extract_image_urls_from_html_page,
     fetch_tabular_preview,
+    generate_ai_product_description,
     generate_youth_description,
     image_print_signature_from_url,
     map_category,
@@ -27,6 +30,36 @@ from app.services.supplier_intelligence import (
 )
 
 router = APIRouter(tags=["admin_supplier_intelligence"])
+logger = logging.getLogger(__name__)
+
+ERROR_CODE_NETWORK_TIMEOUT = "network_timeout"
+ERROR_CODE_INVALID_IMAGE = "invalid_image"
+ERROR_CODE_PARSE_FAILED = "parse_failed"
+ERROR_CODE_DB_CONFLICT = "db_conflict"
+ERROR_CODE_UNKNOWN = "unknown"
+TOP_FAILING_SOURCES_LIMIT = 5
+ERROR_SAMPLES_LIMIT = 3
+ERROR_MESSAGE_MAX_LEN = 500
+
+
+def _normalize_error_message(exc: Exception) -> str:
+    message = " ".join(str(exc).strip().split())
+    if len(message) > ERROR_MESSAGE_MAX_LEN:
+        return f"{message[:ERROR_MESSAGE_MAX_LEN - 3]}..."
+    return message
+
+
+def _classify_import_error(exc: Exception) -> str:
+    if isinstance(exc, IntegrityError):
+        return ERROR_CODE_DB_CONFLICT
+    message = str(exc).lower()
+    if any(token in message for token in ("timeout", "timed out", "connection", "429", "too many requests")):
+        return ERROR_CODE_NETWORK_TIMEOUT
+    if "not an image" in message or "invalid image" in message:
+        return ERROR_CODE_INVALID_IMAGE
+    if "parse" in message:
+        return ERROR_CODE_PARSE_FAILED
+    return ERROR_CODE_UNKNOWN
 
 
 class SupplierSourceIn(BaseModel):
@@ -344,8 +377,20 @@ class ImportProductsIn(BaseModel):
     dry_run: bool = True
     publish_visible: bool = False
     ai_style_description: bool = True
-    use_avito_pricing: bool = False
+    ai_description_provider: str = Field(default="openrouter", max_length=64)
+    ai_description_enabled: bool = True
+    use_avito_pricing: bool = True
     avito_max_pages: int = Field(default=1, ge=1, le=3)
+
+
+class ImportSourceReport(BaseModel):
+    source_id: int
+    url: str
+    imported: int = 0
+    errors: int = 0
+    error_codes: dict[str, int] = Field(default_factory=dict)
+    error_samples: list[str] = Field(default_factory=list)
+    last_error_message: str | None = None
 
 
 class ImportProductsOut(BaseModel):
@@ -353,7 +398,21 @@ class ImportProductsOut(BaseModel):
     created_products: int
     updated_products: int
     created_variants: int
-    source_reports: list[dict[str, object]] = Field(default_factory=list)
+    source_reports: list[ImportSourceReport] = Field(default_factory=list)
+
+
+def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
+    return ImportSourceReport(source_id=source_id, url=source_url)
+
+
+def _register_source_error(report: ImportSourceReport, exc: Exception) -> None:
+    code = _classify_import_error(exc)
+    message = _normalize_error_message(exc)
+    report.errors += 1
+    report.last_error_message = message
+    report.error_codes[code] = int(report.error_codes.get(code) or 0) + 1
+    if message and message not in report.error_samples and len(report.error_samples) < ERROR_SAMPLES_LIMIT:
+        report.error_samples.append(message)
 
 
 
@@ -507,7 +566,7 @@ def import_products_from_sources(
     created_products = 0
     updated_products = 0
     created_variants = 0
-    source_reports: list[dict[str, object]] = []
+    source_reports: list[ImportSourceReport] = []
     signature_product_map: dict[str, int] = {}
     avito_price_cache: dict[str, float | None] = {}
 
@@ -568,18 +627,18 @@ def import_products_from_sources(
         if payload.use_avito_pricing:
             key = (title or "").strip().lower()
             if key not in avito_price_cache:
-                scan = avito_market_scan(title, max_pages=payload.avito_max_pages)
+                scan = avito_market_scan(title, max_pages=payload.avito_max_pages, only_new=True)
                 avito_price_cache[key] = float(scan.get("suggested")) if scan.get("suggested") is not None else None
             suggested = avito_price_cache.get(key)
             if suggested and suggested > 0:
-                return float(suggested)
+                return ensure_min_markup_price(float(suggested), dropship_price)
         return suggest_sale_price(dropship_price)
 
     for src in sources:
         src_url = (src.source_url or "").strip()
         if not src_url:
             continue
-        report = {"source_id": int(src.id), "url": src_url, "imported": 0, "errors": 0}
+        report = _new_source_report(source_id=int(src.id), source_url=src_url)
         try:
             preview = fetch_tabular_preview(src_url, max_rows=max(5, payload.max_items_per_source + 1))
             rows = preview.get("rows_preview") or []
@@ -592,8 +651,7 @@ def import_products_from_sources(
                     for i, u in enumerate(imgs)
                 ]
         except Exception as exc:
-            report["errors"] = 1
-            report["error_message"] = str(exc)
+            _register_source_error(report, exc)
             source_reports.append(report)
             continue
 
@@ -616,7 +674,10 @@ def import_products_from_sources(
 
                 desc = str(it.get("description") or "").strip()
                 if payload.ai_style_description and not desc:
-                    desc = generate_youth_description(title, cat_name, it.get("color"))
+                    if payload.ai_description_enabled and payload.ai_description_provider.lower() == "openrouter":
+                        desc = generate_ai_product_description(title, cat_name, it.get("color"))
+                    else:
+                        desc = generate_youth_description(title, cat_name, it.get("color"))
                 sale_price = pick_sale_price(title, ds_price)
                 image_url = str(it.get("image_url") or "").strip() or None
                 if not image_url and "t.me/" in src_url:
@@ -714,11 +775,25 @@ def import_products_from_sources(
                         variant.images = [image_url]
                     db.add(variant)
 
-                report["imported"] = int(report.get("imported") or 0) + 1
-            except Exception:
-                report["errors"] = int(report.get("errors") or 0) + 1
+                report.imported += 1
+            except Exception as exc:
+                _register_source_error(report, exc)
 
         source_reports.append(report)
+
+    top_failing_sources = sorted(
+        (x for x in source_reports if x.errors > 0),
+        key=lambda x: x.errors,
+        reverse=True,
+    )[:TOP_FAILING_SOURCES_LIMIT]
+    if top_failing_sources:
+        logger.warning(
+            "supplier import top failures: %s",
+            [
+                {"source_id": x.source_id, "url": x.url, "errors": x.errors, "error_codes": x.error_codes}
+                for x in top_failing_sources
+            ],
+        )
 
     if payload.dry_run:
         db.rollback()
