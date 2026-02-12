@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal
-import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -633,6 +633,16 @@ def import_products_from_sources(
     source_reports: list[ImportSourceReport] = []
     signature_product_map: dict[str, int] = {}
     avito_price_cache: dict[str, float | None] = {}
+    source_items_map: dict[int, list[dict[str, object]]] = {}
+    title_min_dropship: dict[str, float] = {}
+    known_image_urls: list[str] = []
+    known_item_by_image_url: dict[str, dict[str, object]] = {}
+
+    def _title_key(raw_title: str | None) -> str:
+        return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
+
+    def _is_placeholder_title(raw_title: str | None) -> bool:
+        return _title_key(raw_title).startswith("позиция из tg #")
 
     def get_or_create_category(name: str) -> models.Category:
         nonlocal created_categories
@@ -687,7 +697,10 @@ def import_products_from_sources(
                 return db.query(models.Product).filter(models.Product.id == pid).one_or_none()
         return None
 
-    def pick_sale_price(title: str, dropship_price: float) -> float:
+    def pick_sale_price(title: str, dropship_price: float, min_dropship_price: float | None = None) -> float:
+        base = float(min_dropship_price or 0) if float(min_dropship_price or 0) > 0 else float(dropship_price or 0)
+        if base <= 0:
+            base = float(dropship_price or 0)
         if payload.use_avito_pricing:
             key = (title or "").strip().lower()
             if key not in avito_price_cache:
@@ -695,8 +708,52 @@ def import_products_from_sources(
                 avito_price_cache[key] = float(scan.get("suggested")) if scan.get("suggested") is not None else None
             suggested = avito_price_cache.get(key)
             if suggested and suggested > 0:
-                return ensure_min_markup_price(float(suggested), dropship_price)
-        return suggest_sale_price(dropship_price)
+                return ensure_min_markup_price(float(suggested), base)
+        return ensure_min_markup_price(round(base * 1.4, 0), base)
+
+    # pre-scan all selected sources to get minimal закупка per title and known image pool
+    for src in sources:
+        src_url = (src.source_url or "").strip()
+        if not src_url:
+            source_items_map[int(src.id)] = []
+            continue
+        try:
+            preview = fetch_tabular_preview(src_url, max_rows=max(5, payload.max_items_per_source + 1))
+            rows = preview.get("rows_preview") or []
+            items = extract_catalog_items(rows, max_items=payload.max_items_per_source)
+            if not items and "t.me/" in src_url:
+                imgs = extract_image_urls_from_html_page(src_url, limit=min(payload.max_items_per_source, 30))
+                items = [
+                    {
+                        "title": f"Позиция из TG #{i+1}",
+                        "dropship_price": 0.0,
+                        "image_url": u,
+                        "image_urls": [u],
+                        "__tg_fallback__": True,
+                    }
+                    for i, u in enumerate(imgs)
+                ]
+            source_items_map[int(src.id)] = items
+            for it in items:
+                title = str(it.get("title") or "").strip()
+                ds_price = float(it.get("dropship_price") or 0)
+                if title and ds_price > 0 and not _is_placeholder_title(title):
+                    k = _title_key(title)
+                    prev = title_min_dropship.get(k)
+                    title_min_dropship[k] = ds_price if prev is None else min(prev, ds_price)
+                row_image_urls = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
+                image_url = str(it.get("image_url") or "").strip()
+                pool = [image_url, *row_image_urls]
+                if title and ds_price > 0 and not _is_placeholder_title(title):
+                    for u in pool:
+                        uu = str(u or "").strip()
+                        if not uu:
+                            continue
+                        if uu not in known_item_by_image_url:
+                            known_item_by_image_url[uu] = dict(it)
+                            known_image_urls.append(uu)
+        except Exception:
+            source_items_map[int(src.id)] = []
 
     for src in sources:
         src_url = (src.source_url or "").strip()
@@ -704,16 +761,7 @@ def import_products_from_sources(
             continue
         report = _new_source_report(source_id=int(src.id), source_url=src_url)
         try:
-            preview = fetch_tabular_preview(src_url, max_rows=max(5, payload.max_items_per_source + 1))
-            rows = preview.get("rows_preview") or []
-            items = extract_catalog_items(rows, max_items=payload.max_items_per_source)
-            if not items and "t.me/" in src_url:
-                # fallback for telegram channels/pages: create image-first pseudo items
-                imgs = extract_image_urls_from_html_page(src_url, limit=min(payload.max_items_per_source, 30))
-                items = [
-                    {"title": f"Позиция из TG #{i+1}", "dropship_price": 0.0, "image_url": u}
-                    for i, u in enumerate(imgs)
-                ]
+            items = source_items_map.get(int(src.id), [])
         except Exception as exc:
             _register_source_error(report, exc)
             source_reports.append(report)
@@ -722,12 +770,40 @@ def import_products_from_sources(
         for it in items:
             try:
                 title = str(it.get("title") or "").strip()
-                if not title:
-                    continue
                 ds_price = float(it.get("dropship_price") or 0)
-                if ds_price <= 0:
-                    # if no dropship price in source row, keep minimal placeholder for dry-run/preview flows
-                    ds_price = 1.0
+                is_tg_fallback = bool(it.get("__tg_fallback__")) or _is_placeholder_title(title)
+                if is_tg_fallback:
+                    fallback_ref = str(it.get("image_url") or "").strip()
+                    if not fallback_ref:
+                        fallback_images = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
+                        fallback_ref = fallback_images[0] if fallback_images else ""
+                    matched_item: dict[str, object] | None = None
+                    if fallback_ref and known_image_urls:
+                        best = find_similar_images(
+                            fallback_ref,
+                            known_image_urls,
+                            max_hamming_distance=7,
+                            limit=1,
+                        )
+                        if best:
+                            matched_item = known_item_by_image_url.get(str(best[0].get("image_url") or ""))
+                    if matched_item:
+                        if not title or _is_placeholder_title(title):
+                            title = str(matched_item.get("title") or "").strip()
+                        if ds_price <= 0:
+                            ds_price = float(matched_item.get("dropship_price") or 0)
+                        if not it.get("color") and matched_item.get("color"):
+                            it["color"] = matched_item.get("color")
+                        if not it.get("size") and matched_item.get("size"):
+                            it["size"] = matched_item.get("size")
+                        if not it.get("description") and matched_item.get("description"):
+                            it["description"] = matched_item.get("description")
+
+                if not title or ds_price <= 0:
+                    # skip generic TG placeholders and unresolved items instead of polluting catalog
+                    continue
+
+                min_dropship = title_min_dropship.get(_title_key(title))
                 cat_name = map_category(title)
                 category = get_or_create_category(cat_name)
                 slug_base = (slugify(title) or f"item-{category.id}")[:500]
@@ -742,7 +818,7 @@ def import_products_from_sources(
                         desc = generate_ai_product_description(title, cat_name, it.get("color"))
                     else:
                         desc = generate_youth_description(title, cat_name, it.get("color"))
-                sale_price = pick_sale_price(title, ds_price)
+                sale_price = pick_sale_price(title, ds_price, min_dropship_price=min_dropship)
                 row_image_urls = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
                 image_url = str(it.get("image_url") or "").strip() or None
                 if not image_url and row_image_urls:
