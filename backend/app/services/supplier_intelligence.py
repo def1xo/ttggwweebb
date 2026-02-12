@@ -319,6 +319,54 @@ def _to_int(raw: Any) -> int | None:
         return None
 
 
+def _split_image_urls(raw: Any) -> list[str]:
+    txt = _norm(raw)
+    if not txt:
+        return []
+    out: list[str] = []
+    for chunk in re.split(r"[\s,;|]+", txt):
+        u = (chunk or "").strip()
+        if not u:
+            continue
+        if not re.match(r"^https?://", u, flags=re.I):
+            continue
+        if u not in out:
+            out.append(u)
+    return out
+
+
+def split_size_tokens(raw: Any) -> list[str]:
+    txt = _norm(raw).upper()
+    if not txt:
+        return []
+    txt = txt.replace("РАЗМЕР", " ").replace("SIZE", " ")
+    out: list[str] = []
+    for chunk in re.split(r"[\s,;|/]+", txt):
+        token = chunk.strip().strip(".")
+        if not token:
+            continue
+        if "-" in token and re.match(r"^[0-9]{2,3}-[0-9]{2,3}$", token):
+            a, b = token.split("-", 1)
+            try:
+                aa = int(a)
+                bb = int(b)
+                if aa <= bb and bb - aa <= 6:
+                    for size_num in range(aa, bb + 1):
+                        val = str(size_num)
+                        if val not in out:
+                            out.append(val)
+                    continue
+            except Exception:
+                pass
+        cleaned = re.sub(r"[^A-Z0-9+-]", "", token)
+        if not cleaned:
+            continue
+        if re.match(r"^(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3})$", cleaned):
+            if cleaned not in out:
+                out.append(cleaned)
+    return out
+
+
 def _find_col(headers: list[str], candidates: tuple[str, ...]) -> int | None:
     h = [x.strip().lower() for x in headers]
     for i, col in enumerate(h):
@@ -402,6 +450,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         size = _norm(row[idx_size]) if idx_size is not None and idx_size < len(row) else ""
         stock = _to_int(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else None
         image_url = _norm(row[idx_image]) if idx_image is not None and idx_image < len(row) else ""
+        image_urls = _split_image_urls(image_url)
         description = _norm(row[idx_desc]) if idx_desc is not None and idx_desc < len(row) else ""
 
         out.append({
@@ -411,6 +460,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             "size": size or None,
             "stock": stock,
             "image_url": image_url or None,
+            "image_urls": image_urls,
             "description": description or None,
         })
     return out

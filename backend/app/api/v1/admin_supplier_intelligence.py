@@ -27,6 +27,7 @@ from app.services.supplier_intelligence import (
     map_category,
     pick_best_offer,
     print_signature_hamming,
+    split_size_tokens,
     suggest_sale_price,
 )
 
@@ -680,13 +681,24 @@ def import_products_from_sources(
                     else:
                         desc = generate_youth_description(title, cat_name, it.get("color"))
                 sale_price = pick_sale_price(title, ds_price)
+                row_image_urls = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
                 image_url = str(it.get("image_url") or "").strip() or None
+                if not image_url and row_image_urls:
+                    image_url = row_image_urls[0]
                 if not image_url and "t.me/" in src_url:
                     try:
                         tg_imgs = extract_image_urls_from_html_page(src_url, limit=3)
                         image_url = tg_imgs[0] if tg_imgs else None
+                        if tg_imgs:
+                            row_image_urls = [str(x).strip() for x in tg_imgs if str(x).strip()]
                     except Exception:
                         image_url = None
+
+                image_urls: list[str] = []
+                for u in [image_url, *row_image_urls]:
+                    uu = str(u or "").strip()
+                    if uu and uu not in image_urls:
+                        image_urls.append(uu)
 
                 if not p:
                     # unique slug fallback
@@ -706,6 +718,9 @@ def import_products_from_sources(
                     )
                     db.add(p)
                     db.flush()
+                    if image_urls:
+                        for idx, img_u in enumerate(image_urls[:8]):
+                            db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
                     created_products += 1
                 else:
                     changed = False
@@ -718,6 +733,23 @@ def import_products_from_sources(
                     if image_url and not p.default_image:
                         p.default_image = image_url
                         changed = True
+                    if image_urls:
+                        existing_urls = {
+                            str(x.url).strip()
+                            for x in db.query(models.ProductImage).filter(models.ProductImage.product_id == p.id).all()
+                            if str(x.url).strip()
+                        }
+                        next_sort = int(
+                            db.query(models.ProductImage)
+                            .filter(models.ProductImage.product_id == p.id)
+                            .count()
+                        )
+                        for img_u in image_urls[:8]:
+                            if img_u in existing_urls:
+                                continue
+                            db.add(models.ProductImage(product_id=p.id, url=img_u, sort=next_sort))
+                            next_sort += 1
+                            changed = True
                     if changed:
                         db.add(p)
                         updated_products += 1
@@ -733,48 +765,56 @@ def import_products_from_sources(
                 detected_color = dominant_color_name_from_url(image_url) if image_url else None
                 src_color = it.get("color") or detected_color
 
-                size = get_or_create_size(it.get("size"))
+                size_tokens = split_size_tokens(it.get("size"))
+                if not size_tokens:
+                    size_tokens = [""]
                 color = get_or_create_color(src_color)
-                variant = (
-                    db.query(models.ProductVariant)
-                    .filter(models.ProductVariant.product_id == p.id)
-                    .filter(models.ProductVariant.size_id == (size.id if size else None))
-                    .filter(models.ProductVariant.color_id == (color.id if color else None))
-                    .one_or_none()
-                )
                 stock_qty = int(it.get("stock") or 0)
-                if variant is None:
-                    variant = models.ProductVariant(
-                        product_id=p.id,
-                        size_id=size.id if size else None,
-                        color_id=color.id if color else None,
-                        price=Decimal(str(sale_price)),
-                        stock_quantity=max(0, stock_qty),
-                        images=[image_url] if image_url else None,
+                per_size_stock = stock_qty // len(size_tokens) if stock_qty > 0 and len(size_tokens) > 1 else stock_qty
+
+                for size_name in size_tokens:
+                    size = get_or_create_size(size_name) if size_name else None
+                    variant = (
+                        db.query(models.ProductVariant)
+                        .filter(models.ProductVariant.product_id == p.id)
+                        .filter(models.ProductVariant.size_id == (size.id if size else None))
+                        .filter(models.ProductVariant.color_id == (color.id if color else None))
+                        .one_or_none()
                     )
-                    try:
-                        with db.begin_nested():
-                            db.add(variant)
-                            db.flush()
-                        created_variants += 1
-                    except IntegrityError:
-                        variant = (
-                            db.query(models.ProductVariant)
-                            .filter(models.ProductVariant.product_id == p.id)
-                            .filter(models.ProductVariant.size_id == (size.id if size else None))
-                            .filter(models.ProductVariant.color_id == (color.id if color else None))
-                            .one_or_none()
+                    if variant is None:
+                        variant = models.ProductVariant(
+                            product_id=p.id,
+                            size_id=size.id if size else None,
+                            color_id=color.id if color else None,
+                            price=Decimal(str(sale_price)),
+                            stock_quantity=max(0, per_size_stock),
+                            images=image_urls or ([image_url] if image_url else None),
                         )
-                        if variant is None:
-                            raise
-                else:
-                    if float(variant.price or 0) <= 0 and sale_price > 0:
-                        variant.price = Decimal(str(sale_price))
-                    if stock_qty > 0 and int(variant.stock_quantity or 0) <= 0:
-                        variant.stock_quantity = stock_qty
-                    if image_url and not variant.images:
-                        variant.images = [image_url]
-                    db.add(variant)
+                        try:
+                            with db.begin_nested():
+                                db.add(variant)
+                                db.flush()
+                            created_variants += 1
+                        except IntegrityError:
+                            variant = (
+                                db.query(models.ProductVariant)
+                                .filter(models.ProductVariant.product_id == p.id)
+                                .filter(models.ProductVariant.size_id == (size.id if size else None))
+                                .filter(models.ProductVariant.color_id == (color.id if color else None))
+                                .one_or_none()
+                            )
+                            if variant is None:
+                                raise
+                    else:
+                        if float(variant.price or 0) <= 0 and sale_price > 0:
+                            variant.price = Decimal(str(sale_price))
+                        if per_size_stock > 0 and int(variant.stock_quantity or 0) <= 0:
+                            variant.stock_quantity = per_size_stock
+                        if image_urls and not variant.images:
+                            variant.images = image_urls
+                        elif image_url and not variant.images:
+                            variant.images = [image_url]
+                        db.add(variant)
 
                 report.imported += 1
             except Exception as exc:

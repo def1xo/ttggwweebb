@@ -1,6 +1,6 @@
 import app.api.v1.admin_supplier_intelligence as asi
 import app.services.supplier_intelligence as si
-from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, ensure_min_markup_price, estimate_market_price, extract_catalog_items, generate_ai_product_description, generate_youth_description, map_category, pick_best_offer, print_signature_hamming, suggest_sale_price
+from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, ensure_min_markup_price, estimate_market_price, extract_catalog_items, generate_ai_product_description, generate_youth_description, map_category, pick_best_offer, print_signature_hamming, split_size_tokens, suggest_sale_price
 
 
 def test_estimate_market_price_ignores_fake_outliers():
@@ -39,6 +39,16 @@ def test_extract_catalog_items_by_header():
     assert len(items) == 1
     assert items[0]["title"] == "Худи Alpha"
     assert items[0]["dropship_price"] == 3990.0
+
+
+def test_extract_catalog_items_splits_multiple_image_urls():
+    rows = [
+        ["Товар", "Дроп цена", "Фото"],
+        ["Худи Alpha", "3990", "https://cdn/a.jpg, https://cdn/b.jpg ; https://cdn/c.jpg"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["image_urls"] == ["https://cdn/a.jpg", "https://cdn/b.jpg", "https://cdn/c.jpg"]
 
 
 
@@ -95,6 +105,11 @@ def test_generate_youth_description_mentions_title():
     txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
     assert "Худи Alpha" in txt
     assert "стрит" in txt.lower()
+
+
+def test_split_size_tokens_supports_lists_and_ranges():
+    assert split_size_tokens("S M L") == ["S", "M", "L"]
+    assert split_size_tokens("42-44") == ["42", "43", "44"]
 
 
 def test_generate_ai_product_description_falls_back_without_key(monkeypatch):
