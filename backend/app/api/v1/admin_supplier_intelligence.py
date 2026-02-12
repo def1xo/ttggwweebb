@@ -25,6 +25,7 @@ from app.services.supplier_intelligence import (
     generate_youth_description,
     image_print_signature_from_url,
     map_category,
+    find_similar_images,
     pick_best_offer,
     print_signature_hamming,
     split_size_tokens,
@@ -452,6 +453,23 @@ class ImageAnalysisOut(BaseModel):
     dominant_color: str | None = None
 
 
+class SimilarImagesIn(BaseModel):
+    reference_image_url: str = Field(min_length=5, max_length=2000)
+    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=200)
+    per_source_limit: int = Field(default=15, ge=1, le=60)
+    max_hamming_distance: int = Field(default=8, ge=1, le=20)
+    max_results: int = Field(default=20, ge=1, le=100)
+
+
+class SimilarImageOut(BaseModel):
+    source_id: int
+    source_url: str
+    image_url: str
+    distance: int
+    similarity: float
+    dominant_color: str | None = None
+
+
 
 
 @router.post("/supplier-intelligence/avito-market-scan", response_model=AvitoMarketScanOut)
@@ -492,6 +510,50 @@ def analyze_images(payload: ImageAnalysisIn, _admin=Depends(get_current_admin_us
         color = dominant_color_name_from_url(url)
         out.append(ImageAnalysisOut(image_url=url, print_signature=sig, dominant_color=color))
     return out
+
+
+@router.post("/supplier-intelligence/find-similar-images", response_model=list[SimilarImageOut])
+def find_similar_images_in_sources(
+    payload: SimilarImagesIn,
+    _admin=Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    source_ids = [int(x) for x in payload.source_ids if int(x) > 0]
+    if not source_ids:
+        return []
+    sources = (
+        db.query(models.SupplierSource)
+        .filter(models.SupplierSource.id.in_(source_ids), models.SupplierSource.active.is_(True))
+        .all()
+    )
+    out: list[SimilarImageOut] = []
+    for src in sources:
+        src_url = (src.source_url or "").strip()
+        if not src_url:
+            continue
+        try:
+            candidate_urls = extract_image_urls_from_html_page(src_url, limit=payload.per_source_limit)
+            matches = find_similar_images(
+                payload.reference_image_url,
+                candidate_urls,
+                max_hamming_distance=payload.max_hamming_distance,
+                limit=payload.max_results,
+            )
+            for item in matches:
+                out.append(
+                    SimilarImageOut(
+                        source_id=int(src.id),
+                        source_url=src_url,
+                        image_url=str(item.get("image_url") or ""),
+                        distance=int(item.get("distance") or 0),
+                        similarity=float(item.get("similarity") or 0.0),
+                        dominant_color=(str(item.get("dominant_color")) if item.get("dominant_color") else None),
+                    )
+                )
+        except Exception:
+            continue
+    out.sort(key=lambda x: (x.distance, -x.similarity))
+    return out[: payload.max_results]
 
 
 class OfferIn(BaseModel):

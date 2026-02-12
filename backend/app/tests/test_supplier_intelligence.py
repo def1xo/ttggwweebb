@@ -1,6 +1,6 @@
 import app.api.v1.admin_supplier_intelligence as asi
 import app.services.supplier_intelligence as si
-from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, ensure_min_markup_price, estimate_market_price, extract_catalog_items, generate_ai_product_description, generate_youth_description, map_category, pick_best_offer, print_signature_hamming, split_size_tokens, suggest_sale_price
+from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, ensure_min_markup_price, estimate_market_price, extract_catalog_items, find_similar_images, generate_ai_product_description, generate_youth_description, map_category, pick_best_offer, print_signature_hamming, split_size_tokens, suggest_sale_price
 
 
 def test_estimate_market_price_ignores_fake_outliers():
@@ -110,6 +110,31 @@ def test_generate_youth_description_mentions_title():
 def test_split_size_tokens_supports_lists_and_ranges():
     assert split_size_tokens("S M L") == ["S", "M", "L"]
     assert split_size_tokens("42-44") == ["42", "43", "44"]
+
+
+def test_find_similar_images_filters_by_hamming_distance(monkeypatch):
+    signatures = {
+        "https://ref/img.jpg": "aaaa",
+        "https://cand/1.jpg": "aaab",
+        "https://cand/2.jpg": "aabb",
+        "https://cand/far.jpg": "bbbb",
+    }
+    colors = {
+        "https://ref/img.jpg": "черный",
+        "https://cand/1.jpg": "черный",
+        "https://cand/2.jpg": "белый",
+        "https://cand/far.jpg": "красный",
+    }
+    monkeypatch.setattr(si, "image_print_signature_from_url", lambda url: signatures.get(url))
+    monkeypatch.setattr(si, "dominant_color_name_from_url", lambda url: colors.get(url))
+
+    out = find_similar_images(
+        "https://ref/img.jpg",
+        ["https://cand/far.jpg", "https://cand/2.jpg", "https://cand/1.jpg"],
+        max_hamming_distance=2,
+        limit=10,
+    )
+    assert [x["image_url"] for x in out] == ["https://cand/1.jpg", "https://cand/2.jpg"]
 
 
 def test_generate_ai_product_description_falls_back_without_key(monkeypatch):

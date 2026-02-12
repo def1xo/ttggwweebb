@@ -730,3 +730,47 @@ def print_signature_hamming(a: str | None, b: str | None) -> int | None:
         return sum(1 for x, y in zip(aa, bb) if x != y)
     except Exception:
         return None
+
+
+def find_similar_images(
+    reference_image_url: str,
+    candidate_image_urls: list[str],
+    *,
+    max_hamming_distance: int = 8,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Return visually similar images by average-hash signature + color hint."""
+    ref_url = (reference_image_url or "").strip()
+    if not ref_url:
+        return []
+    ref_sig = image_print_signature_from_url(ref_url)
+    if not ref_sig:
+        return []
+    ref_color = dominant_color_name_from_url(ref_url)
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in candidate_image_urls:
+        cand_url = (raw or "").strip()
+        if not cand_url or cand_url in seen or cand_url == ref_url:
+            continue
+        seen.add(cand_url)
+        cand_sig = image_print_signature_from_url(cand_url)
+        dist = print_signature_hamming(ref_sig, cand_sig)
+        if dist is None or dist > int(max_hamming_distance):
+            continue
+        cand_color = dominant_color_name_from_url(cand_url)
+        score = max(0.0, 1.0 - (float(dist) / max(1.0, float(max_hamming_distance))))
+        if ref_color and cand_color and ref_color == cand_color:
+            score = min(1.0, score + 0.08)
+        out.append(
+            {
+                "image_url": cand_url,
+                "distance": int(dist),
+                "similarity": round(score, 4),
+                "dominant_color": cand_color,
+            }
+        )
+
+    out.sort(key=lambda x: (x.get("distance", 999), -float(x.get("similarity") or 0.0)))
+    return out[: max(1, int(limit))]

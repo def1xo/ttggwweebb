@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, analyzeImages, analyzeStoredSources, avitoMarketScan, bulkUpsertAdminSupplierSources, createAdminNews, createAdminSupplierSource, deleteAdminNews, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminNews, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, importProductsFromSupplierSources, patchAdminNews, patchAdminSupplierSource, sendAdminCatalogToTelegram, sendAdminSalesExportToTelegram, sendOrderProofToTelegram, telegramMediaPreview } from "../services/api";
+import api, { adminLogin, analyzeImages, analyzeStoredSources, avitoMarketScan, bulkUpsertAdminSupplierSources, createAdminNews, createAdminSupplierSource, deleteAdminNews, deleteAdminSupplierSource, findSimilarImagesInSources, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminNews, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, importProductsFromSupplierSources, patchAdminNews, patchAdminSupplierSource, sendAdminCatalogToTelegram, sendAdminSalesExportToTelegram, sendOrderProofToTelegram, telegramMediaPreview } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -987,6 +987,8 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [avitoResult, setAvitoResult] = useState<any | null>(null);
   const [tgMediaResult, setTgMediaResult] = useState<any[]>([]);
   const [imageAnalysisResult, setImageAnalysisResult] = useState<any[]>([]);
+  const [similarRefImageUrl, setSimilarRefImageUrl] = useState("");
+  const [similarImages, setSimilarImages] = useState<any[]>([]);
 
   const resetForm = () => {
     setEditingId(null);
@@ -1206,6 +1208,34 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
     }
   };
 
+  const runSimilarImageSearch = async () => {
+    const ref = similarRefImageUrl.trim();
+    if (!ref) {
+      setMsg("Вставь URL референс-фото для поиска похожих");
+      return;
+    }
+    const sourceIds = items
+      .map((x) => Number(x?.id))
+      .filter((x) => Number.isFinite(x) && x > 0);
+    if (!sourceIds.length) {
+      setMsg("Нет источников для поиска похожих фото");
+      return;
+    }
+    try {
+      const res: any = await findSimilarImagesInSources({
+        reference_image_url: ref,
+        source_ids: sourceIds,
+        per_source_limit: 20,
+        max_hamming_distance: 8,
+        max_results: 30,
+      });
+      setSimilarImages(Array.isArray(res) ? res : []);
+      setMsg("Поиск похожих фото по каналам завершён ✅");
+    } catch (e: any) {
+      setMsg(e?.message || "Не удалось выполнить поиск похожих фото");
+    }
+  };
+
 
   return (
     <div className="container" style={{ paddingTop: 12 }}>
@@ -1301,7 +1331,23 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
           <div className="small-muted">Рекомендованная цена: {avitoResult?.suggested ?? "—"} ₽ • найдено цен: {(avitoResult?.prices || []).length}</div>
         ) : null}
         <button className="btn btn-secondary" onClick={runTgMediaPreview}>Подгрузить фото из TGК и проанализировать</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input className="input" placeholder="URL референс-фото для поиска похожих в каналах" value={similarRefImageUrl} onChange={(e) => setSimilarRefImageUrl(e.target.value)} />
+          <button className="btn" onClick={runSimilarImageSearch} disabled={!similarRefImageUrl.trim()}>Найти похожие</button>
+        </div>
         {tgMediaResult.length > 0 ? <div className="small-muted">TG источников с фото: {tgMediaResult.length}</div> : null}
+        {similarImages.length > 0 ? (
+          <div className="card" style={{ padding: 10 }}>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>Похожие фото по каналам</div>
+            <div style={{ display: "grid", gap: 4 }}>
+              {similarImages.slice(0, 10).map((it: any, idx: number) => (
+                <div key={`${it.image_url}_${idx}`} className="small-muted" style={{ wordBreak: "break-all" }}>
+                  src#{it.source_id} • dist: {it.distance} • sim: {it.similarity} • {it.image_url}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {imageAnalysisResult.length > 0 ? (
           <div className="card" style={{ padding: 10 }}>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>Анализ принтов/цветов (preview)</div>

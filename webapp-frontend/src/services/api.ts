@@ -1338,6 +1338,21 @@ export async function analyzeImages(imageUrls: string[]) {
   }
 }
 
+export async function findSimilarImagesInSources(payload: {
+  reference_image_url: string;
+  source_ids: number[];
+  per_source_limit?: number;
+  max_hamming_distance?: number;
+  max_results?: number;
+}) {
+  try {
+    const res = await axiosInstance.post("/api/admin/supplier-intelligence/find-similar-images", payload);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function importProductsFromSupplierSources(payload: {
   source_ids: number[];
   max_items_per_source?: number;
@@ -1511,6 +1526,7 @@ api.importProductsFromSupplierSources = importProductsFromSupplierSources;
 api.avitoMarketScan = avitoMarketScan;
 api.telegramMediaPreview = telegramMediaPreview;
 api.analyzeImages = analyzeImages;
+api.findSimilarImagesInSources = findSimilarImagesInSources;
 api.getAdminNews = getAdminNews;
 api.createAdminNews = createAdminNews;
 api.patchAdminNews = patchAdminNews;
