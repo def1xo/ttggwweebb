@@ -37,6 +37,8 @@ def list_products(
         variants = []
         sizes = set()
         colors = set()
+        min_variant_price: float | None = None
+        has_stock = False
         for v in (p.variants or []):
             try:
                 if getattr(v, "size", None) and v.size and v.size.name:
@@ -55,6 +57,11 @@ def list_products(
                     "images": (v.images or None),
                 }
             )
+            vp = float(v.price or 0)
+            if vp > 0:
+                min_variant_price = vp if min_variant_price is None else min(min_variant_price, vp)
+            if int(v.stock_quantity or 0) > 0:
+                has_stock = True
 
         img_urls = []
         try:
@@ -73,7 +80,10 @@ def list_products(
                 "currency": getattr(p, "currency", "RUB"),
                 "default_image": p.default_image,
                 "images": img_urls,
+                "gallery_count": len(img_urls),
                 "category_id": p.category_id,
+                "min_variant_price": min_variant_price,
+                "has_stock": has_stock,
                 "sizes": sorted(list(sizes), key=lambda x: float(x) if str(x).replace('.', '', 1).isdigit() else str(x)),
                 "colors": sorted(list(colors)),
                 "variants": variants,
