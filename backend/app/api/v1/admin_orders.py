@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+import os
 from typing import Optional
+
+import requests
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -23,6 +26,53 @@ class OrderStatusUpdate(BaseModel):
 def _now() -> datetime:
     return datetime.utcnow()
 
+
+def _send_admin_telegram_message(text: str) -> bool:
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    chat_id = (os.getenv("ADMIN_TELEGRAM_CHAT_ID") or "").strip()
+    if not token or not chat_id or not text:
+        return False
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text[:4000]},
+            timeout=10,
+        )
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _order_supply_lines(db: Session, order: models.Order) -> list[str]:
+    lines: list[str] = []
+    items = db.query(models.OrderItem).filter(models.OrderItem.order_id == order.id).all()
+    for idx, item in enumerate(items, start=1):
+        variant = db.query(models.ProductVariant).get(item.variant_id) if item.variant_id else None
+        product = db.query(models.Product).get(variant.product_id) if variant else None
+        size_name = "—"
+        color_name = "—"
+        if variant and variant.size_id:
+            sz = db.query(models.Size).get(variant.size_id)
+            size_name = sz.name if sz else "—"
+        if variant and variant.color_id:
+            clr = db.query(models.Color).get(variant.color_id)
+            color_name = clr.name if clr else "—"
+
+        latest_cost = None
+        if variant:
+            latest_cost = (
+                db.query(models.ProductCost)
+                .filter(models.ProductCost.variant_id == variant.id)
+                .order_by(models.ProductCost.created_at.desc(), models.ProductCost.id.desc())
+                .first()
+            )
+        cost_val = float(latest_cost.cost_price) if latest_cost and latest_cost.cost_price is not None else None
+        cost_txt = f"{cost_val:.0f} ₽" if isinstance(cost_val, float) and cost_val > 0 else "н/д"
+        lines.append(
+            f"{idx}) {(product.title if product else 'Товар')} | size: {size_name} | color: {color_name}\n"
+            f"   qty: {int(item.quantity or 0)} • retail: {float(item.price or 0):.0f} ₽ • закупка(оценка): {cost_txt} • поставщик: не назначен"
+        )
+    return lines or ["• Нет товарных позиций"]
 
 
 def _parse_status(raw: Optional[str]) -> Optional[models.OrderStatus]:
@@ -173,6 +223,24 @@ def admin_confirm_payment(
     _log_status(db, order, str(old_status), str(order.status), changed_by=admin.id, note="confirm_payment")
     db.commit()
     db.refresh(order)
+
+    base_url = (os.getenv("PUBLIC_BASE_URL") or "").strip()
+    proof = (order.payment_screenshot or "").strip()
+    if proof.startswith("/") and base_url:
+        proof_link = f"{base_url.rstrip('/')}{proof}"
+    else:
+        proof_link = proof or "—"
+
+    supply_lines = _order_supply_lines(db, order)
+    msg = (
+        f"✅ Оплата подтверждена #{order.id}\n"
+        f"Сумма: {float(order.total_amount or 0):.0f} ₽\n"
+        f"Клиент: {(order.fio or '—')} | {(order.phone or '—')}\n"
+        f"Статус: {order.status}\n"
+        f"Пруф: {proof_link}\n\n"
+        f"Позиции / закупка:\n" + "\n".join(supply_lines)
+    )
+    _send_admin_telegram_message(msg)
     return order
 
 
@@ -215,4 +283,22 @@ def update_order_status(
     _log_status(db, order, str(old), str(payload.status), changed_by=admin.id, note=payload.note)
     db.commit()
     db.refresh(order)
+
+    base_url = (os.getenv("PUBLIC_BASE_URL") or "").strip()
+    proof = (order.payment_screenshot or "").strip()
+    if proof.startswith("/") and base_url:
+        proof_link = f"{base_url.rstrip('/')}{proof}"
+    else:
+        proof_link = proof or "—"
+
+    supply_lines = _order_supply_lines(db, order)
+    msg = (
+        f"✅ Оплата подтверждена #{order.id}\n"
+        f"Сумма: {float(order.total_amount or 0):.0f} ₽\n"
+        f"Клиент: {(order.fio or '—')} | {(order.phone or '—')}\n"
+        f"Статус: {order.status}\n"
+        f"Пруф: {proof_link}\n\n"
+        f"Позиции / закупка:\n" + "\n".join(supply_lines)
+    )
+    _send_admin_telegram_message(msg)
     return order
