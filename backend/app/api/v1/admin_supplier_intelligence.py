@@ -408,6 +408,11 @@ class AutoImportNowOut(BaseModel):
     queued: bool
     source_count: int = 0
     task: str = ""
+    created_products: int = 0
+    updated_products: int = 0
+    created_variants: int = 0
+    created_categories: int = 0
+    source_reports: list[ImportSourceReport] = Field(default_factory=list)
 
 
 def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
@@ -1041,24 +1046,27 @@ def run_auto_import_now(
     if not source_ids:
         raise HTTPException(status_code=400, detail="Нет активных источников")
 
-    try:
-        from app.core.celery_app import celery_app
-
-        celery_app.send_task("tasks.supplier_auto_import_24h")
-        return AutoImportNowOut(queued=True, source_count=len(source_ids), task="tasks.supplier_auto_import_24h")
-    except Exception:
-        payload = ImportProductsIn(
-            source_ids=source_ids,
-            dry_run=False,
-            publish_visible=True,
-            ai_style_description=True,
-            ai_description_enabled=True,
-            use_avito_pricing=True,
-            avito_max_pages=1,
-            max_items_per_source=40,
-        )
-        import_products_from_sources(payload=payload, _admin=_admin, db=db)
-        return AutoImportNowOut(queued=False, source_count=len(source_ids), task="inline")
+    payload = ImportProductsIn(
+        source_ids=source_ids,
+        dry_run=False,
+        publish_visible=True,
+        ai_style_description=True,
+        ai_description_enabled=True,
+        use_avito_pricing=True,
+        avito_max_pages=1,
+        max_items_per_source=40,
+    )
+    res = import_products_from_sources(payload=payload, _admin=_admin, db=db)
+    return AutoImportNowOut(
+        queued=False,
+        source_count=len(source_ids),
+        task="inline",
+        created_products=int(getattr(res, "created_products", 0) or 0),
+        updated_products=int(getattr(res, "updated_products", 0) or 0),
+        created_variants=int(getattr(res, "created_variants", 0) or 0),
+        created_categories=int(getattr(res, "created_categories", 0) or 0),
+        source_reports=getattr(res, "source_reports", []) or [],
+    )
 
 
 class MarketPriceIn(BaseModel):

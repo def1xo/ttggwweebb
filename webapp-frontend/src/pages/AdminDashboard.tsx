@@ -1064,7 +1064,14 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
     try {
       setAutoImporting(true);
       const res: any = await triggerSupplierAutoImportNow();
-      setMsg(res?.queued ? "Автообновление и автоимпорт запущены ✅" : "Автоимпорт выполнен ✅");
+      const created = Number(res?.created_products || 0);
+      const updated = Number(res?.updated_products || 0);
+      const variants = Number(res?.created_variants || 0);
+      const categories = Number(res?.created_categories || 0);
+      const errCount = Array.isArray(res?.source_reports)
+        ? res.source_reports.reduce((acc: number, x: any) => acc + Number(x?.errors || 0), 0)
+        : 0;
+      setMsg(`Импорт завершён ✅ Категории +${categories}, товары +${created}, обновлено ${updated}, варианты +${variants}${errCount ? `, ошибок: ${errCount}` : ""}`);
     } catch (e: any) {
       setMsg(e?.message || "Не удалось запустить автоимпорт");
     } finally {

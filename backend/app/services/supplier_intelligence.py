@@ -491,10 +491,14 @@ def generate_ai_product_description(
     *,
     max_chars: int = 420,
 ) -> str:
-    """Generate unique product copy via free-compatible OpenRouter model with safe fallback."""
+    """Generate unique product copy via OpenRouter.
+
+    Returns empty string when AI generation is unavailable/failed,
+    so caller can decide to keep description empty instead of шаблонного текста.
+    """
     openrouter_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
     if not openrouter_key:
-        return generate_youth_description(title, category_name, color)
+        return ""
 
     prompt = {
         "title": _norm(title),
@@ -550,7 +554,7 @@ def generate_ai_product_description(
             return raw[:max_chars]
     except Exception:
         pass
-    return generate_youth_description(title, category_name, color)
+    return ""
 
 
 MIN_MARKUP_RATIO = 1.40
