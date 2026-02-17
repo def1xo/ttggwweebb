@@ -22,7 +22,7 @@ export default function Catalog() {
       setLoading(true);
       setError(null);
       try {
-        const res: any = await api.get("/api/categories");
+        const res: any = await api.getCategories();
         let list: Category[] = [];
 
         if (Array.isArray(res)) list = res;

@@ -5,6 +5,9 @@ from decimal import Decimal
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
+from celery.result import AsyncResult
+
+from app.tasks.celery_app import celery_app
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -408,11 +411,22 @@ class AutoImportNowOut(BaseModel):
     queued: bool
     source_count: int = 0
     task: str = ""
+    task_id: str | None = None
+    status: str | None = None
     created_products: int = 0
     updated_products: int = 0
     created_variants: int = 0
     created_categories: int = 0
     source_reports: list[ImportSourceReport] = Field(default_factory=list)
+
+
+class SupplierImportTaskStatusOut(BaseModel):
+    task_id: str
+    status: str
+    ready: bool
+    successful: bool
+    failed: bool
+    result: dict | None = None
 
 
 def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
@@ -1090,26 +1104,42 @@ def run_auto_import_now(
     if not source_ids:
         raise HTTPException(status_code=400, detail="Нет активных источников")
 
-    payload = ImportProductsIn(
-        source_ids=source_ids,
-        dry_run=False,
-        publish_visible=True,
-        ai_style_description=True,
-        ai_description_enabled=True,
-        use_avito_pricing=True,
-        avito_max_pages=1,
-        max_items_per_source=40,
-    )
-    res = import_products_from_sources(payload=payload, _admin=_admin, db=db)
+    task = celery_app.send_task("tasks.supplier_import_from_sources", kwargs={
+        "payload": {
+            "source_ids": source_ids,
+            "dry_run": False,
+            "publish_visible": True,
+            "ai_style_description": True,
+            "ai_description_enabled": True,
+            "use_avito_pricing": True,
+            "avito_max_pages": 1,
+            "max_items_per_source": 40,
+        }
+    })
+
     return AutoImportNowOut(
-        queued=False,
+        queued=True,
         source_count=len(source_ids),
-        task="inline",
-        created_products=int(getattr(res, "created_products", 0) or 0),
-        updated_products=int(getattr(res, "updated_products", 0) or 0),
-        created_variants=int(getattr(res, "created_variants", 0) or 0),
-        created_categories=int(getattr(res, "created_categories", 0) or 0),
-        source_reports=getattr(res, "source_reports", []) or [],
+        task="tasks.supplier_import_from_sources",
+        task_id=str(task.id),
+        status="PENDING",
+    )
+
+
+@router.get("/supplier-intelligence/tasks/{task_id}", response_model=SupplierImportTaskStatusOut)
+def get_supplier_import_task_status(
+    task_id: str,
+    _admin=Depends(get_current_admin_user),
+):
+    result = AsyncResult(task_id, app=celery_app)
+    payload = result.result if isinstance(result.result, dict) else None
+    return SupplierImportTaskStatusOut(
+        task_id=task_id,
+        status=str(result.status),
+        ready=bool(result.ready()),
+        successful=bool(result.successful()),
+        failed=bool(result.failed()),
+        result=payload,
     )
 
 

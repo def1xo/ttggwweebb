@@ -103,11 +103,15 @@ export default function CategoryView() {
   useEffect(() => {
     (async () => {
       try {
-        const cat = await api.get(`/api/categories/${id}`);
-        const catData = (cat as any).data || cat;
-        setCategory(catData);
-
+        const cat = await api.getCategories();
+        const catRaw = (cat as any)?.data ?? cat;
+        const catList = Array.isArray(catRaw) ? catRaw : (Array.isArray((catRaw as any)?.items) ? (catRaw as any).items : []);
         const parsedId = Number(id);
+        const catData = Number.isFinite(parsedId) && parsedId > 0
+          ? catList.find((c: any) => Number(c?.id) === parsedId)
+          : catList.find((c: any) => String(c?.slug || "") === String(id || ""));
+        if (catData) setCategory(catData);
+
         const categoryId = Number.isFinite(parsedId) && parsedId > 0
           ? parsedId
           : Number((catData as any)?.id);
@@ -116,7 +120,7 @@ export default function CategoryView() {
           ? { category_id: categoryId }
           : undefined;
 
-        const prods = await api.get(`/api/products`, { params });
+        const prods = await api.getProducts(params);
         const data = (prods as any)?.data ?? prods;
         setProducts(Array.isArray(data) ? data : data?.items || []);
       } catch {
