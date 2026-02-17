@@ -709,6 +709,44 @@ def import_products_from_sources(
                 return db.query(models.Product).filter(models.Product.id == pid).one_or_none()
         return None
 
+
+    def _group_title(raw_title: str | None) -> str:
+        return re.sub(r"\s+", " ", str(raw_title or "").strip())
+
+    def _pick_product_id_by_signature(
+        candidates: list[tuple[int, str | None]],
+        sig: str | None,
+        max_distance: int = 6,
+    ) -> int | None:
+        if not candidates:
+            return None
+        if not sig:
+            return int(candidates[0][0])
+
+        for pid, known_sig in candidates:
+            if known_sig and known_sig == sig:
+                return int(pid)
+
+        for pid, known_sig in candidates:
+            if not known_sig:
+                continue
+            dist = print_signature_hamming(sig, known_sig)
+            if dist is not None and dist <= max_distance:
+                return int(pid)
+
+        return int(candidates[0][0])
+
+    def remember_product_candidate(base_key: str, product_id: int, sig: str | None) -> None:
+        if not base_key:
+            return
+        bucket = title_product_candidates.setdefault(base_key, [])
+        item = (int(product_id), sig or None)
+        if item in bucket:
+            return
+        bucket.append(item)
+        if len(bucket) > 25:
+            del bucket[:-25]
+
     def pick_sale_price(title: str, dropship_price: float, min_dropship_price: float | None = None) -> float:
         base = float(min_dropship_price or 0) if float(min_dropship_price or 0) > 0 else float(dropship_price or 0)
         if base <= 0:
@@ -819,7 +857,9 @@ def import_products_from_sources(
                     # skip generic TG placeholders and unresolved items instead of polluting catalog
                     continue
 
-                min_dropship = title_min_dropship.get(_title_key(title))
+                base_title_key = _title_key(title)
+                title_for_group = _group_title(title)
+                min_dropship = title_min_dropship.get(base_title_key)
                 cat_name = map_category(title)
                 category = get_or_create_category(cat_name)
                 effective_title = (title_for_group or title).strip()
