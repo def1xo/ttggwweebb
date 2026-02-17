@@ -365,3 +365,13 @@ def test_extract_catalog_items_reads_rrc_price_column():
     items = extract_catalog_items(rows)
     assert len(items) == 1
     assert items[0]["rrc_price"] == 4990.0
+
+
+def test_map_category_detects_sneakers_by_brand_model():
+    assert map_category("NEW BALANCE 9060") == "Обувь"
+    assert map_category("Adidas Retropy e5") == "Обувь"
+
+
+def test_normalize_retail_price_rounds_to_x99():
+    got = si.normalize_retail_price(12684)
+    assert got == 12699.0

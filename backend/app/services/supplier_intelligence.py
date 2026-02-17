@@ -68,8 +68,12 @@ CATEGORY_RULES: dict[str, tuple[str, ...]] = {
     "Рубашки": ("рубаш", "shirt"),
     "Лонгсливы": ("лонгслив", "longsleeve", "long sleeve"),
     "Свитера": ("свитер", "джемпер", "pullover"),
-    "Обувь": ("кросс", "sneaker", "кеды", "обув", "ботин", "лофер", "сланц"),
-    "Аксессуары": ("кепк", "шапк", "сумк", "ремень", "аксесс"),
+    "Обувь": (
+        "кросс", "sneaker", "кеды", "обув", "ботин", "лофер", "сланц",
+        "new balance", "nb ", "nike", "adidas", "asics", "puma", "reebok", "jordan", "yeezy",
+        "air force", "air max", "vomero", "retropy", "samba", "gazelle", "campus",
+    ),
+    "Аксессуары": ("кепк", "шапк", "сумк", "ремень", "аксесс", "рюкзак", "кошелек", "wallet", "bag"),
 }
 
 
@@ -639,6 +643,15 @@ def generate_ai_product_description(
 
 MIN_MARKUP_RATIO = 1.40
 DEFAULT_MARKUP_RATIO = 1.55
+
+
+def normalize_retail_price(price: float | None) -> float:
+    p = max(0.0, float(price or 0.0))
+    if p <= 0:
+        return 0.0
+    if p >= 1000:
+        return float(max(99, int(round(p / 100.0) * 100 - 1)))
+    return float(max(9, int(round(p / 10.0) * 10 - 1)))
 
 
 def ensure_min_markup_price(candidate_price: float | None, dropship_price: float, min_markup_ratio: float = MIN_MARKUP_RATIO) -> float:

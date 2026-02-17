@@ -830,9 +830,9 @@ img, picture { max-width: 100%; height: auto; display: block; }
 
 /* Sticky search */
 .sticky-search {
-  position: sticky;
-  top: calc(var(--header-h) + 10px);
-  z-index: 40;
+  position: static;
+  top: auto;
+  z-index: 1;
   margin: 12px 0 14px;
   padding: 10px;
   border-radius: 16px;
@@ -1479,9 +1479,9 @@ img, picture { max-width: 100%; height: auto; display: block; }
 }
 
 .catalog-search-top {
-  position: sticky;
-  top: calc(var(--header-h) + 2px);
-  z-index: 52;
+  position: static;
+  top: auto;
+  z-index: auto;
   background: var(--bg);
   padding-top: 8px;
   padding-bottom: 2px;

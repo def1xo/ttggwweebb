@@ -33,6 +33,7 @@ from app.services.supplier_intelligence import (
     print_signature_hamming,
     split_size_tokens,
     suggest_sale_price,
+    normalize_retail_price,
 )
 
 router = APIRouter(tags=["admin_supplier_intelligence"])
@@ -681,11 +682,21 @@ def import_products_from_sources(
             c = db.query(models.Category).filter(models.Category.name == n).one_or_none()
         if c:
             return c
+
         c = models.Category(name=n, slug=slug)
-        db.add(c)
-        db.flush()
-        created_categories += 1
-        return c
+        try:
+            with db.begin_nested():
+                db.add(c)
+                db.flush()
+            created_categories += 1
+            return c
+        except IntegrityError:
+            c2 = db.query(models.Category).filter(models.Category.slug == slug).one_or_none()
+            if not c2:
+                c2 = db.query(models.Category).filter(models.Category.name == n).one_or_none()
+            if c2:
+                return c2
+            raise
 
     def get_or_create_color(name: str | None) -> models.Color | None:
         nm = (name or "").strip()
@@ -778,7 +789,7 @@ def import_products_from_sources(
             try:
                 rrc_val = float(rrc_price)
                 if rrc_val > 0:
-                    return max(1.0, round(rrc_val - RRC_DISCOUNT_RUB, 0))
+                    return normalize_retail_price(max(1.0, round(rrc_val - RRC_DISCOUNT_RUB, 0)))
             except Exception:
                 pass
 
@@ -793,8 +804,8 @@ def import_products_from_sources(
                     avito_price_cache[key] = None
             suggested = avito_price_cache.get(key)
             if suggested and suggested > 0:
-                return ensure_min_markup_price(float(suggested), base)
-        return ensure_min_markup_price(round(base * 1.4, 0), base)
+                return normalize_retail_price(ensure_min_markup_price(float(suggested), base))
+        return normalize_retail_price(ensure_min_markup_price(round(base * 1.4, 0), base))
 
     # pre-scan all selected sources to get minimal закупка per title and known image pool
     for src in sources:
