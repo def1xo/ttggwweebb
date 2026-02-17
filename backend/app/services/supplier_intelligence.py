@@ -371,6 +371,72 @@ def split_size_tokens(raw: Any) -> list[str]:
     return out
 
 
+
+
+_COLOR_CANONICAL_MAP: tuple[tuple[str, str], ...] = (
+    ("крас", "красный"),
+    ("red", "красный"),
+    ("син", "синий"),
+    ("blue", "синий"),
+    ("голуб", "голубой"),
+    ("green", "зеленый"),
+    ("зелен", "зеленый"),
+    ("black", "черный"),
+    ("черн", "черный"),
+    ("white", "белый"),
+    ("бел", "белый"),
+    ("gray", "серый"),
+    ("grey", "серый"),
+    ("сер", "серый"),
+    ("pink", "розовый"),
+    ("роз", "розовый"),
+    ("beige", "бежевый"),
+    ("беж", "бежевый"),
+)
+
+
+def _looks_like_title(text: str) -> bool:
+    t = str(text or "").strip()
+    if len(t) < 3:
+        return False
+    if re.match(r"^https?://", t, flags=re.I):
+        return False
+    if re.fullmatch(r"[\d\s.,:/-]+", t):
+        return False
+    return bool(re.search(r"[A-Za-zА-Яа-яЁё]", t))
+
+
+def _row_fallback_title(row: list[str]) -> str:
+    for cell in row:
+        c = _norm(cell)
+        if _looks_like_title(c):
+            return c
+    return ""
+
+
+def _extract_color_from_title(title: str) -> tuple[str, str | None]:
+    raw = str(title or "").strip()
+    if not raw:
+        return "", None
+
+    tokens = [t for t in re.split(r"[\s/|,;()\[\]-]+", raw) if t]
+    if not tokens:
+        return raw, None
+
+    last = tokens[-1].lower()
+    color: str | None = None
+    for needle, canonical in _COLOR_CANONICAL_MAP:
+        if last.startswith(needle):
+            color = canonical
+            break
+
+    if not color:
+        return raw, None
+
+    cleaned = re.sub(r"[\s/|,;()\[\]-]+$", "", raw)
+    cleaned = re.sub(rf"(?i)(?:[\s/|,;()\[\]-]+){re.escape(tokens[-1])}$", "", cleaned).strip()
+    return (cleaned or raw), color
+
 def _find_col(headers: list[str], candidates: tuple[str, ...]) -> int | None:
     h = [x.strip().lower() for x in headers]
     for i, col in enumerate(h):
@@ -426,8 +492,9 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
     headers = [str(x or "").strip() for x in rows[0]]
     body = rows[1:] if len(rows) > 1 else []
 
-    idx_title = _find_col(headers, ("товар", "назв", "title", "item", "модель"))
+    idx_title = _find_col(headers, ("товар", "назв", "title", "item", "модель", "наимен", "product", "позиц"))
     idx_price = _pick_price_column(headers)
+    idx_rrc = _find_col(headers, ("ррц", "rrc", "мрц", "mrc", "розниц", "retail"))
     idx_color = _find_col(headers, ("цвет", "color"))
     idx_size = _find_col(headers, ("размер", "size"))
     idx_stock = _find_col(headers, ("остат", "налич", "stock", "qty", "кол-во"))
@@ -445,25 +512,38 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         if len(out) >= max_items:
             break
         title = _norm(row[idx_title]) if idx_title is not None and idx_title < len(row) else ""
-        if not title:
+        if not _looks_like_title(title):
+            title = _row_fallback_title(row)
+        if not _looks_like_title(title):
             continue
+
         price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
         if price is None or price <= 0:
             continue
+
+        rrc_price = _to_float(row[idx_rrc]) if idx_rrc is not None and idx_rrc < len(row) else None
         color = _norm(row[idx_color]) if idx_color is not None and idx_color < len(row) else ""
+        normalized_title, inferred_color = _extract_color_from_title(title)
+        if _looks_like_title(normalized_title):
+            title = normalized_title
+        if not color and inferred_color:
+            color = inferred_color
+
         size = _norm(row[idx_size]) if idx_size is not None and idx_size < len(row) else ""
         stock = _to_int(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else None
-        image_url = _norm(row[idx_image]) if idx_image is not None and idx_image < len(row) else ""
-        image_urls = _split_image_urls(image_url)
+        raw_image = _norm(row[idx_image]) if idx_image is not None and idx_image < len(row) else ""
+        image_urls = _split_image_urls(raw_image)
+        image_url = image_urls[0] if image_urls else None
         description = _norm(row[idx_desc]) if idx_desc is not None and idx_desc < len(row) else ""
 
         out.append({
             "title": title,
             "dropship_price": float(price),
             "color": color or None,
+            "rrc_price": float(rrc_price) if rrc_price and rrc_price > 0 else None,
             "size": size or None,
             "stock": stock,
-            "image_url": image_url or None,
+            "image_url": image_url,
             "image_urls": image_urls,
             "description": description or None,
         })

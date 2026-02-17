@@ -790,12 +790,35 @@ export async function getMyProfile(forceRefresh: boolean = false) {
     `/v1/auth/me`,
   ];
 
-  _meInflight = tryCandidates(candidates, { method: "get" }, "auth/me")
+  // If token is missing but Telegram initData is available, try to bootstrap auth
+  // before requesting /auth/me. This prevents a blank profile state on first load.
+  try {
+    const hasToken =
+      !!localStorage.getItem("access_token") ||
+      !!localStorage.getItem("jwt") ||
+      !!localStorage.getItem("token");
+    if (!hasToken && getTelegramInitData()) {
+      await initWebAppAndAuth();
+    }
+  } catch {}
+
+  _meInflight = tryCandidates(candidates, { method: "get" })
     .then((data) => {
       _meCache = data;
       _meCacheAt = Date.now();
       try { localStorage.setItem("me", JSON.stringify(data)); } catch {}
       return data;
+    })
+    .catch((err) => {
+      // Last-resort fallback: keep UI usable with cached profile snapshot.
+      try {
+        const raw = localStorage.getItem("me");
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === "object") return parsed;
+        }
+      } catch {}
+      throw err;
     })
     .finally(() => {
       _meInflight = null;
@@ -1389,6 +1412,15 @@ export async function triggerSupplierAutoImportNow() {
   }
 }
 
+export async function getSupplierImportTaskStatus(taskId: string) {
+  try {
+    const res = await axiosInstance.get(`/api/admin/supplier-intelligence/tasks/${encodeURIComponent(taskId)}`);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function analyzeStoredSources(sourceIds: number[]) {
   try {
     const res = await axiosInstance.post("/api/admin/supplier-intelligence/analyze-sources", { source_ids: sourceIds });
@@ -1541,6 +1573,7 @@ api.analyzeSupplierLinks = analyzeSupplierLinks;
 api.analyzeStoredSources = analyzeStoredSources;
 api.importProductsFromSupplierSources = importProductsFromSupplierSources;
 api.triggerSupplierAutoImportNow = triggerSupplierAutoImportNow;
+api.getSupplierImportTaskStatus = getSupplierImportTaskStatus;
 api.avitoMarketScan = avitoMarketScan;
 api.telegramMediaPreview = telegramMediaPreview;
 api.analyzeImages = analyzeImages;
