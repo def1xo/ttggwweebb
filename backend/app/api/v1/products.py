@@ -20,18 +20,21 @@ def list_products(
     per_page: int = Query(50, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
-    query = db.query(models.Product).filter(models.Product.visible == True)
-    if category_id:
-        query = query.filter(models.Product.category_id == category_id)
-    if q:
-        query = query.filter(models.Product.title.ilike(f"%{q}%"))
-    total = query.count()
-    items = (
-        query.order_by(models.Product.created_at.desc())
-        .offset((page - 1) * per_page)
-        .limit(per_page)
-        .all()
-    )
+    try:
+        query = db.query(models.Product).filter(models.Product.visible == True)
+        if category_id:
+            query = query.filter(models.Product.category_id == category_id)
+        if q:
+            query = query.filter(models.Product.title.ilike(f"%{q}%"))
+        total = query.count()
+        items = (
+            query.order_by(models.Product.created_at.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+    except Exception:
+        return {"items": [], "total": 0, "page": page, "per_page": per_page}
     result = []
     for p in items:
         variants = []

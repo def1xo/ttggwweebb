@@ -80,51 +80,47 @@ def ensure_columns(engine) -> None:
     if "users" in tables:
         cols = {c["name"] for c in insp.get_columns("users")}
         with engine.begin() as conn:
-            # existing columns historically
-            if "balance_hold" not in cols:
+            def add_user_col(col: str, ddl_pg: str, ddl_other: str | None = None):
+                if col in cols:
+                    return
                 if _is_postgres(engine):
-                    _add_column_pg(conn, "users", "balance_hold", "NUMERIC(12,2) NOT NULL DEFAULT 0")
+                    _add_column_pg(conn, "users", col, ddl_pg)
                 else:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN balance_hold NUMERIC(12,2) DEFAULT 0"))
+                    conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {ddl_other or ddl_pg}"))
+
+            # Core profile/auth columns required by /auth/me and get_current_user
+            add_user_col("telegram_id", "BIGINT", "BIGINT")
+            add_user_col("username", "VARCHAR(64)", "VARCHAR(64)")
+            add_user_col("first_name", "VARCHAR(128)", "VARCHAR(128)")
+            add_user_col("last_name", "VARCHAR(128)", "VARCHAR(128)")
+            add_user_col("display_name", "VARCHAR(255)", "VARCHAR(255)")
+            add_user_col("avatar_url", "VARCHAR(1024)", "VARCHAR(1024)")
+            add_user_col("role", "user_role NOT NULL DEFAULT 'user'", "VARCHAR(16) DEFAULT 'user'")
+            add_user_col("balance", "NUMERIC(12,2) NOT NULL DEFAULT 0", "NUMERIC(12,2) DEFAULT 0")
+            add_user_col("promo_code", "VARCHAR(64)", "VARCHAR(64)")
+            add_user_col("manager_id", "INTEGER", "INTEGER")
+            add_user_col("created_at", "TIMESTAMPTZ DEFAULT NOW()", "DATETIME")
+            add_user_col("updated_at", "TIMESTAMPTZ DEFAULT NOW()", "DATETIME")
+
+            # existing columns historically
+            add_user_col("balance_hold", "NUMERIC(12,2) NOT NULL DEFAULT 0", "NUMERIC(12,2) DEFAULT 0")
 
             # promo lifecycle & anti-abuse
-            if "promo_used_at" not in cols:
-                if _is_postgres(engine):
-                    _add_column_pg(conn, "users", "promo_used_at", "TIMESTAMPTZ")
-                else:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN promo_used_at DATETIME"))
-            if "promo_used_code" not in cols:
-                if _is_postgres(engine):
-                    _add_column_pg(conn, "users", "promo_used_code", "VARCHAR(64)")
-                else:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN promo_used_code VARCHAR(64)"))
-            if "promo_pending_order_id" not in cols:
-                if _is_postgres(engine):
-                    _add_column_pg(conn, "users", "promo_pending_order_id", "INTEGER")
-                else:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN promo_pending_order_id INTEGER"))
-            if "promo_pending_code" not in cols:
-                if _is_postgres(engine):
-                    _add_column_pg(conn, "users", "promo_pending_code", "VARCHAR(64)")
-                else:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN promo_pending_code VARCHAR(64)"))
+            add_user_col("promo_used_at", "TIMESTAMPTZ", "DATETIME")
+            add_user_col("promo_used_code", "VARCHAR(64)", "VARCHAR(64)")
+            add_user_col("promo_pending_order_id", "INTEGER", "INTEGER")
+            add_user_col("promo_pending_code", "VARCHAR(64)", "VARCHAR(64)")
 
             # manager commission settings
-            if "first_n_count" not in cols:
-                if _is_postgres(engine):
-                    _add_column_pg(conn, "users", "first_n_count", "INTEGER NOT NULL DEFAULT 3")
-                else:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN first_n_count INTEGER DEFAULT 3"))
-            if "first_n_rate" not in cols:
-                if _is_postgres(engine):
-                    _add_column_pg(conn, "users", "first_n_rate", "NUMERIC(5,4) NOT NULL DEFAULT 0.10")
-                else:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN first_n_rate NUMERIC(5,4) DEFAULT 0.10"))
-            if "ongoing_rate" not in cols:
-                if _is_postgres(engine):
-                    _add_column_pg(conn, "users", "ongoing_rate", "NUMERIC(5,4) NOT NULL DEFAULT 0.05")
-                else:
-                    conn.execute(text("ALTER TABLE users ADD COLUMN ongoing_rate NUMERIC(5,4) DEFAULT 0.05"))
+            add_user_col("first_n_count", "INTEGER NOT NULL DEFAULT 3", "INTEGER DEFAULT 3")
+            add_user_col("first_n_rate", "NUMERIC(5,4) NOT NULL DEFAULT 0.10", "NUMERIC(5,4) DEFAULT 0.10")
+            add_user_col("ongoing_rate", "NUMERIC(5,4) NOT NULL DEFAULT 0.05", "NUMERIC(5,4) DEFAULT 0.05")
+
+            if _is_postgres(engine):
+                _create_index_pg(conn, "ix_users_username", "users", "username")
+                _create_index_pg(conn, "ix_users_manager_id", "users", "manager_id")
+                # Keep promo_code unique if table came from legacy schema
+                _create_unique_index_pg(conn, "ux_users_promo_code", "users", "promo_code")
 
     # ---------- orders ----------
     if "orders" in tables:

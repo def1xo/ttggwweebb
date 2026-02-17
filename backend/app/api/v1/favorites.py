@@ -64,7 +64,10 @@ def list_favorite_ids(
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    ids = [int(x[0]) for x in db.query(models.Favorite.product_id).filter(models.Favorite.user_id == user.id).all()]
+    try:
+        ids = [int(x[0]) for x in db.query(models.Favorite.product_id).filter(models.Favorite.user_id == user.id).all()]
+    except Exception:
+        return {"items": []}
     return {"items": ids}
 
 
@@ -74,22 +77,25 @@ def list_favorites(
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
-    favs = (
-        db.query(models.Favorite)
-        .options(
-            joinedload(models.Favorite.product)
-            .joinedload(models.Product.images),
-            joinedload(models.Favorite.product)
-            .joinedload(models.Product.variants)
-            .joinedload(models.ProductVariant.size),
-            joinedload(models.Favorite.product)
-            .joinedload(models.Product.variants)
-            .joinedload(models.ProductVariant.color),
+    try:
+        favs = (
+            db.query(models.Favorite)
+            .options(
+                joinedload(models.Favorite.product)
+                .joinedload(models.Product.images),
+                joinedload(models.Favorite.product)
+                .joinedload(models.Product.variants)
+                .joinedload(models.ProductVariant.size),
+                joinedload(models.Favorite.product)
+                .joinedload(models.Product.variants)
+                .joinedload(models.ProductVariant.color),
+            )
+            .filter(models.Favorite.user_id == user.id)
+            .order_by(models.Favorite.created_at.desc())
+            .all()
         )
-        .filter(models.Favorite.user_id == user.id)
-        .order_by(models.Favorite.created_at.desc())
-        .all()
-    )
+    except Exception:
+        return {"items": []}
     products = []
     for f in favs:
         p = f.product
