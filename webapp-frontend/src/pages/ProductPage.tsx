@@ -112,16 +112,24 @@ export default function ProductPage() {
     return uniq(variants.map((v) => String(v?.color?.name || v?.color || "")).filter(Boolean));
   }, [variants]);
 
-  const price = useMemo(() => {
-    const base = Number(product?.price ?? product?.base_price ?? 0);
-    const vMatch = variants.find((v) => {
+  const hasAnyStock = useMemo(() => variants.some((v) => Number(v?.stock ?? 0) > 0), [variants]);
+
+  const selectedVariant = useMemo(() => {
+    return variants.find((v) => {
       const s = String(v?.size?.name || v?.size || "");
       const c = String(v?.color?.name || v?.color || "");
       return (!selectedSize || s === selectedSize) && (!selectedColor || c === selectedColor);
-    });
+    }) || null;
+  }, [variants, selectedSize, selectedColor]);
+
+  const selectionMissing = (sizes.length > 0 && !selectedSize) || (colors.length > 0 && !selectedColor);
+
+  const price = useMemo(() => {
+    const base = Number(product?.price ?? product?.base_price ?? 0);
+    const vMatch = selectedVariant;
     const vPrice = vMatch ? Number(vMatch.price ?? 0) : 0;
     return vPrice || base;
-  }, [product, variants, selectedSize, selectedColor]);
+  }, [product, selectedVariant]);
 
   const activeImage = images[activeIndex] || product?.default_image || "/demo/kofta1.jpg";
 
@@ -141,6 +149,10 @@ export default function ProductPage() {
 
   const addToCart = () => {
     if (!product) return;
+    if (selectionMissing) {
+      notify("Выбери размер и цвет перед добавлением", "error");
+      return;
+    }
     let variant = variants[0];
     if (selectedSize || selectedColor) {
       const match = variants.find((v) => {
@@ -151,6 +163,10 @@ export default function ProductPage() {
       if (match) variant = match;
     }
     const variantId = product?.default_variant_id || variant?.id || product?.id;
+    if (Number(variant?.stock ?? 0) <= 0) {
+      notify("Товар сейчас не в наличии", "error");
+      return;
+    }
     (async () => {
       try {
         await addCartItem(Number(variantId), 1);
@@ -262,6 +278,7 @@ export default function ProductPage() {
 
         <div style={{ marginTop: 14, display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 10 }}>
           <div style={{ fontWeight: 900, fontSize: 20 }}>{price.toLocaleString("ru-RU")} ₽</div>
+          {!hasAnyStock ? <span className="chip" style={{ color: "#ff8e8e", borderColor: "rgba(255,120,120,0.45)" }}>Нет в наличии</span> : null}
         </div>
 
         {product.description ? <p style={{ marginTop: 10, color: "var(--text)" }}>{product.description}</p> : null}
@@ -318,8 +335,8 @@ export default function ProductPage() {
         ) : null}
 
         <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
-          <button className="btn btn-primary product-add-btn" onClick={addToCart}>
-            Добавить в корзину
+          <button className="btn btn-primary product-add-btn" onClick={addToCart} disabled={!hasAnyStock || (selectedVariant ? Number(selectedVariant?.stock ?? 0) <= 0 : false)}>
+            {!hasAnyStock ? "Нет в наличии" : "Добавить в корзину"}
           </button>
         </div>
       </div>
@@ -333,8 +350,9 @@ export default function ProductPage() {
               const pTitle = String(p?.title || p?.name || "Товар");
               const pPrice = Number(p?.price ?? p?.base_price ?? 0);
               const img = pickImage(p);
+              const pInStock = Boolean(p?.has_stock ?? (Array.isArray(p?.variants) ? p.variants.some((v: any) => Number(v?.stock ?? 0) > 0) : true));
               return (
-                <div key={pid} className="related-item">
+                <div key={pid} className="related-item" style={{ borderRadius: 16, padding: 10, background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))", border: "1px solid var(--border)" }}>
                   <Link to={`/product/${pid}`} style={{ textDecoration: "none", color: "inherit" }}>
                     <div className="related-thumb">{img ? <img src={img} alt={pTitle} /> : null}</div>
                     <div className="related-title">{pTitle}</div>
@@ -343,7 +361,7 @@ export default function ProductPage() {
                     <div className="small-muted" style={{ fontWeight: 700 }}>
                       {Number.isFinite(pPrice) && pPrice > 0 ? `${pPrice.toLocaleString("ru-RU")} ₽` : "—"}
                     </div>
-                    <button className="btn btn-sm" type="button" onClick={() => addRelatedToCart(p)}>
+                    <button className="btn btn-sm" type="button" onClick={() => addRelatedToCart(p)} disabled={!pInStock}>
                       + В корзину
                     </button>
                   </div>

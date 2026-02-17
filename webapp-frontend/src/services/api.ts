@@ -9,7 +9,15 @@ function emitToast(message: string, type: "info" | "success" | "error" = "info")
 
 function formatApiErrorMessage(raw: any): string {
   if (raw == null) return "";
-  if (typeof raw === "string") return raw;
+  if (typeof raw === "string") {
+    const s = raw.trim();
+    if (!s) return "";
+    if (/^<\s*html[\s>]/i.test(s) || /<\/?body/i.test(s) || /<\/?center/i.test(s) || /\bnginx\//i.test(s)) {
+      if (/405\s*Not\s*Allowed/i.test(s)) return "Промокод сейчас недоступен (ошибка сервера 405)";
+      return "Сервис временно недоступен";
+    }
+    return s;
+  }
   // FastAPI validation errors (422) обычно: {detail: [{loc,msg,type}, ...]}
   if (Array.isArray(raw)) {
     try {
@@ -1372,6 +1380,15 @@ export async function importProductsFromSupplierSources(payload: {
   }
 }
 
+export async function triggerSupplierAutoImportNow() {
+  try {
+    const res = await axiosInstance.post("/api/admin/supplier-intelligence/auto-import-now", {});
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function analyzeStoredSources(sourceIds: number[]) {
   try {
     const res = await axiosInstance.post("/api/admin/supplier-intelligence/analyze-sources", { source_ids: sourceIds });
@@ -1523,6 +1540,7 @@ api.bulkUpsertAdminSupplierSources = bulkUpsertAdminSupplierSources;
 api.analyzeSupplierLinks = analyzeSupplierLinks;
 api.analyzeStoredSources = analyzeStoredSources;
 api.importProductsFromSupplierSources = importProductsFromSupplierSources;
+api.triggerSupplierAutoImportNow = triggerSupplierAutoImportNow;
 api.avitoMarketScan = avitoMarketScan;
 api.telegramMediaPreview = telegramMediaPreview;
 api.analyzeImages = analyzeImages;

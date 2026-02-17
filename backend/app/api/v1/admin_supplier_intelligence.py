@@ -404,6 +404,17 @@ class ImportProductsOut(BaseModel):
     source_reports: list[ImportSourceReport] = Field(default_factory=list)
 
 
+class AutoImportNowOut(BaseModel):
+    queued: bool
+    source_count: int = 0
+    task: str = ""
+    created_products: int = 0
+    updated_products: int = 0
+    created_variants: int = 0
+    created_categories: int = 0
+    source_reports: list[ImportSourceReport] = Field(default_factory=list)
+
+
 def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
     return ImportSourceReport(source_id=source_id, url=source_url)
 
@@ -698,6 +709,44 @@ def import_products_from_sources(
                 return db.query(models.Product).filter(models.Product.id == pid).one_or_none()
         return None
 
+
+    def _group_title(raw_title: str | None) -> str:
+        return re.sub(r"\s+", " ", str(raw_title or "").strip())
+
+    def _pick_product_id_by_signature(
+        candidates: list[tuple[int, str | None]],
+        sig: str | None,
+        max_distance: int = 6,
+    ) -> int | None:
+        if not candidates:
+            return None
+        if not sig:
+            return int(candidates[0][0])
+
+        for pid, known_sig in candidates:
+            if known_sig and known_sig == sig:
+                return int(pid)
+
+        for pid, known_sig in candidates:
+            if not known_sig:
+                continue
+            dist = print_signature_hamming(sig, known_sig)
+            if dist is not None and dist <= max_distance:
+                return int(pid)
+
+        return int(candidates[0][0])
+
+    def remember_product_candidate(base_key: str, product_id: int, sig: str | None) -> None:
+        if not base_key:
+            return
+        bucket = title_product_candidates.setdefault(base_key, [])
+        item = (int(product_id), sig or None)
+        if item in bucket:
+            return
+        bucket.append(item)
+        if len(bucket) > 25:
+            del bucket[:-25]
+
     def pick_sale_price(title: str, dropship_price: float, min_dropship_price: float | None = None) -> float:
         base = float(min_dropship_price or 0) if float(min_dropship_price or 0) > 0 else float(dropship_price or 0)
         if base <= 0:
@@ -705,8 +754,12 @@ def import_products_from_sources(
         if payload.use_avito_pricing:
             key = (title or "").strip().lower()
             if key not in avito_price_cache:
-                scan = avito_market_scan(title, max_pages=payload.avito_max_pages, only_new=True)
-                avito_price_cache[key] = float(scan.get("suggested")) if scan.get("suggested") is not None else None
+                try:
+                    scan = avito_market_scan(title, max_pages=payload.avito_max_pages, only_new=True)
+                    avito_price_cache[key] = float(scan.get("suggested")) if scan.get("suggested") is not None else None
+                except Exception:
+                    # Avito pricing is best-effort: if scan fails we must still import product
+                    avito_price_cache[key] = None
             suggested = avito_price_cache.get(key)
             if suggested and suggested > 0:
                 return ensure_min_markup_price(float(suggested), base)
@@ -804,7 +857,9 @@ def import_products_from_sources(
                     # skip generic TG placeholders and unresolved items instead of polluting catalog
                     continue
 
-                min_dropship = title_min_dropship.get(_title_key(title))
+                base_title_key = _title_key(title)
+                title_for_group = _group_title(title)
+                min_dropship = title_min_dropship.get(base_title_key)
                 cat_name = map_category(title)
                 category = get_or_create_category(cat_name)
                 effective_title = (title_for_group or title).strip()
@@ -1017,6 +1072,44 @@ def import_products_from_sources(
         updated_products=updated_products,
         created_variants=created_variants,
         source_reports=source_reports,
+    )
+
+
+@router.post("/supplier-intelligence/auto-import-now", response_model=AutoImportNowOut)
+def run_auto_import_now(
+    _admin=Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    source_ids = [
+        int(x.id)
+        for x in db.query(models.SupplierSource)
+        .filter(models.SupplierSource.active == True)  # noqa: E712
+        .all()
+        if getattr(x, "id", None)
+    ]
+    if not source_ids:
+        raise HTTPException(status_code=400, detail="Нет активных источников")
+
+    payload = ImportProductsIn(
+        source_ids=source_ids,
+        dry_run=False,
+        publish_visible=True,
+        ai_style_description=True,
+        ai_description_enabled=True,
+        use_avito_pricing=True,
+        avito_max_pages=1,
+        max_items_per_source=40,
+    )
+    res = import_products_from_sources(payload=payload, _admin=_admin, db=db)
+    return AutoImportNowOut(
+        queued=False,
+        source_count=len(source_ids),
+        task="inline",
+        created_products=int(getattr(res, "created_products", 0) or 0),
+        updated_products=int(getattr(res, "updated_products", 0) or 0),
+        created_variants=int(getattr(res, "created_variants", 0) or 0),
+        created_categories=int(getattr(res, "created_categories", 0) or 0),
+        source_reports=getattr(res, "source_reports", []) or [],
     )
 
 

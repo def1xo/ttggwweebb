@@ -75,9 +75,14 @@ export default function SalesChart({ data, height = 260, selectedDate = null, on
           <Tooltip
             formatter={(value: any) => [formatMoney(Number(value)), "₽"]}
             labelFormatter={(label: any) => formatLabel(label)}
-            contentStyle={{ background: "var(--panel)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12 }}
-            itemStyle={{ color: "var(--text)" }}
-            labelStyle={{ color: "rgba(255,255,255,0.8)" }}
+            contentStyle={{
+              background: "rgba(17,17,20,0.94)",
+              border: "1px solid rgba(255,255,255,0.10)",
+              borderRadius: 12,
+              boxShadow: "0 10px 28px rgba(0,0,0,0.45)",
+            }}
+            itemStyle={{ color: "#e9edf3" }}
+            labelStyle={{ color: "rgba(233,237,243,0.72)", fontWeight: 700 }}
           />
           <Line
             type="monotone"
@@ -85,7 +90,7 @@ export default function SalesChart({ data, height = 260, selectedDate = null, on
             stroke="var(--accent)"
             strokeWidth={2}
             dot={<Dot onSelect={onSelect} selectedDate={selectedDate} />}
-            activeDot={{ r: 7 }}
+            activeDot={{ r: 6, fill: "#ffffff", stroke: "var(--accent)", strokeWidth: 2 }}
           />
         </LineChart>
       </ResponsiveContainer>
