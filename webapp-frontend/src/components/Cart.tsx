@@ -29,6 +29,7 @@ type CartItem = {
   image?: string | null;
   size?: string | null;
   color?: string | null;
+  in_stock?: boolean;
 };
 
 type CartPromo = {
@@ -151,6 +152,8 @@ export default function Cart() {
   }, []);
 
   const items = cart?.items || [];
+  const availableItems = items.filter((it) => it.in_stock !== false);
+  const endedItems = items.filter((it) => it.in_stock === false);
   const subtotal = Number(cart?.subtotal || 0);
   const discount = Number(cart?.discount || 0);
   const total = Number(cart?.total || 0);
@@ -158,7 +161,7 @@ export default function Cart() {
   const remainingToFree = Math.max(0, FREE_DELIVERY_FROM - subtotal);
   const freeProgress = Math.min(1, subtotal / FREE_DELIVERY_FROM);
   const hasDeliveryAddress = pvz.trim().length > 0;
-  const deliveryPrice = items.length > 0 && hasDeliveryAddress && subtotal < FREE_DELIVERY_FROM ? DELIVERY_PRICE : 0;
+  const deliveryPrice = availableItems.length > 0 && hasDeliveryAddress && subtotal < FREE_DELIVERY_FROM ? DELIVERY_PRICE : 0;
   const payableTotal = total + deliveryPrice;
 
   const promoApplied = useMemo(() => {
@@ -167,7 +170,7 @@ export default function Cart() {
 
   useEffect(() => {
     (async () => {
-      if (!items.length) {
+      if (!availableItems.length) {
         setRelated([]);
         return;
       }
@@ -182,7 +185,19 @@ export default function Cart() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items.map((x) => `${x.product_id}:${x.quantity}`).join('|')]);
+  }, [availableItems.map((x) => `${x.product_id}:${x.quantity}`).join('|')]);
+
+  async function onClearEnded() {
+    if (!endedItems.length) return;
+    try {
+      await Promise.all(endedItems.map((it) => deleteCartItem(it.variant_id)));
+      notify("Список 'Закончилось' очищен", "success");
+      await load(true);
+      try { window.dispatchEvent(new CustomEvent("cart:updated")); } catch {}
+    } catch (e: any) {
+      notify(e?.response?.data?.detail || e?.message || "Не удалось очистить товары без наличия", "error");
+    }
+  }
 
   async function onAddRelated(product: any) {
     const variants = Array.isArray(product?.variants) ? product.variants : [];
@@ -268,7 +283,7 @@ export default function Cart() {
   }
 
   async function onPlaceOrder() {
-    if (!items.length) {
+    if (!availableItems.length) {
       notify("Корзина пуста", "error");
       return;
     }
@@ -295,7 +310,7 @@ export default function Cart() {
       trackAnalyticsEvent({
         event: "begin_checkout",
         source: "cart_page",
-        items_count: items.length,
+        items_count: availableItems.length,
         subtotal,
         discount,
         total,
@@ -314,7 +329,7 @@ export default function Cart() {
         event: "purchase",
         source: "cart_page",
         order_id: Number(orderId || 0) || null,
-        items_count: items.length,
+        items_count: availableItems.length,
         total: payableTotal,
       });
       // move to success page (there payment requisites + proof upload)
@@ -334,7 +349,7 @@ export default function Cart() {
         <div>
           <div className="page-head__title">Корзина</div>
           <div className="small-muted" style={{ marginTop: 6 }}>
-            {loading ? "Загрузка…" : refreshing ? "Обновляем…" : items.length ? `${items.length} товар(ов)` : "Пока пусто"}
+            {loading ? "Загрузка…" : refreshing ? "Обновляем…" : availableItems.length ? `${availableItems.length} товар(ов)` : "Пока пусто"}
           </div>
         </div>
         <div className="page-head__actions">
@@ -348,7 +363,7 @@ export default function Cart() {
 
       <div className="cart-grid">
         <div className="left-column">
-          {items.length === 0 ? (
+          {availableItems.length === 0 ? (
             <div className="card empty-state" style={{ padding: 14 }}>
               <div className="empty-emoji" aria-hidden>
                 🛍️
@@ -364,7 +379,7 @@ export default function Cart() {
               </div>
             </div>
           ) : (
-            items.map((it) => (
+            availableItems.map((it) => (
               <div key={String(it.variant_id)} className="card cart-item">
                 <div className="thumb">
                   {it.image ? <img src={String(it.image)} alt={it.title} /> : <div className="no-image">NO IMAGE</div>}
@@ -411,6 +426,27 @@ export default function Cart() {
               </div>
             ))
           )}
+
+          {endedItems.length > 0 ? (
+            <div className="card" style={{ marginTop: 12, borderColor: "rgba(255,120,120,0.4)", background: "rgba(120,0,0,0.12)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 900 }}>Закончилось</div>
+                <button className="btn ghost btn-sm" onClick={onClearEnded} disabled={placing || loading || refreshing}>Очистить</button>
+              </div>
+              <div className="small-muted" style={{ marginTop: 6 }}>Эти товары временно недоступны и не попадут в заказ.</div>
+              <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                {endedItems.map((it) => (
+                  <div key={`ended_${it.variant_id}`} style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                    <div>
+                      <div style={{ fontWeight: 800 }}>{it.title}</div>
+                      <div className="small-muted">x{it.quantity}</div>
+                    </div>
+                    <div style={{ fontWeight: 800 }}>0 ₽</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="right-column">

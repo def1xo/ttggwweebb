@@ -315,3 +315,43 @@ def import_post_task(payload: dict):
         return {"ok": False, "error": str(exc)}
     finally:
         db.close()
+
+
+@shared_task(name="tasks.supplier_auto_import_24h")
+def supplier_auto_import_24h_task():
+    db = SessionLocal()
+    try:
+        from app.api.v1.admin_supplier_intelligence import ImportProductsIn, import_products_from_sources
+
+        source_ids = [
+            int(x.id)
+            for x in db.query(models.SupplierSource)
+            .filter(models.SupplierSource.active == True)  # noqa: E712
+            .all()
+            if getattr(x, "id", None)
+        ]
+        if not source_ids:
+            return {"ok": True, "source_count": 0, "message": "no active supplier sources"}
+
+        payload = ImportProductsIn(
+            source_ids=source_ids,
+            dry_run=False,
+            publish_visible=True,
+            ai_style_description=True,
+            ai_description_enabled=True,
+            use_avito_pricing=True,
+            avito_max_pages=1,
+            max_items_per_source=40,
+        )
+        res = import_products_from_sources(payload=payload, _admin=True, db=db)
+        return {
+            "ok": True,
+            "source_count": len(source_ids),
+            "created_products": int(getattr(res, "created_products", 0) or 0),
+            "updated_products": int(getattr(res, "updated_products", 0) or 0),
+        }
+    except Exception as exc:
+        logger.exception("supplier_auto_import_24h_task failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+    finally:
+        db.close()

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, analyzeImages, analyzeStoredSources, avitoMarketScan, bulkUpsertAdminSupplierSources, createAdminNews, createAdminSupplierSource, deleteAdminNews, deleteAdminSupplierSource, findSimilarImagesInSources, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminNews, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, importProductsFromSupplierSources, patchAdminNews, patchAdminSupplierSource, sendAdminCatalogToTelegram, sendAdminSalesExportToTelegram, sendOrderProofToTelegram, telegramMediaPreview } from "../services/api";
+import api, { adminLogin, createAdminNews, createAdminSupplierSource, deleteAdminNews, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminNews, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, patchAdminNews, patchAdminSupplierSource, sendAdminCatalogToTelegram, sendAdminSalesExportToTelegram, sendOrderProofToTelegram, triggerSupplierAutoImportNow } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -961,34 +961,13 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-
   const [editingId, setEditingId] = useState<number | null>(null);
   const [sourceUrl, setSourceUrl] = useState("");
   const [supplierName, setSupplierName] = useState("");
   const [managerName, setManagerName] = useState("");
   const [managerContact, setManagerContact] = useState("");
   const [note, setNote] = useState("");
-  const [bulkLinks, setBulkLinks] = useState("");
-  const [bulkSupplierName, setBulkSupplierName] = useState("");
-  const [bulkManagerName, setBulkManagerName] = useState("");
-  const [bulkManagerContact, setBulkManagerContact] = useState("");
-  const [bulkNote, setBulkNote] = useState("");
-
-  const [analysis, setAnalysis] = useState<any[]>([]);
-  const [importDryRun, setImportDryRun] = useState(true);
-  const [importPublishVisible, setImportPublishVisible] = useState(false);
-  const [importUseAi, setImportUseAi] = useState(true);
-  const [importUseAiOriginalDescriptions, setImportUseAiOriginalDescriptions] = useState(true);
-  const [importUseAvitoPricing, setImportUseAvitoPricing] = useState(true);
-  const [importAvitoPages, setImportAvitoPages] = useState(1);
-  const [importMaxItems, setImportMaxItems] = useState(40);
-  const [importReport, setImportReport] = useState<any | null>(null);
-  const [avitoQuery, setAvitoQuery] = useState("");
-  const [avitoResult, setAvitoResult] = useState<any | null>(null);
-  const [tgMediaResult, setTgMediaResult] = useState<any[]>([]);
-  const [imageAnalysisResult, setImageAnalysisResult] = useState<any[]>([]);
-  const [similarRefImageUrl, setSimilarRefImageUrl] = useState("");
-  const [similarImages, setSimilarImages] = useState<any[]>([]);
+  const [autoImporting, setAutoImporting] = useState(false);
 
   const resetForm = () => {
     setEditingId(null);
@@ -1062,180 +1041,43 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
     }
   };
 
-  const analyzeAll = async () => {
-    const ids = items.map((x) => Number(x?.id)).filter((x) => Number.isFinite(x) && x > 0);
-    if (!ids.length) {
-      setMsg("Сначала добавьте хотя бы один источник");
-      return;
-    }
-    try {
-      const res: any = await analyzeStoredSources(ids);
-      setAnalysis(Array.isArray(res) ? res : []);
-      setMsg("Анализ источников готов ✅");
-    } catch (e: any) {
-      setMsg(e?.message || "Не удалось проанализировать источники");
-    }
-  };
-
-  const bulkAdd = async () => {
-    const links = bulkLinks
-      .split(/\n|,|;/)
-      .map((x) => x.trim())
-      .filter(Boolean);
-    if (!links.length) {
-      setMsg("Вставьте хотя бы одну ссылку");
-      return;
-    }
-    try {
-      const entries = links.map((url) => ({
-        source_url: url,
-        supplier_name: bulkSupplierName.trim() || undefined,
-        manager_name: bulkManagerName.trim() || undefined,
-        manager_contact: bulkManagerContact.trim() || undefined,
-        note: bulkNote.trim() || undefined,
-      }));
-      const res: any = await bulkUpsertAdminSupplierSources(entries);
-      setMsg(`Массово обработано: +${res?.created || 0} новых, ~${res?.updated || 0} обновлено, ${res?.skipped || 0} без изменений`);
-      setBulkLinks("");
-      load();
-    } catch (e: any) {
-      setMsg(e?.message || "Не удалось массово добавить источники");
-    }
-  };
-
   const seedDefaultSources = async () => {
     try {
-      const entries = DEFAULT_SUPPLIER_SOURCE_LINKS.map((url) => ({
-        source_url: url,
-        supplier_name: bulkSupplierName.trim() || undefined,
-        manager_name: bulkManagerName.trim() || undefined,
-        manager_contact: bulkManagerContact.trim() || undefined,
-        note: "seed: стартовый набор источников",
-      }));
-      const res: any = await bulkUpsertAdminSupplierSources(entries);
-      setMsg(`Стартовые источники: +${res?.created || 0} новых, ~${res?.updated || 0} обновлено`);
-      await load();
+      let created = 0;
+      let skipped = 0;
+      for (const source_url of DEFAULT_SUPPLIER_SOURCE_LINKS) {
+        try {
+          await createAdminSupplierSource({ source_url, note: "seed: стартовый набор источников" });
+          created += 1;
+        } catch {
+          skipped += 1;
+        }
+      }
+      setMsg(`Стартовые источники: +${created} новых, ${skipped} уже были`);
+      load();
     } catch (e: any) {
       setMsg(e?.message || "Не удалось добавить стартовые источники");
     }
   };
 
-
-  const runImportProducts = async () => {
-    const sourceIds = items
-      .map((x) => Number(x?.id))
-      .filter((x) => Number.isFinite(x) && x > 0);
-    if (!sourceIds.length) {
-      setMsg("Нет источников для импорта");
-      return;
-    }
-
+  const runAutoImportNow = async () => {
     try {
-      setImportReport(null);
-      const payload = {
-        source_ids: sourceIds,
-        max_items_per_source: Math.max(1, Math.min(200, Number(importMaxItems) || 40)),
-        dry_run: Boolean(importDryRun),
-        publish_visible: Boolean(importPublishVisible),
-        ai_style_description: Boolean(importUseAi),
-        ai_description_enabled: Boolean(importUseAiOriginalDescriptions),
-        ai_description_provider: "openrouter",
-        use_avito_pricing: Boolean(importUseAvitoPricing),
-        avito_max_pages: Math.max(1, Math.min(3, Number(importAvitoPages) || 1)),
-      };
-      const res: any = await importProductsFromSupplierSources(payload);
-      setImportReport(res || null);
-      setMsg(importDryRun ? "Dry-run импорт завершён ✅" : "Импорт товаров завершён ✅");
+      setAutoImporting(true);
+      const res: any = await triggerSupplierAutoImportNow();
+      const created = Number(res?.created_products || 0);
+      const updated = Number(res?.updated_products || 0);
+      const variants = Number(res?.created_variants || 0);
+      const categories = Number(res?.created_categories || 0);
+      const errCount = Array.isArray(res?.source_reports)
+        ? res.source_reports.reduce((acc: number, x: any) => acc + Number(x?.errors || 0), 0)
+        : 0;
+      setMsg(`Импорт завершён ✅ Категории +${categories}, товары +${created}, обновлено ${updated}, варианты +${variants}${errCount ? `, ошибок: ${errCount}` : ""}`);
     } catch (e: any) {
-      setMsg(e?.message || "Не удалось запустить импорт товаров");
+      setMsg(e?.message || "Не удалось запустить автоимпорт");
+    } finally {
+      setAutoImporting(false);
     }
   };
-
-  const runAvitoScan = async () => {
-    const query = avitoQuery.trim();
-    if (!query) {
-      setMsg("Введите запрос для Avito");
-      return;
-    }
-    try {
-      const res: any = await avitoMarketScan({
-        query,
-        max_pages: Math.max(1, Math.min(3, Number(importAvitoPages) || 1)),
-      });
-      setAvitoResult(res || null);
-      setMsg("Avito скан завершён ✅");
-    } catch (e: any) {
-      setMsg(e?.message || "Не удалось выполнить Avito скан");
-    }
-  };
-
-  const runTgMediaPreview = async () => {
-    const urls = items
-      .map((x) => String(x?.source_url || "").trim())
-      .filter((url) => url && /(?:t\.me\/|telegram\.me\/)/i.test(url));
-    if (!urls.length) {
-      setMsg("Нет Telegram-источников для подгрузки фото");
-      setTgMediaResult([]);
-      setImageAnalysisResult([]);
-      return;
-    }
-
-    try {
-      const mediaRes: any = await telegramMediaPreview(urls);
-      const media = Array.isArray(mediaRes) ? mediaRes : [];
-      setTgMediaResult(media);
-
-      const imageUrls = Array.from(
-        new Set(
-          media
-            .flatMap((x: any) => (Array.isArray(x?.image_urls) ? x.image_urls : []))
-            .map((x: any) => String(x || "").trim())
-            .filter(Boolean),
-        ),
-      ).slice(0, 50);
-
-      if (!imageUrls.length) {
-        setImageAnalysisResult([]);
-        setMsg("Фото в TG-источниках не найдены");
-        return;
-      }
-
-      const analysisRes: any = await analyzeImages(imageUrls);
-      setImageAnalysisResult(Array.isArray(analysisRes) ? analysisRes : []);
-      setMsg("Фото из TGК загружены и проанализированы ✅");
-    } catch (e: any) {
-      setMsg(e?.message || "Не удалось получить/проанализировать фото из Telegram");
-    }
-  };
-
-  const runSimilarImageSearch = async () => {
-    const ref = similarRefImageUrl.trim();
-    if (!ref) {
-      setMsg("Вставь URL референс-фото для поиска похожих");
-      return;
-    }
-    const sourceIds = items
-      .map((x) => Number(x?.id))
-      .filter((x) => Number.isFinite(x) && x > 0);
-    if (!sourceIds.length) {
-      setMsg("Нет источников для поиска похожих фото");
-      return;
-    }
-    try {
-      const res: any = await findSimilarImagesInSources({
-        reference_image_url: ref,
-        source_ids: sourceIds,
-        per_source_limit: 20,
-        max_hamming_distance: 8,
-        max_results: 30,
-      });
-      setSimilarImages(Array.isArray(res) ? res : []);
-      setMsg("Поиск похожих фото по каналам завершён ✅");
-    } catch (e: any) {
-      setMsg(e?.message || "Не удалось выполнить поиск похожих фото");
-    }
-  };
-
 
   return (
     <div className="container" style={{ paddingTop: 12 }}>
@@ -1253,123 +1095,25 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
         <input className="input" placeholder="Менеджер (как подписать)" value={managerName} onChange={(e) => setManagerName(e.target.value)} />
         <input className="input" placeholder="Контакт менеджера (tg/link/phone)" value={managerContact} onChange={(e) => setManagerContact(e.target.value)} />
         <input className="input" placeholder="Комментарий" value={note} onChange={(e) => setNote(e.target.value)} />
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button className="btn btn-primary" onClick={saveSource} disabled={!sourceUrl.trim()}>{editingId ? "Сохранить" : "Добавить"}</button>
           {editingId ? <button className="btn btn-secondary" onClick={resetForm}>Отмена</button> : null}
+          <button className="btn btn-secondary" onClick={seedDefaultSources}>Добавить стартовый набор</button>
         </div>
       </div>
 
       <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>
-        <div style={{ fontWeight: 800 }}>Массовое добавление источников</div>
-        <textarea
-          className="input"
-          style={{ minHeight: 120 }}
-          placeholder="Вставьте ссылки (каждая с новой строки, либо через запятую/; )"
-          value={bulkLinks}
-          onChange={(e) => setBulkLinks(e.target.value)}
-        />
-        <input className="input" placeholder="Общий поставщик (опционально)" value={bulkSupplierName} onChange={(e) => setBulkSupplierName(e.target.value)} />
-        <input className="input" placeholder="Общий менеджер" value={bulkManagerName} onChange={(e) => setBulkManagerName(e.target.value)} />
-        <input className="input" placeholder="Общий контакт менеджера" value={bulkManagerContact} onChange={(e) => setBulkManagerContact(e.target.value)} />
-        <input className="input" placeholder="Общая заметка" value={bulkNote} onChange={(e) => setBulkNote(e.target.value)} />
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="btn" onClick={bulkAdd} disabled={!bulkLinks.trim()}>Массово добавить/обновить</button>
-          <button className="btn btn-secondary" onClick={seedDefaultSources}>Добавить стартовый набор (Sheets + TG + MoySklad)</button>
-        </div>
-      </div>
-
-      <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>
-        <div style={{ fontWeight: 800 }}>Импорт товаров из источников</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-          <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <input type="checkbox" checked={importDryRun} onChange={(e) => setImportDryRun(e.target.checked)} />
-            Dry-run (без записи в БД)
-          </label>
-          <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <input type="checkbox" checked={importPublishVisible} onChange={(e) => setImportPublishVisible(e.target.checked)} />
-            Делать товары видимыми
-          </label>
-        </div>
-        <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <input type="checkbox" checked={importUseAi} onChange={(e) => setImportUseAi(e.target.checked)} />
-          AI-style описание для аудитории 15-25
-        </label>
-        <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <input
-            type="checkbox"
-            checked={importUseAiOriginalDescriptions}
-            onChange={(e) => setImportUseAiOriginalDescriptions(e.target.checked)}
-            disabled={!importUseAi}
-          />
-          Уникальные описания через ИИ (OpenRouter), fallback на скрипт
-        </label>
-        <label className="small-muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <input type="checkbox" checked={importUseAvitoPricing} onChange={(e) => setImportUseAvitoPricing(e.target.checked)} />
-          Использовать Avito для автопрайса
-        </label>
-        <input className="input" type="number" min={1} max={3} value={importAvitoPages} onChange={(e) => setImportAvitoPages(Number(e.target.value || 1))} placeholder="Страниц Avito на товар (1-3)" />
-        <input className="input" type="number" min={1} max={200} value={importMaxItems} onChange={(e) => setImportMaxItems(Number(e.target.value || 40))} placeholder="Макс. товаров на источник" />
-        <button className="btn btn-primary" onClick={runImportProducts} disabled={items.length === 0}>Запустить импорт товаров</button>
-        {importReport ? (
-          <div className="card" style={{ padding: 10 }}>
-            <div style={{ fontWeight: 700 }}>Отчёт импорта</div>
-            <div className="small-muted" style={{ marginTop: 4 }}>
-              Категорий: +{importReport?.created_categories || 0} • Товаров: +{importReport?.created_products || 0} • Обновлено: {importReport?.updated_products || 0} • Вариантов: +{importReport?.created_variants || 0}
-            </div>
-          </div>
-        ) : null}
-      </div>
-
-
-      <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>
-        <div style={{ fontWeight: 800 }}>Avito + TG + анализ изображений</div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input className="input" placeholder="Запрос для Avito (например: худи nike black)" value={avitoQuery} onChange={(e) => setAvitoQuery(e.target.value)} />
-          <button className="btn" onClick={runAvitoScan} disabled={!avitoQuery.trim()}>Скан Avito</button>
-        </div>
-        {avitoResult ? (
-          <div className="small-muted">Рекомендованная цена: {avitoResult?.suggested ?? "—"} ₽ • найдено цен: {(avitoResult?.prices || []).length}</div>
-        ) : null}
-        <button className="btn btn-secondary" onClick={runTgMediaPreview}>Подгрузить фото из TGК и проанализировать</button>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input className="input" placeholder="URL референс-фото для поиска похожих в каналах" value={similarRefImageUrl} onChange={(e) => setSimilarRefImageUrl(e.target.value)} />
-          <button className="btn" onClick={runSimilarImageSearch} disabled={!similarRefImageUrl.trim()}>Найти похожие</button>
-        </div>
-        {tgMediaResult.length > 0 ? <div className="small-muted">TG источников с фото: {tgMediaResult.length}</div> : null}
-        {similarImages.length > 0 ? (
-          <div className="card" style={{ padding: 10 }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Похожие фото по каналам</div>
-            <div style={{ display: "grid", gap: 4 }}>
-              {similarImages.slice(0, 10).map((it: any, idx: number) => (
-                <div key={`${it.image_url}_${idx}`} className="small-muted" style={{ wordBreak: "break-all" }}>
-                  src#{it.source_id} • dist: {it.distance} • sim: {it.similarity} • {it.image_url}
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {imageAnalysisResult.length > 0 ? (
-          <div className="card" style={{ padding: 10 }}>
-            <div style={{ fontWeight: 700, marginBottom: 6 }}>Анализ принтов/цветов (preview)</div>
-            <div style={{ display: "grid", gap: 4 }}>
-              {imageAnalysisResult.slice(0, 8).map((it: any, idx: number) => (
-                <div key={`${it.image_url}_${idx}`} className="small-muted" style={{ wordBreak: "break-all" }}>
-                  {it.dominant_color || "цвет ?"} • sig: {it.print_signature || "—"} • {it.image_url}
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
+        <div style={{ fontWeight: 800 }}>Автообновление и автоимпорт</div>
+        <div className="small-muted">Автоматический импорт настроен раз в 24 часа. Можно запустить вручную.</div>
+        <button className="btn" onClick={runAutoImportNow} disabled={autoImporting || items.length === 0}>
+          {autoImporting ? "Запускаем..." : "Обновить и импортировать сейчас"}
+        </button>
       </div>
 
       <div className="card" style={{ padding: 12, marginBottom: 12 }}>
-
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 10 }}>
           <div style={{ fontWeight: 800 }}>Сохранённые источники</div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn btn-secondary" onClick={load} disabled={loading}>Обновить</button>
-            <button className="btn" onClick={analyzeAll} disabled={loading || items.length === 0}>Проверить источники</button>
-          </div>
+          <button className="btn btn-secondary" onClick={load} disabled={loading}>Обновить</button>
         </div>
         {loading ? <div className="small-muted">Загрузка...</div> : null}
         {items.length === 0 ? <div className="small-muted">Пока пусто</div> : null}
@@ -1389,26 +1133,6 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
           ))}
         </div>
       </div>
-
-      {analysis.length > 0 ? (
-        <div className="card" style={{ padding: 12 }}>
-          <div style={{ fontWeight: 800, marginBottom: 8 }}>Результат быстрой проверки</div>
-          <div style={{ display: "grid", gap: 8 }}>
-            {analysis.map((a, idx) => (
-              <div key={`${a.source_id || a.url}_${idx}`} className="card" style={{ padding: 10 }}>
-                <div style={{ fontWeight: 700, wordBreak: "break-all" }}>{a.url}</div>
-                <div className="small-muted" style={{ marginTop: 4 }}>
-                  Поставщик: {a.supplier_name || "—"} • Менеджер: {a.manager_name || "—"} • Контакт: {a.manager_contact || "—"}
-                </div>
-                <div className="small-muted" style={{ marginTop: 4 }}>{a.ok ? `OK • ${a.kind || "unknown"} • строк: ${a.rows_count_preview ?? 0}` : `Ошибка: ${a.error || "unknown"}`}</div>
-                {a.ok && Array.isArray(a.mapped_categories_sample) && a.mapped_categories_sample.length > 0 ? (
-                  <div className="small-muted" style={{ marginTop: 4 }}>Категории (пример): {a.mapped_categories_sample.join(", ")}</div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }
