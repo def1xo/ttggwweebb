@@ -355,3 +355,13 @@ def test_extract_catalog_items_fallbacks_from_numeric_title_cell():
     items = extract_catalog_items(rows)
     assert len(items) == 1
     assert items[0]["title"] == "Сумка Alpha"
+
+
+def test_extract_catalog_items_reads_rrc_price_column():
+    rows = [
+        ["Товар", "Цена дроп", "РРЦ"],
+        ["Худи Alpha", "2100", "4990"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["rrc_price"] == 4990.0

@@ -49,3 +49,19 @@ def test_existing_product_update_prefers_payload_stock_quantity(tmp_db):
     variant = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == prod.id).first()
     assert variant is not None
     assert variant.stock_quantity == 6
+
+
+def test_import_post_uses_rrc_minus_300_and_default_stock(tmp_db):
+    db = tmp_db
+    payload = {
+        "message_id": 990,
+        "text": "#tops\nRRC title\nРРЦ: 5300",
+        "image_urls": ["https://example.com/rrc.jpg"],
+    }
+    prod = parse_and_save_post(db, payload)
+    assert prod is not None
+    assert float(getattr(prod, "base_price", 0) or 0) == 5000.0
+
+    variant = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == prod.id).first()
+    assert variant is not None
+    assert int(variant.stock_quantity or 0) == 1

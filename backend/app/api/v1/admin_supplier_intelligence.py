@@ -46,6 +46,8 @@ ERROR_CODE_UNKNOWN = "unknown"
 TOP_FAILING_SOURCES_LIMIT = 5
 ERROR_SAMPLES_LIMIT = 3
 ERROR_MESSAGE_MAX_LEN = 500
+IMPORT_FALLBACK_STOCK_QTY = 1
+RRC_DISCOUNT_RUB = 300
 
 
 def _normalize_error_message(exc: Exception) -> str:
@@ -761,10 +763,25 @@ def import_products_from_sources(
         if len(bucket) > 25:
             del bucket[:-25]
 
-    def pick_sale_price(title: str, dropship_price: float, min_dropship_price: float | None = None) -> float:
+    def pick_sale_price(
+        title: str,
+        dropship_price: float,
+        min_dropship_price: float | None = None,
+        rrc_price: float | None = None,
+    ) -> float:
         base = float(min_dropship_price or 0) if float(min_dropship_price or 0) > 0 else float(dropship_price or 0)
         if base <= 0:
             base = float(dropship_price or 0)
+
+        # Top priority: supplier RRC/RRP minus fixed discount.
+        if rrc_price is not None:
+            try:
+                rrc_val = float(rrc_price)
+                if rrc_val > 0:
+                    return max(1.0, round(rrc_val - RRC_DISCOUNT_RUB, 0))
+            except Exception:
+                pass
+
         if payload.use_avito_pricing:
             key = (title or "").strip().lower()
             if key not in avito_price_cache:
@@ -889,7 +906,7 @@ def import_products_from_sources(
                         desc = generate_ai_product_description(title, cat_name, it.get("color"))
                     else:
                         desc = generate_youth_description(title, cat_name, it.get("color"))
-                sale_price = pick_sale_price(title, ds_price, min_dropship_price=min_dropship)
+                sale_price = pick_sale_price(title, ds_price, min_dropship_price=min_dropship, rrc_price=(it.get("rrc_price") if isinstance(it, dict) else None))
                 row_image_urls = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
                 image_url = str(it.get("image_url") or "").strip() or None
                 if not image_url and row_image_urls:
@@ -1008,7 +1025,13 @@ def import_products_from_sources(
                 if not size_tokens:
                     size_tokens = [""]
                 color = get_or_create_color(src_color)
-                stock_qty = int(it.get("stock") or 0)
+                raw_stock = it.get("stock") if isinstance(it, dict) else None
+                try:
+                    stock_qty = int(raw_stock) if raw_stock is not None else IMPORT_FALLBACK_STOCK_QTY
+                except Exception:
+                    stock_qty = IMPORT_FALLBACK_STOCK_QTY
+                if stock_qty <= 0:
+                    stock_qty = IMPORT_FALLBACK_STOCK_QTY
                 per_size_stock = stock_qty // len(size_tokens) if stock_qty > 0 and len(size_tokens) > 1 else stock_qty
 
                 for size_name in size_tokens:

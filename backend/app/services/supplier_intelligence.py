@@ -494,6 +494,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
 
     idx_title = _find_col(headers, ("товар", "назв", "title", "item", "модель", "наимен", "product", "позиц"))
     idx_price = _pick_price_column(headers)
+    idx_rrc = _find_col(headers, ("ррц", "rrc", "мрц", "mrc", "розниц", "retail"))
     idx_color = _find_col(headers, ("цвет", "color"))
     idx_size = _find_col(headers, ("размер", "size"))
     idx_stock = _find_col(headers, ("остат", "налич", "stock", "qty", "кол-во"))
@@ -520,6 +521,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         if price is None or price <= 0:
             continue
 
+        rrc_price = _to_float(row[idx_rrc]) if idx_rrc is not None and idx_rrc < len(row) else None
         color = _norm(row[idx_color]) if idx_color is not None and idx_color < len(row) else ""
         normalized_title, inferred_color = _extract_color_from_title(title)
         if _looks_like_title(normalized_title):
@@ -538,6 +540,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             "title": title,
             "dropship_price": float(price),
             "color": color or None,
+            "rrc_price": float(rrc_price) if rrc_price and rrc_price > 0 else None,
             "size": size or None,
             "stock": stock,
             "image_url": image_url,
