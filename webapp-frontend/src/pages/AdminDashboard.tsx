@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, createAdminNews, createAdminSupplierSource, deleteAdminNews, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminNews, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, patchAdminNews, patchAdminSupplierSource, sendAdminCatalogToTelegram, sendAdminSalesExportToTelegram, sendOrderProofToTelegram, triggerSupplierAutoImportNow } from "../services/api";
+import api, { adminLogin, createAdminNews, createAdminSupplierSource, deleteAdminNews, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminNews, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, patchAdminNews, patchAdminSupplierSource, sendAdminCatalogToTelegram, sendAdminSalesExportToTelegram, sendOrderProofToTelegram, triggerSupplierAutoImportNow, getSupplierImportTaskStatus } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -968,6 +968,8 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [managerContact, setManagerContact] = useState("");
   const [note, setNote] = useState("");
   const [autoImporting, setAutoImporting] = useState(false);
+  const [importTaskId, setImportTaskId] = useState<string | null>(null);
+  const [importTaskStatus, setImportTaskStatus] = useState<string | null>(null);
   const [lastImportReport, setLastImportReport] = useState<any | null>(null);
 
   const resetForm = () => {
@@ -1066,6 +1068,13 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
       setAutoImporting(true);
       setLastImportReport(null);
       const res: any = await triggerSupplierAutoImportNow();
+      if (res?.queued && res?.task_id) {
+        setImportTaskId(String(res.task_id));
+        setImportTaskStatus(String(res.status || "PENDING"));
+        setMsg("Импорт запущен в фоне ✅ Можно выйти из админки, процесс продолжится.");
+        return;
+      }
+
       const created = Number(res?.created_products || 0);
       const updated = Number(res?.updated_products || 0);
       const variants = Number(res?.created_variants || 0);
@@ -1081,6 +1090,46 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
       setAutoImporting(false);
     }
   };
+
+  useEffect(() => {
+    if (!importTaskId) return;
+    let stopped = false;
+
+    const poll = async () => {
+      try {
+        const statusRes: any = await getSupplierImportTaskStatus(importTaskId);
+        if (stopped) return;
+        const status = String(statusRes?.status || "PENDING");
+        setImportTaskStatus(status);
+
+        if (statusRes?.ready) {
+          const result = statusRes?.result || {};
+          if (statusRes?.successful && result?.ok) {
+            const created = Number(result?.created_products || 0);
+            const updated = Number(result?.updated_products || 0);
+            const variants = Number(result?.created_variants || 0);
+            const categories = Number(result?.created_categories || 0);
+            const errCount = Array.isArray(result?.source_reports)
+              ? result.source_reports.reduce((acc: number, x: any) => acc + Number(x?.errors || 0), 0)
+              : 0;
+            setLastImportReport(result);
+            setMsg(`Импорт завершён ✅ Категории +${categories}, товары +${created}, обновлено ${updated}, варианты +${variants}${errCount ? `, ошибок: ${errCount}` : ""}`);
+          } else {
+            const err = result?.error || "Импорт завершился с ошибкой";
+            setMsg(String(err));
+          }
+          setImportTaskId(null);
+          return;
+        }
+      } catch {
+        // keep polling silently while background task is running
+      }
+      window.setTimeout(poll, 4000);
+    };
+
+    poll();
+    return () => { stopped = true; };
+  }, [importTaskId]);
 
   return (
     <div className="container" style={{ paddingTop: 12 }}>
@@ -1108,6 +1157,7 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
       <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>
         <div style={{ fontWeight: 800 }}>Автообновление и автоимпорт</div>
         <div className="small-muted">Автоматический импорт настроен раз в 24 часа. Можно запустить вручную.</div>
+        {importTaskId ? <div className="small-muted">Фоновая задача: {importTaskStatus || "PENDING"} • id: {importTaskId}</div> : null}
         <button className="btn" onClick={runAutoImportNow} disabled={autoImporting || items.length === 0}>
           {autoImporting ? "Запускаем..." : "Обновить и импортировать сейчас"}
         </button>

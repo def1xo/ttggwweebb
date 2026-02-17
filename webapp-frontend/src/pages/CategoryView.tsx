@@ -97,17 +97,22 @@ export default function CategoryView() {
   const [query, setQuery] = useState("");
   const [sortMode, setSortMode] = useState<SortMode>("popular");
   const [sizeFilter, setSizeFilter] = useState("all");
-  const [priceFilter, setPriceFilter] = useState<"all" | "up_to_5000" | "5000_10000" | "from_10000">("all");
+  const [priceMin, setPriceMin] = useState<string>("");
+  const [priceMax, setPriceMax] = useState<string>("");
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
       try {
-        const cat = await api.get(`/api/categories/${id}`);
-        const catData = (cat as any).data || cat;
-        setCategory(catData);
-
+        const cat = await api.getCategories();
+        const catRaw = (cat as any)?.data ?? cat;
+        const catList = Array.isArray(catRaw) ? catRaw : (Array.isArray((catRaw as any)?.items) ? (catRaw as any).items : []);
         const parsedId = Number(id);
+        const catData = Number.isFinite(parsedId) && parsedId > 0
+          ? catList.find((c: any) => Number(c?.id) === parsedId)
+          : catList.find((c: any) => String(c?.slug || "") === String(id || ""));
+        if (catData) setCategory(catData);
+
         const categoryId = Number.isFinite(parsedId) && parsedId > 0
           ? parsedId
           : Number((catData as any)?.id);
@@ -116,7 +121,7 @@ export default function CategoryView() {
           ? { category_id: categoryId }
           : undefined;
 
-        const prods = await api.get(`/api/products`, { params });
+        const prods = await api.getProducts(params);
         const data = (prods as any)?.data ?? prods;
         setProducts(Array.isArray(data) ? data : data?.items || []);
       } catch {
@@ -138,13 +143,12 @@ export default function CategoryView() {
       const sizeOk = sizeFilter === "all" || variants.some((v: any) => String(v?.size?.name ?? v?.size ?? "").trim() === sizeFilter);
 
       const price = pickPrice(p);
-      const priceOk =
-        priceFilter === "all"
-        || (priceFilter === "up_to_5000" && price <= 5000)
-        || (priceFilter === "5000_10000" && price > 5000 && price <= 10000)
-        || (priceFilter === "from_10000" && price > 10000);
+      const minVal = Number(priceMin);
+      const maxVal = Number(priceMax);
+      const minOk = !priceMin.trim() || (!Number.isNaN(minVal) && price >= minVal);
+      const maxOk = !priceMax.trim() || (!Number.isNaN(maxVal) && price <= maxVal);
 
-      return titleOk && sizeOk && priceOk;
+      return titleOk && sizeOk && minOk && maxOk;
     });
 
     out = out.slice().sort((a, b) => {
@@ -159,7 +163,7 @@ export default function CategoryView() {
     });
 
     return out;
-  }, [products, query, sizeFilter, priceFilter, sortMode]);
+  }, [products, query, sizeFilter, priceMin, priceMax, sortMode]);
 
   const hint = query
     ? `Найдено: ${filtered.length} / ${products.length}`
@@ -167,7 +171,7 @@ export default function CategoryView() {
     ? `Товаров: ${products.length}`
     : "";
 
-  const hasCustomFilters = sortMode !== "popular" || sizeFilter !== "all" || priceFilter !== "all";
+  const hasCustomFilters = sortMode !== "popular" || sizeFilter !== "all" || !!priceMin.trim() || !!priceMax.trim();
 
   return (
     <div className="container" style={{ paddingTop: 12 }}>
@@ -214,17 +218,25 @@ export default function CategoryView() {
               options={[{ value: "all", label: "Все" }, ...sizeOptions.map((size) => ({ value: size, label: size }))]}
             />
 
-            <CustomSelect
-              label="Цена"
-              value={priceFilter}
-              onChange={(v) => setPriceFilter(v as any)}
-              options={[
-                { value: "all", label: "Любая" },
-                { value: "up_to_5000", label: "до 5 000 ₽" },
-                { value: "5000_10000", label: "5 001 — 10 000 ₽" },
-                { value: "from_10000", label: "от 10 001 ₽" },
-              ]}
-            />
+            <div className="card" style={{ padding: 10 }}>
+              <div className="small-muted" style={{ marginBottom: 8 }}>Цена</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  placeholder="От"
+                  value={priceMin}
+                  onChange={(e) => setPriceMin(e.target.value.replace(/[^0-9]/g, ""))}
+                />
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  placeholder="До"
+                  value={priceMax}
+                  onChange={(e) => setPriceMax(e.target.value.replace(/[^0-9]/g, ""))}
+                />
+              </div>
+            </div>
           </div>
         </div>
       ) : null}
@@ -237,7 +249,8 @@ export default function CategoryView() {
             onClick={() => {
               setSortMode("popular");
               setSizeFilter("all");
-              setPriceFilter("all");
+              setPriceMin("");
+              setPriceMax("");
             }}
           >
             Сбросить всё
