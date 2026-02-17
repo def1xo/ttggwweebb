@@ -68,6 +68,21 @@ services:
     networks:
       - appnet
 
+  beat:
+    image: ttggwweebb-backend:latest
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - .env.production
+    command: ["celery", "-A", "app.tasks", "beat", "--loglevel=info"]
+    volumes:
+      - ./backend/uploads:/app/uploads
+    networks:
+      - appnet
+
   bot:
     build:
       context: ./bot/telegraf_bot

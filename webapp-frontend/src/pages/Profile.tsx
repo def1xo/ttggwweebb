@@ -394,12 +394,17 @@ export default function Profile() {
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                           {o.items.slice(0, 6).map((it: any, j: number) => {
                             const title = it?.title || it?.name || it?.product_name || `Товар ${j + 1}`;
+                            const productId = Number(it?.product_id || 0);
                             const qty = it?.quantity ?? it?.qty ?? 1;
                             const size = it?.size ? ` • ${it.size}` : "";
                             const color = it?.color ? ` • ${it.color}` : "";
                             return (
                               <div key={j} className="order-item-row">
-                                <div style={{ fontWeight: 700 }}>{title}</div>
+                                {productId > 0 ? (
+                                  <Link to={`/product/${productId}`} style={{ fontWeight: 700, color: "inherit", textDecoration: "none" }}>{title}</Link>
+                                ) : (
+                                  <div style={{ fontWeight: 700 }}>{title}</div>
+                                )}
                                 <div className="small-muted">
                                   x{qty}{size}{color}
                                 </div>

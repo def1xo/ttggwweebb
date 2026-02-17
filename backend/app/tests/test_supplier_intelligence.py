@@ -137,10 +137,10 @@ def test_find_similar_images_filters_by_hamming_distance(monkeypatch):
     assert [x["image_url"] for x in out] == ["https://cand/1.jpg", "https://cand/2.jpg"]
 
 
-def test_generate_ai_product_description_falls_back_without_key(monkeypatch):
+def test_generate_ai_product_description_returns_empty_without_key(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     txt = generate_ai_product_description("Худи Alpha", "Кофты", "черный")
-    assert "Худи Alpha" in txt
+    assert txt == ""
 
 
 def test_generate_ai_product_description_uses_openrouter_response(monkeypatch):

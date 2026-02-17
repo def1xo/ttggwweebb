@@ -64,7 +64,11 @@ CATEGORY_RULES: dict[str, tuple[str, ...]] = {
     "Футболки": ("футбол", "tee", "t-shirt", "майка"),
     "Куртки": ("курт", "бомбер", "ветров", "пухов"),
     "Брюки": ("штаны", "брюк", "джинс", "карго", "sweatpants"),
-    "Кроссовки": ("кросс", "sneaker", "кеды", "обув"),
+    "Шорты": ("шорт", "shorts"),
+    "Рубашки": ("рубаш", "shirt"),
+    "Лонгсливы": ("лонгслив", "longsleeve", "long sleeve"),
+    "Свитера": ("свитер", "джемпер", "pullover"),
+    "Обувь": ("кросс", "sneaker", "кеды", "обув", "ботин", "лофер", "сланц"),
     "Аксессуары": ("кепк", "шапк", "сумк", "ремень", "аксесс"),
 }
 
@@ -211,11 +215,11 @@ def fetch_tabular_preview(url: str, timeout_sec: int = 20, max_rows: int = 25) -
 def map_category(raw_title: str) -> str:
     t = (raw_title or "").strip().lower()
     if not t:
-        return "Разное"
+        return "Аксессуары"
     for cat, keywords in CATEGORY_RULES.items():
         if any(k in t for k in keywords):
             return cat
-    return "Разное"
+    return "Аксессуары"
 
 
 def _clean_market_price_values(values: Iterable[float]) -> list[float]:
@@ -487,10 +491,14 @@ def generate_ai_product_description(
     *,
     max_chars: int = 420,
 ) -> str:
-    """Generate unique product copy via free-compatible OpenRouter model with safe fallback."""
+    """Generate unique product copy via OpenRouter.
+
+    Returns empty string when AI generation is unavailable/failed,
+    so caller can decide to keep description empty instead of шаблонного текста.
+    """
     openrouter_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
     if not openrouter_key:
-        return generate_youth_description(title, category_name, color)
+        return ""
 
     prompt = {
         "title": _norm(title),
@@ -546,7 +554,7 @@ def generate_ai_product_description(
             return raw[:max_chars]
     except Exception:
         pass
-    return generate_youth_description(title, category_name, color)
+    return ""
 
 
 MIN_MARKUP_RATIO = 1.40
