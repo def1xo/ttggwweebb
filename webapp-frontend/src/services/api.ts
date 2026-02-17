@@ -1412,6 +1412,15 @@ export async function triggerSupplierAutoImportNow() {
   }
 }
 
+export async function getSupplierImportTaskStatus(taskId: string) {
+  try {
+    const res = await axiosInstance.get(`/api/admin/supplier-intelligence/tasks/${encodeURIComponent(taskId)}`);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
+
 export async function analyzeStoredSources(sourceIds: number[]) {
   try {
     const res = await axiosInstance.post("/api/admin/supplier-intelligence/analyze-sources", { source_ids: sourceIds });
@@ -1564,6 +1573,7 @@ api.analyzeSupplierLinks = analyzeSupplierLinks;
 api.analyzeStoredSources = analyzeStoredSources;
 api.importProductsFromSupplierSources = importProductsFromSupplierSources;
 api.triggerSupplierAutoImportNow = triggerSupplierAutoImportNow;
+api.getSupplierImportTaskStatus = getSupplierImportTaskStatus;
 api.avitoMarketScan = avitoMarketScan;
 api.telegramMediaPreview = telegramMediaPreview;
 api.analyzeImages = analyzeImages;
