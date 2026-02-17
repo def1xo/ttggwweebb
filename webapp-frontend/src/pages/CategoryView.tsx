@@ -98,6 +98,7 @@ export default function CategoryView() {
   const [sortMode, setSortMode] = useState<SortMode>("popular");
   const [sizeFilter, setSizeFilter] = useState("all");
   const [priceFilter, setPriceFilter] = useState<"all" | "up_to_5000" | "5000_10000" | "from_10000">("all");
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -183,41 +184,50 @@ export default function CategoryView() {
         <StickySearch value={query} onChange={setQuery} placeholder="Поиск по товарам…" hint={hint} fixedTop />
       </div>
 
-      <div className="catalog-filter-panel" style={{ marginBottom: 12 }}>
-        <div className="catalog-filter-panel__title">Фильтры и сортировка</div>
-        <div className="catalog-tools">
-          <CustomSelect
-            label="Сортировка"
-            value={sortMode}
-            onChange={(v) => setSortMode(v as SortMode)}
-            options={[
-              { value: "popular", label: "По умолчанию" },
-              { value: "price_asc", label: "Цена: по возрастанию" },
-              { value: "price_desc", label: "Цена: по убыванию" },
-              { value: "title_asc", label: "Название: А-Я" },
-            ]}
-          />
-
-          <CustomSelect
-            label="Размер"
-            value={sizeFilter}
-            onChange={setSizeFilter}
-            options={[{ value: "all", label: "Все" }, ...sizeOptions.map((size) => ({ value: size, label: size }))]}
-          />
-
-          <CustomSelect
-            label="Цена"
-            value={priceFilter}
-            onChange={(v) => setPriceFilter(v as any)}
-            options={[
-              { value: "all", label: "Любая" },
-              { value: "up_to_5000", label: "до 5 000 ₽" },
-              { value: "5000_10000", label: "5 001 — 10 000 ₽" },
-              { value: "from_10000", label: "от 10 001 ₽" },
-            ]}
-          />
-        </div>
+      <div style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+        <button className="btn btn-secondary" type="button" onClick={() => setFiltersOpen((v) => !v)}>
+          {filtersOpen ? "Скрыть фильтр" : "Фильтр"}
+        </button>
+        <div className="small-muted">{filtered.length} товаров</div>
       </div>
+
+      {filtersOpen ? (
+        <div className="catalog-filter-panel" style={{ marginBottom: 12 }}>
+          <div className="catalog-filter-panel__title">Фильтры и сортировка</div>
+          <div className="catalog-tools">
+            <CustomSelect
+              label="Сортировка"
+              value={sortMode}
+              onChange={(v) => setSortMode(v as SortMode)}
+              options={[
+                { value: "popular", label: "По умолчанию" },
+                { value: "price_asc", label: "Цена: по возрастанию" },
+                { value: "price_desc", label: "Цена: по убыванию" },
+                { value: "title_asc", label: "Название: А-Я" },
+              ]}
+            />
+
+            <CustomSelect
+              label="Размер"
+              value={sizeFilter}
+              onChange={setSizeFilter}
+              options={[{ value: "all", label: "Все" }, ...sizeOptions.map((size) => ({ value: size, label: size }))]}
+            />
+
+            <CustomSelect
+              label="Цена"
+              value={priceFilter}
+              onChange={(v) => setPriceFilter(v as any)}
+              options={[
+                { value: "all", label: "Любая" },
+                { value: "up_to_5000", label: "до 5 000 ₽" },
+                { value: "5000_10000", label: "5 001 — 10 000 ₽" },
+                { value: "from_10000", label: "от 10 001 ₽" },
+              ]}
+            />
+          </div>
+        </div>
+      ) : null}
 
       {hasCustomFilters ? (
         <div style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>

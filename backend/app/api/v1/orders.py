@@ -90,6 +90,10 @@ class OrderItemOut(BaseModel):
     variant_id: int
     quantity: int
     price: Decimal
+    product_id: Optional[int] = None
+    title: Optional[str] = None
+    size: Optional[str] = None
+    color: Optional[str] = None
 
     class Config:
         orm_mode = True
@@ -117,11 +121,15 @@ class OrderOut(BaseModel):
 def my_orders(db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     items = (
         db.query(models.Order)
-        .options(joinedload(models.Order.items))
+        .options(joinedload(models.Order.items).joinedload(models.OrderItem.variant).joinedload(models.ProductVariant.product))
+        .options(joinedload(models.Order.items).joinedload(models.OrderItem.variant).joinedload(models.ProductVariant.size))
+        .options(joinedload(models.Order.items).joinedload(models.OrderItem.variant).joinedload(models.ProductVariant.color))
         .filter(models.Order.user_id == user.id)
         .order_by(models.Order.created_at.desc())
         .all()
     )
+    for order in items:
+        _decorate_order_items(order)
     return items
 
 
@@ -129,7 +137,9 @@ def my_orders(db: Session = Depends(get_db), user: models.User = Depends(get_cur
 def get_order(order_id: int = Path(..., ge=1), db: Session = Depends(get_db), user: models.User = Depends(get_current_user)):
     order = (
         db.query(models.Order)
-        .options(joinedload(models.Order.items))
+        .options(joinedload(models.Order.items).joinedload(models.OrderItem.variant).joinedload(models.ProductVariant.product))
+        .options(joinedload(models.Order.items).joinedload(models.OrderItem.variant).joinedload(models.ProductVariant.size))
+        .options(joinedload(models.Order.items).joinedload(models.OrderItem.variant).joinedload(models.ProductVariant.color))
         .filter(models.Order.id == order_id)
         .one_or_none()
     )
@@ -137,7 +147,18 @@ def get_order(order_id: int = Path(..., ge=1), db: Session = Depends(get_db), us
         raise HTTPException(status_code=404, detail="order not found")
     if order.user_id != user.id and str(getattr(user.role, "value", user.role)) != "admin":
         raise HTTPException(status_code=403, detail="forbidden")
+    _decorate_order_items(order)
     return order
+
+
+def _decorate_order_items(order: models.Order) -> None:
+    for it in (getattr(order, "items", None) or []):
+        v = getattr(it, "variant", None)
+        p = getattr(v, "product", None) if v else None
+        setattr(it, "product_id", int(getattr(p, "id", 0) or 0) or None)
+        setattr(it, "title", str(getattr(p, "title", None) or getattr(p, "name", None) or "Товар"))
+        setattr(it, "size", getattr(getattr(v, "size", None), "name", None) if v else None)
+        setattr(it, "color", getattr(getattr(v, "color", None), "name", None) if v else None)
 
 
 @router.post("/orders", response_model=OrderOut)
@@ -151,6 +172,21 @@ def create_order(
     if not cart_items:
         raise HTTPException(status_code=400, detail="cart is empty")
 
+    active_cart_items: List[models.CartItem] = []
+    for ci in cart_items:
+        variant = getattr(ci, "variant", None)
+        product = getattr(variant, "product", None) if variant else None
+        if not variant:
+            continue
+        if int(getattr(variant, "stock_quantity", 0) or 0) <= 0:
+            continue
+        if product and not bool(getattr(product, "visible", True)):
+            continue
+        active_cart_items.append(ci)
+
+    if not active_cart_items:
+        raise HTTPException(status_code=400, detail="В корзине не осталось доступных товаров")
+
     st = _get_cart_state(db, user.id)
     referral_code = (st.referral_code if st else None) or None
     promo_code_str = (st.promo_code if st else None) or None
@@ -159,7 +195,7 @@ def create_order(
         promo_code_str = payload_code
 
     subtotal = Decimal("0")
-    for ci in cart_items:
+    for ci in active_cart_items:
         price = _to_decimal(getattr(ci.variant, "price", 0))
         subtotal += price * Decimal(int(ci.quantity or 0))
 
@@ -260,7 +296,7 @@ def create_order(
     db.flush()  # get order.id
 
     # items
-    for ci in cart_items:
+    for ci in active_cart_items:
         price = _to_decimal(getattr(ci.variant, "price", 0))
         oi = models.OrderItem(order_id=order.id, variant_id=ci.variant_id, quantity=ci.quantity, price=price)
         db.add(oi)
@@ -295,7 +331,8 @@ def create_order(
 
     db.commit()
     db.refresh(order)
-    order = db.query(models.Order).options(joinedload(models.Order.items)).get(order.id)
+    order = db.query(models.Order).options(joinedload(models.Order.items).joinedload(models.OrderItem.variant).joinedload(models.ProductVariant.product)).get(order.id)
+    _decorate_order_items(order)
 
     # NOTE: Админу шлём уведомление только после загрузки чека (payment-proof).
 
