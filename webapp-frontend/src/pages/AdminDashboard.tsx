@@ -968,6 +968,7 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [managerContact, setManagerContact] = useState("");
   const [note, setNote] = useState("");
   const [autoImporting, setAutoImporting] = useState(false);
+  const [lastImportReport, setLastImportReport] = useState<any | null>(null);
 
   const resetForm = () => {
     setEditingId(null);
@@ -1063,6 +1064,7 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const runAutoImportNow = async () => {
     try {
       setAutoImporting(true);
+      setLastImportReport(null);
       const res: any = await triggerSupplierAutoImportNow();
       const created = Number(res?.created_products || 0);
       const updated = Number(res?.updated_products || 0);
@@ -1071,6 +1073,7 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
       const errCount = Array.isArray(res?.source_reports)
         ? res.source_reports.reduce((acc: number, x: any) => acc + Number(x?.errors || 0), 0)
         : 0;
+      setLastImportReport(res || null);
       setMsg(`Импорт завершён ✅ Категории +${categories}, товары +${created}, обновлено ${updated}, варианты +${variants}${errCount ? `, ошибок: ${errCount}` : ""}`);
     } catch (e: any) {
       setMsg(e?.message || "Не удалось запустить автоимпорт");
@@ -1109,6 +1112,33 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
           {autoImporting ? "Запускаем..." : "Обновить и импортировать сейчас"}
         </button>
       </div>
+
+      {lastImportReport ? (
+        <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 10 }}>
+          <div style={{ fontWeight: 800 }}>Последний отчёт импорта</div>
+          <div className="small-muted">
+            Категории: +{Number(lastImportReport?.created_categories || 0)} • Товары: +{Number(lastImportReport?.created_products || 0)} • Обновлено: {Number(lastImportReport?.updated_products || 0)} • Варианты: +{Number(lastImportReport?.created_variants || 0)}
+          </div>
+          {Array.isArray(lastImportReport?.source_reports) && lastImportReport.source_reports.length > 0 ? (
+            <div style={{ display: "grid", gap: 8 }}>
+              {lastImportReport.source_reports.map((r: any, idx: number) => (
+                <div key={`${r?.source_id || idx}_${r?.url || ""}`} className="card" style={{ padding: 10 }}>
+                  <div style={{ fontWeight: 700, wordBreak: "break-all" }}>{r?.url || `source #${r?.source_id || "?"}`}</div>
+                  <div className="small-muted" style={{ marginTop: 4 }}>
+                    imported: {Number(r?.imported || 0)} • errors: {Number(r?.errors || 0)}
+                  </div>
+                  {r?.last_error_message ? <div className="small-muted" style={{ marginTop: 4 }}>Последняя ошибка: {String(r.last_error_message)}</div> : null}
+                  {Array.isArray(r?.error_samples) && r.error_samples.length > 0 ? (
+                    <div className="small-muted" style={{ marginTop: 4 }}>
+                      Примеры: {r.error_samples.slice(0, 2).map((x: any) => String(x)).join(" | ")}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="card" style={{ padding: 12, marginBottom: 12 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 10 }}>
