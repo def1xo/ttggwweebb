@@ -29,7 +29,7 @@ def _now() -> datetime:
 
 def _send_admin_telegram_message(text: str) -> bool:
     token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-    chat_id = (os.getenv("ADMIN_TELEGRAM_CHAT_ID") or "").strip()
+    chat_id = (os.getenv("ADMIN_TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID") or "").strip()
     if not token or not chat_id or not text:
         return False
     try:

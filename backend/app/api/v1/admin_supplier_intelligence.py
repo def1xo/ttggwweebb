@@ -404,6 +404,12 @@ class ImportProductsOut(BaseModel):
     source_reports: list[ImportSourceReport] = Field(default_factory=list)
 
 
+class AutoImportNowOut(BaseModel):
+    queued: bool
+    source_count: int = 0
+    task: str = ""
+
+
 def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
     return ImportSourceReport(source_id=source_id, url=source_url)
 
@@ -1018,6 +1024,41 @@ def import_products_from_sources(
         created_variants=created_variants,
         source_reports=source_reports,
     )
+
+
+@router.post("/supplier-intelligence/auto-import-now", response_model=AutoImportNowOut)
+def run_auto_import_now(
+    _admin=Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    source_ids = [
+        int(x.id)
+        for x in db.query(models.SupplierSource)
+        .filter(models.SupplierSource.active == True)  # noqa: E712
+        .all()
+        if getattr(x, "id", None)
+    ]
+    if not source_ids:
+        raise HTTPException(status_code=400, detail="Нет активных источников")
+
+    try:
+        from app.core.celery_app import celery_app
+
+        celery_app.send_task("tasks.supplier_auto_import_24h")
+        return AutoImportNowOut(queued=True, source_count=len(source_ids), task="tasks.supplier_auto_import_24h")
+    except Exception:
+        payload = ImportProductsIn(
+            source_ids=source_ids,
+            dry_run=False,
+            publish_visible=True,
+            ai_style_description=True,
+            ai_description_enabled=True,
+            use_avito_pricing=True,
+            avito_max_pages=1,
+            max_items_per_source=40,
+        )
+        import_products_from_sources(payload=payload, _admin=_admin, db=db)
+        return AutoImportNowOut(queued=False, source_count=len(source_ids), task="inline")
 
 
 class MarketPriceIn(BaseModel):

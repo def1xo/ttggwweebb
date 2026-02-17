@@ -28,6 +28,7 @@ class CartItemOut(BaseModel):
     image: Optional[str] = None
     size: Optional[str] = None
     color: Optional[str] = None
+    in_stock: bool = True
 
 
 class PromoOut(BaseModel):
@@ -193,9 +194,13 @@ def _calc_cart(db: Session, user: models.User) -> CartOut:
     for ci in items:
         v = ci.variant
         p = v.product if v else None
-        price = Decimal(str(getattr(v, "price", 0) or 0))
+        raw_price = Decimal(str(getattr(v, "price", 0) or 0))
         qty = int(ci.quantity or 0)
-        subtotal += price * qty
+        variant_stock = int(getattr(v, "stock_quantity", 0) or 0)
+        in_stock = bool(v) and variant_stock > 0 and bool(getattr(p, "visible", True))
+        price = raw_price if in_stock else Decimal("0")
+        if in_stock:
+            subtotal += price * qty
         # try to get a primary image
         image = None
         try:
@@ -227,6 +232,7 @@ def _calc_cart(db: Session, user: models.User) -> CartOut:
                 image=image,
                 size=size,
                 color=color,
+                in_stock=in_stock,
             )
         )
 
@@ -292,6 +298,8 @@ def set_item(payload: CartSetItemIn, db: Session = Depends(get_db), user: models
     var = db.query(models.ProductVariant).filter(models.ProductVariant.id == payload.variant_id).one_or_none()
     if not var:
         raise HTTPException(status_code=404, detail="variant not found")
+    if int(getattr(var, "stock_quantity", 0) or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Товар закончился")
 
     if not ci:
         ci = models.CartItem(user_id=user.id, variant_id=payload.variant_id, quantity=payload.quantity)
@@ -309,6 +317,8 @@ def add_item(payload: CartAddItemIn, db: Session = Depends(get_db), user: models
     var = db.query(models.ProductVariant).filter(models.ProductVariant.id == payload.variant_id).one_or_none()
     if not var:
         raise HTTPException(status_code=404, detail="variant not found")
+    if int(getattr(var, "stock_quantity", 0) or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Товар закончился")
 
     ci = db.query(models.CartItem).filter(models.CartItem.user_id == user.id, models.CartItem.variant_id == payload.variant_id).one_or_none()
     if not ci:
