@@ -716,8 +716,12 @@ def import_products_from_sources(
         if payload.use_avito_pricing:
             key = (title or "").strip().lower()
             if key not in avito_price_cache:
-                scan = avito_market_scan(title, max_pages=payload.avito_max_pages, only_new=True)
-                avito_price_cache[key] = float(scan.get("suggested")) if scan.get("suggested") is not None else None
+                try:
+                    scan = avito_market_scan(title, max_pages=payload.avito_max_pages, only_new=True)
+                    avito_price_cache[key] = float(scan.get("suggested")) if scan.get("suggested") is not None else None
+                except Exception:
+                    # Avito pricing is best-effort: if scan fails we must still import product
+                    avito_price_cache[key] = None
             suggested = avito_price_cache.get(key)
             if suggested and suggested > 0:
                 return ensure_min_markup_price(float(suggested), base)
