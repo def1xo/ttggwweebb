@@ -40,6 +40,7 @@ from app.services.supplier_intelligence import (
     suggest_sale_price,
     normalize_retail_price,
     search_image_urls_by_title,
+    _extract_size_stock_map as extract_size_stock_map,
 )
 
 router = APIRouter(tags=["admin_supplier_intelligence"])
@@ -86,6 +87,42 @@ def _split_color_tokens(raw: str | None) -> list[str]:
     return out
 
 
+
+
+def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
+    blob_parts: list[str] = []
+    for key in ("size", "sizes", "stock", "stock_text", "title", "description", "text", "notes"):
+        v = item.get(key)
+        if isinstance(v, str) and v.strip():
+            blob_parts.append(v)
+    blob = "\n".join(blob_parts)
+    if not blob:
+        return {}
+
+    parsed = extract_size_stock_map(blob)
+    if parsed:
+        out: dict[str, int] = {}
+        for k, v in parsed.items():
+            kk = str(k or "").strip().replace(",", ".")
+            try:
+                vv = max(0, int(v))
+            except Exception:
+                continue
+            if kk:
+                out[kk] = vv
+        if out:
+            return out
+
+    strict: dict[str, int] = {}
+    for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)\s*\(\s*(\d{1,4})\s*(?:шт|pcs|pc)?\s*\)", blob, flags=re.IGNORECASE):
+        sz = str(m.group(1) or "").replace(",", ".").strip()
+        try:
+            qty = max(0, int(m.group(2) or 0))
+        except Exception:
+            continue
+        if sz:
+            strict[sz] = qty
+    return strict
 def _resolve_source_image_url(raw_url: str | None, source_url: str) -> str | None:
     raw = str(raw_url or "").strip()
     if not raw:
@@ -1233,7 +1270,8 @@ def import_products_from_sources(
                     image_url = row_image_urls[0]
                 if not image_url and "t.me/" in src_url:
                     try:
-                        tg_imgs = extract_image_urls_from_html_page(src_url, limit=3)
+                        tg_limit = 12 if supplier_key == "shop_vkus" else 3
+                        tg_imgs = extract_image_urls_from_html_page(src_url, limit=tg_limit)
                         image_url = tg_imgs[0] if tg_imgs else None
                         if tg_imgs:
                             row_image_urls = [str(x).strip() for x in tg_imgs if str(x).strip()]
@@ -1273,7 +1311,8 @@ def import_products_from_sources(
                             else:
                                 telegram_media_expand_count += 1
                                 try:
-                                    tg_media = extract_image_urls_from_html_page(cu, limit=8)
+                                    tg_limit = 12 if supplier_key == "shop_vkus" else 8
+                                    tg_media = extract_image_urls_from_html_page(cu, limit=tg_limit)
                                 except Exception:
                                     tg_media = []
                                 telegram_media_cache[cu] = list(tg_media)
@@ -1473,6 +1512,12 @@ def import_products_from_sources(
                             continue
                         if kk and vv >= 0:
                             stock_map[kk] = vv
+
+                if supplier_key == "shop_vkus" and not stock_map and isinstance(it, dict):
+                    stock_map = _extract_shop_vkus_stock_map(it)
+                    # For shop_vkus avoid phantom availability when no explicit stock map is found.
+                    if not stock_map and raw_stock is None:
+                        stock_qty = 0
 
                 if not size_tokens and stock_map:
                     size_tokens = sorted(

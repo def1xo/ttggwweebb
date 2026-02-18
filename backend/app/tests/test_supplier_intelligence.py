@@ -887,3 +887,22 @@ def test_extract_catalog_items_appends_sidecar_photo_link_rows_to_previous_item(
         "https://t.me/venomdrop12/41/10151",
         "https://t.me/venomdrop12/599/672",
     ]
+
+
+
+def test_extract_shop_vkus_stock_map_from_text_blob():
+    item = {
+        "title": "Кроссы",
+        "description": "Размеры и наличие: 41(0шт), 42(1шт), 43(0шт)",
+    }
+    got = asi._extract_shop_vkus_stock_map(item)
+    assert got == {"41": 0, "42": 1, "43": 0}
+
+
+def test_extract_shop_vkus_stock_map_empty_when_no_size_qty_pairs():
+    item = {
+        "title": "Кроссы",
+        "description": "Размеры: 41,42,43 без указания остатков",
+    }
+    got = asi._extract_shop_vkus_stock_map(item)
+    assert got == {}
