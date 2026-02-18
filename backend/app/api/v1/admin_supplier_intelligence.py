@@ -1377,8 +1377,6 @@ def import_products_from_sources(
                     color_tokens = [""]
 
                 size_tokens = split_size_tokens(it.get("size"))
-                if not size_tokens:
-                    size_tokens = [""]
 
                 raw_stock = it.get("stock") if isinstance(it, dict) else None
                 try:
@@ -1399,6 +1397,14 @@ def import_products_from_sources(
                             continue
                         if kk and vv >= 0:
                             stock_map[kk] = vv
+
+                if not size_tokens and stock_map:
+                    size_tokens = sorted(
+                        stock_map.keys(),
+                        key=lambda x: float(x) if str(x).replace(".", "", 1).isdigit() else str(x),
+                    )
+                if not size_tokens:
+                    size_tokens = [""]
 
                 combinations = max(1, len(size_tokens) * len(color_tokens))
                 has_stock_map = bool(stock_map)

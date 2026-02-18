@@ -239,7 +239,9 @@ async function handleChannelPost(ctx) {
         try {
           const { endpoint } = await postToBackendImporter({
             channel_id: ready.channel_id,
-            message_id: ready.message_id,
+            message_id: `media_group:${mediaGroupId}`,
+            media_group_id: mediaGroupId,
+            first_message_id: ready.message_id,
             date: ready.date,
             text: ready.text,
             image_urls: ready.image_urls,

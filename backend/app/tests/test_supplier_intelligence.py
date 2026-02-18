@@ -783,3 +783,13 @@ def test_extract_catalog_items_reads_stock_map_from_stock_column():
     assert len(items) == 1
     assert items[0]["stock"] == 3
     assert items[0]["stock_map"] == {"42": 1, "43": 2}
+
+
+def test_extract_catalog_items_stock_map_does_not_read_size_ranges_as_qty():
+    rows = [
+        ["Товар", "Дроп цена", "Размер", "Наличие"],
+        ["NB 574", "2999", "41-43", "41-43 42(2шт)"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["stock_map"] == {"42": 2}

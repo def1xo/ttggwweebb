@@ -397,27 +397,31 @@ def _extract_size_stock_map(raw: Any) -> dict[str, int]:
     txt = txt.replace("–", "-").replace("—", "-").replace("−", "-")
     out: dict[str, int] = {}
 
-    # Patterns like: 42(1), 43-2, 44: 3шт
-    for sz, qty in re.findall(r"\b(\d{2,3})\s*(?:\(|:|-)?\s*(\d{1,3})\s*(?:ШТ|PCS|X)?\)?", txt):
+    def _push(sz: str, qty: str) -> None:
         try:
-            q = int(qty)
+            szi = int(str(sz).strip())
+            q = int(str(qty).strip())
         except Exception:
-            continue
-        if q < 0:
-            continue
-        # ignore very small/large non-size ids
-        try:
-            szi = int(sz)
-        except Exception:
-            continue
-        if szi < 20 or szi > 60:
-            continue
-        out[str(szi)] = max(out.get(str(szi), 0), q)
+            return
+        if q < 0 or szi < 20 or szi > 60:
+            return
+        key = str(szi)
+        out[key] = max(out.get(key, 0), q)
+
+    patterns = [
+        r"\b(\d{2,3})\s*\(\s*(\d{1,3})\s*(?:ШТ|PCS|X)?\s*\)",
+        r"\b(\d{2,3})\s*[:=]\s*(\d{1,3})\s*(?:ШТ|PCS|X)?\b",
+        r"\b(\d{2,3})\s*[-]\s*(\d{1,3})\s*(?:ШТ|PCS|X)\b",
+        r"\b(\d{2,3})\s+(\d{1,3})\s*(?:ШТ|PCS|X)\b",
+    ]
+    for pat in patterns:
+        for sz, qty in re.findall(pat, txt):
+            _push(sz, qty)
     return out
 
 
 def _normalize_image_candidate(url: str) -> str | None:
-    u = str(url or "").strip().strip("\"'()[]{}<>")
+    u = str(url or "").strip().strip("\"\'()[]{}<>")
     if not u:
         return None
     if u.startswith("//"):

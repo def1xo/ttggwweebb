@@ -17,6 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import models
 from app.db.session import SessionLocal
+from app.services.supplier_intelligence import split_size_tokens, _extract_size_stock_map as _sheet_extract_size_stock_map
 
 logger = logging.getLogger("tg_importer")
 logger.setLevel(logging.INFO)
@@ -176,24 +177,31 @@ def _extract_sizes(text: Optional[str]) -> List[str]:
         chunk = (m.group(1) or "").strip()
         if not chunk:
             continue
+        chunk = re.split(r'\b(?:цвет(?:а|ов)?|цена|наличие|остаток|склад|арт(?:икул)?|код)\b', chunk, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,.;:-")
+        if not chunk:
+            continue
+        tokens = split_size_tokens(chunk)
+        if tokens:
+            found.extend(tokens)
+            continue
         parts = re.split(r'[;,/\\\n]', chunk)
         for p in parts:
             token = re.sub(r'\s+', ' ', p).strip()
-            if not token:
-                continue
-            # Trim common trailing descriptors from the same line.
-            token = re.split(r'\b(?:цвет(?:а|ов)?|цена|наличие|остаток|склад|арт(?:икул)?|код)\b', token, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,.;:-")
             if token:
                 found.append(token)
     out: List[str] = []
     seen = set()
     for s in found:
-        key = s.lower()
-        if key in seen:
+        key = str(s or "").lower()
+        if not key or key in seen:
             continue
         seen.add(key)
-        out.append(s)
+        out.append(str(s))
     return out
+
+
+def _extract_size_stock_map(text: Optional[str]) -> Dict[str, int]:
+    return _sheet_extract_size_stock_map(text)
 
 
 def _extract_colors(text: Optional[str]) -> List[str]:
@@ -334,6 +342,9 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
         sale_price = max(Decimal("1.00"), rrc_price - RRC_DISCOUNT_RUB)
     cost_price = _extract_cost_price(text)
     sizes = _extract_sizes(text)
+    size_stock_map = _extract_size_stock_map(text)
+    if size_stock_map and not sizes:
+        sizes = sorted(size_stock_map.keys(), key=lambda x: float(x) if str(x).replace(".", "", 1).isdigit() else str(x))
     colors = _extract_colors(text)
     hashtags = _extract_hashtags(text)
     stock_quantity = _extract_stock_quantity(text, payload)
@@ -345,7 +356,11 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
             category = _get_or_create_category(db, hashtags[0])
         except Exception:
             logger.exception("Failed to get/create category from hashtag")
-    channel_message_id = str(payload.get("message_id")) if payload.get("message_id") else None
+    channel_message_id = None
+    if payload.get("media_group_id"):
+        channel_message_id = f"media_group:{str(payload.get('media_group_id')).strip()}"
+    elif payload.get("message_id"):
+        channel_message_id = str(payload.get("message_id"))
     try:
         existing = None
         if channel_message_id:
@@ -404,10 +419,17 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                                 db.add(pc)
                             except Exception:
                                 logger.exception("Could not create ProductCost")
-            if stock_quantity is not None:
+            if stock_quantity is not None or size_stock_map:
                 for v in getattr(existing, "variants", []):
                     try:
-                        v.stock_quantity = max(0, int(stock_quantity))
+                        if size_stock_map:
+                            size_name = str(getattr(getattr(v, "size", None), "name", "") or "").strip()
+                            if size_name:
+                                v.stock_quantity = max(0, int(size_stock_map.get(size_name, 0)))
+                            elif stock_quantity is not None:
+                                v.stock_quantity = max(0, int(stock_quantity))
+                        elif stock_quantity is not None:
+                            v.stock_quantity = max(0, int(stock_quantity))
                         db.add(v)
                     except Exception:
                         logger.exception("Could not set variant.stock_quantity")
@@ -475,12 +497,13 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
         if sizes and colors:
             for s in sizes:
                 size_obj = _get_or_create_size(db, s)
+                per_size_stock = max(0, int(size_stock_map.get(str(s), effective_stock_quantity))) if size_stock_map else effective_stock_quantity
                 for c in colors:
                     color_obj = _get_or_create_color(db, c)
                     v_kwargs = {
                         "product_id": prod.id,
                         "price": sale_price,
-                        "stock_quantity": effective_stock_quantity,
+                        "stock_quantity": per_size_stock,
                         "created_at": now,
                         "updated_at": now,
                         "size_id": getattr(size_obj, "id", None),
@@ -493,10 +516,11 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
         elif sizes:
             for s in sizes:
                 size_obj = _get_or_create_size(db, s)
+                per_size_stock = max(0, int(size_stock_map.get(str(s), effective_stock_quantity))) if size_stock_map else effective_stock_quantity
                 v_kwargs = {
                     "product_id": prod.id,
                     "price": sale_price,
-                    "stock_quantity": effective_stock_quantity,
+                    "stock_quantity": per_size_stock,
                     "created_at": now,
                     "updated_at": now,
                     "size_id": getattr(size_obj, "id", None),
