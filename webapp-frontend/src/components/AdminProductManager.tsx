@@ -107,7 +107,7 @@ export default function AdminProductManager() {
                   </div>
 
                   <div className="small-muted">
-                    Цена: {(p as any).price ?? (p as any).base_price ?? "—"} ₽ • Остаток: {(p as any).stock_quantity ?? (Array.isArray((p as any).variants) && (p as any).variants.length ? (p as any).variants[0]?.stock_quantity : "—")} • Категория: {p.category_id ?? "—"} • Фото: {(p as any).image_count ?? 0}
+                    Цена: {(p as any).price ?? (p as any).base_price ?? "—"} ₽ • Закуп: {(p as any).cost_price ?? "—"} ₽ • Остаток: {(p as any).stock_quantity ?? (Array.isArray((p as any).variants) && (p as any).variants.length ? (p as any).variants[0]?.stock_quantity : "—")} • Категория: {p.category_id ?? "—"} • Фото: {(p as any).image_count ?? 0}
                     {Array.isArray(p.sizes) && p.sizes.length > 0 ? (
                       <>
                         {" "}
