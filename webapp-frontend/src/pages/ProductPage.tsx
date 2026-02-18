@@ -43,14 +43,68 @@ function normalizeMediaUrl(raw: unknown): string | null {
   return base ? `${base}/${url}` : url;
 }
 
+function splitImageCandidates(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.flatMap((item) => splitImageCandidates(item));
+  }
+  if (typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    return splitImageCandidates(obj.url || obj.src || obj.image || obj.image_url);
+  }
+  const value = String(raw).trim();
+  if (!value) return [];
+
+  const chunks = value
+    .replace(/[\n\r\t]+/g, " ")
+    .split(/[;,|]+/g)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  if (chunks.length > 1) return chunks;
+
+  const byWhitespace = value
+    .split(/\s+/g)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .filter((x) => /\.(jpe?g|png|webp|gif|avif)(\?|#|$)/i.test(x) || /^(https?:\/\/|\/)/i.test(x));
+  return byWhitespace.length > 1 ? byWhitespace : [value];
+}
+
+function collectProductImages(p: any): string[] {
+  if (!p) return [];
+  const buckets = [
+    p.images,
+    p.image_urls,
+    p.imageUrls,
+    p.gallery,
+    p.photos,
+    p.default_image,
+    ...(Array.isArray(p.variants) ? p.variants.map((v: any) => v?.images) : []),
+    ...(Array.isArray(p.variants) ? p.variants.map((v: any) => v?.image_urls) : []),
+  ];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const bucket of buckets) {
+    for (const candidate of splitImageCandidates(bucket)) {
+      const normalized = normalizeMediaUrl(candidate);
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      out.push(normalized);
+    }
+  }
+  return out;
+}
+
+function getVariantStock(v: any): number {
+  const raw = v?.stock_quantity ?? v?.stock ?? v?.quantity ?? v?.qty ?? 0;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : 0;
+}
+
 function pickImage(p: any): string | null {
-  const imgs = (p?.images || p?.image_urls || p?.imageUrls || []) as any[];
-  const raw =
-    (Array.isArray(imgs) && imgs.length ? (imgs[0]?.url || imgs[0]) : null) ||
-    p?.default_image ||
-    p?.image ||
-    null;
-  return normalizeMediaUrl(raw);
+  const all = collectProductImages(p);
+  return all[0] || normalizeMediaUrl(p?.image) || null;
 }
 
 export default function ProductPage() {
@@ -108,20 +162,17 @@ export default function ProductPage() {
 
 
   const images: string[] = useMemo(() => {
-    if (!product) return [];
-    const imgs = (product.images || product.image_urls || []) as any[];
-    const list = imgs.map((x) => normalizeMediaUrl(x?.url || x)).filter(Boolean) as string[];
-    if (product.default_image) {
-      const d = normalizeMediaUrl(product.default_image);
-      if (d) list.unshift(d);
-    }
-    const seen = new Set<string>();
-    return list.filter((u) => {
-      if (seen.has(u)) return false;
-      seen.add(u);
-      return true;
-    });
+    return collectProductImages(product);
   }, [product]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [product?.id]);
+
+  useEffect(() => {
+    if (activeIndex < images.length) return;
+    setActiveIndex(0);
+  }, [activeIndex, images.length]);
 
   const variants: any[] = useMemo(() => (product?.variants || []) as any[], [product]);
 
@@ -144,8 +195,7 @@ export default function ProductPage() {
     for (const v of variants) {
       const sz = String(v?.size?.name || v?.size || "").trim();
       if (!sz) continue;
-      const stock = Number(v?.stock_quantity ?? v?.stock ?? 0);
-      if (!Number.isFinite(stock)) continue;
+      const stock = getVariantStock(v);
       out[sz] = (out[sz] || 0) + Math.max(0, stock);
     }
     return out;
@@ -172,7 +222,7 @@ export default function ProductPage() {
       const inStock = vv.some((v) => {
         const c = String(v?.color?.name || v?.color || "");
         const colorOk = !selectedColor || c === selectedColor;
-        return colorOk && Number(v?.stock_quantity ?? v?.stock ?? 0) > 0;
+        return colorOk && getVariantStock(v) > 0;
       });
       out[sz] = inStock;
     }
@@ -180,7 +230,7 @@ export default function ProductPage() {
   }, [variants, sizeOptions, selectedColor, sizes]);
 
   const hasAnyStock = useMemo(
-    () => variants.some((v) => Number(v?.stock_quantity ?? v?.stock ?? 0) > 0),
+    () => variants.some((v) => getVariantStock(v) > 0),
     [variants],
   );
 
@@ -233,7 +283,7 @@ export default function ProductPage() {
       if (match) variant = match;
     }
     const variantId = product?.default_variant_id || variant?.id || product?.id;
-    if (Number(variant?.stock_quantity ?? variant?.stock ?? 0) <= 0) {
+    if (getVariantStock(variant) <= 0) {
       notify("Товар сейчас не в наличии", "error");
       return;
     }
@@ -416,7 +466,7 @@ export default function ProductPage() {
           <button
             className="btn btn-primary product-add-btn"
             onClick={addToCart}
-            disabled={!hasAnyStock || (selectedVariant ? Number(selectedVariant?.stock_quantity ?? selectedVariant?.stock ?? 0) <= 0 : false)}
+            disabled={!hasAnyStock || (selectedVariant ? getVariantStock(selectedVariant) <= 0 : false)}
           >
             {!hasAnyStock ? "Нет в наличии" : "Добавить в корзину"}
           </button>
