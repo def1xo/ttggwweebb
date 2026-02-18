@@ -1361,7 +1361,9 @@ def import_products_from_sources(
                         and current_base < 1000
                         and re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title)
                     )
-                    if sale_price > 0 and (current_base <= 0 or should_fix_low_price):
+                    # keep best offer among suppliers: if newly calculated sale is lower,
+                    # update retail price downward as well (while keeping low-price guard).
+                    if sale_price > 0 and (current_base <= 0 or should_fix_low_price or sale_price < current_base):
                         p.base_price = Decimal(str(sale_price))
                         changed = True
                     if image_url and not p.default_image:
@@ -1515,8 +1517,16 @@ def import_products_from_sources(
                         else:
                             if float(variant.price or 0) <= 0 and sale_price > 0:
                                 variant.price = Decimal(str(sale_price))
-                            if per_variant_stock > 0 and int(variant.stock_quantity or 0) <= 0:
+
+                            # Stock update policy:
+                            # - when stock map is explicit, always trust and overwrite;
+                            # - when row has explicit zero stock, propagate zero;
+                            # - otherwise keep previous positive stock unless empty.
+                            if has_stock_map or stock_qty == 0:
+                                variant.stock_quantity = max(0, int(per_variant_stock))
+                            elif per_variant_stock > 0 and int(variant.stock_quantity or 0) <= 0:
                                 variant.stock_quantity = per_variant_stock
+
                             if image_urls and not variant.images:
                                 variant.images = image_urls
                             elif image_url and not variant.images:
