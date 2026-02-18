@@ -186,7 +186,7 @@ export default function UploadProofModal({ open, orderId, onClose, onUploaded }:
                   <div style={{ fontSize: 26 }}>📄</div>
                   <div style={{ textAlign: "left" }}>
                     <div style={{ fontWeight: 800 }}>PDF документ</div>
-                    <div className="small-muted">Откроется после загрузки в админке</div>
+                    
                   </div>
                 </div>
               ) : null}
