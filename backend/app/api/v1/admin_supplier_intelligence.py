@@ -1192,12 +1192,11 @@ def import_products_from_sources(
                 # expand telegram post links into direct image URLs with safety caps,
                 # otherwise large imports can spend minutes on network lookups.
                 expanded_image_urls: list[str] = []
-                has_direct_image = any(_looks_like_direct_image_url(u) for u in image_urls)
                 for candidate in image_urls:
                     cu = str(candidate or "").strip()
                     if not cu:
                         continue
-                    if ("t.me/" in cu or "telegram.me/" in cu) and not has_direct_image:
+                    if "t.me/" in cu or "telegram.me/" in cu:
                         tg_media = telegram_media_cache.get(cu)
                         if tg_media is None:
                             if telegram_media_expand_count >= MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT:
@@ -1214,9 +1213,11 @@ def import_products_from_sources(
                                 uu = _resolve_source_image_url(media_u, cu)
                                 if uu and uu not in expanded_image_urls:
                                     expanded_image_urls.append(uu)
+                            # do not keep telegram page URL in final media list
                             continue
-                    if cu not in expanded_image_urls:
-                        expanded_image_urls.append(cu)
+                    uu = _resolve_source_image_url(cu, src_url)
+                    if uu and uu not in expanded_image_urls:
+                        expanded_image_urls.append(uu)
 
                 if expanded_image_urls:
                     image_urls = expanded_image_urls
