@@ -460,7 +460,7 @@ def _extract_size_from_title(title: str) -> str | None:
         if tail_m:
             try:
                 val = int(tail_m.group(1))
-                if 18 <= val <= 60:
+                if 30 <= val <= 60:
                     return str(val)
             except Exception:
                 return None

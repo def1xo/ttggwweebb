@@ -11,6 +11,14 @@ function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
 }
 
+function isReasonableSize(v: string): boolean {
+  const t = String(v || "").trim();
+  if (!t) return false;
+  const n = Number(t.replace(",", "."));
+  if (Number.isFinite(n)) return n >= 20 && n <= 60;
+  return true;
+}
+
 function sortSizes(values: string[]) {
   return values.slice().sort((a, b) => {
     const na = Number(String(a).replace(",", "."));
@@ -30,7 +38,7 @@ function normalizeMediaUrl(raw: unknown): string | null {
   const url = String(raw).trim();
   if (!url) return null;
   if (/^https?:\/\//i.test(url)) return url;
-  const base = String((import.meta as any).env?.VITE_BACKEND_URL || "").trim().replace(/\/+$/, "");
+  const base = String((import.meta as any).env?.VITE_BACKEND_URL || (import.meta as any).env?.VITE_API_URL || "").trim().replace(/\/+$/, "").replace(/\/api$/, "");
   if (url.startsWith("/")) return base ? `${base}${url}` : url;
   return base ? `${base}/${url}` : url;
 }
@@ -118,13 +126,16 @@ export default function ProductPage() {
   const variants: any[] = useMemo(() => (product?.variants || []) as any[], [product]);
 
   const sizes = useMemo(() => {
-    const s = uniq(variants.map((v) => String(v?.size?.name || v?.size || "")).filter(Boolean));
-    return sortSizes(s);
-  }, [variants]);
+    const fromVariants = variants.map((v) => String(v?.size?.name || v?.size || "")).filter(Boolean);
+    const fromProduct = Array.isArray(product?.sizes) ? product.sizes.map((x: any) => String(x || "")).filter(Boolean) : [];
+    return sortSizes(uniq([...fromVariants, ...fromProduct]).filter(isReasonableSize));
+  }, [variants, product?.sizes]);
 
   const colors = useMemo(() => {
-    return uniq(variants.map((v) => String(v?.color?.name || v?.color || "")).filter(Boolean));
-  }, [variants]);
+    const fromVariants = variants.map((v) => String(v?.color?.name || v?.color || "")).filter(Boolean);
+    const fromProduct = Array.isArray(product?.colors) ? product.colors.map((x: any) => String(x || "")).filter(Boolean) : [];
+    return uniq([...fromVariants, ...fromProduct]);
+  }, [variants, product?.colors]);
 
   const hasAnyStock = useMemo(() => variants.some((v) => Number(v?.stock ?? 0) > 0), [variants]);
 

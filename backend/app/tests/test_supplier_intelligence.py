@@ -83,6 +83,16 @@ def test_extract_catalog_items_prefers_lower_purchase_candidate_when_selected_pr
     assert items[0]["dropship_price"] == 5590.0
 
 
+def test_extract_catalog_items_does_not_infer_footwear_model_number_as_size():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["NIKE AIR ZOOM VOMERO 18", "3899"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] is None
+
+
 def test_extract_catalog_items_infers_trailing_footwear_size_from_title():
     rows = [
         ["Товар", "Дроп цена"],

@@ -13,6 +13,14 @@ function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
 }
 
+function isReasonableSizeChip(v: string): boolean {
+  const t = String(v || "").trim();
+  if (!t) return false;
+  const n = Number(t.replace(",", "."));
+  if (Number.isFinite(n)) return n >= 20 && n <= 60;
+  return true;
+}
+
 function sortSizes(values: string[]) {
   // numeric sort when possible, otherwise lexicographic
   return values.slice().sort((a, b) => {
@@ -33,7 +41,7 @@ function normalizeMediaUrl(raw: unknown): string | null {
   if (!url) return null;
   if (/^https?:\/\//i.test(url)) return url;
 
-  const base = String((import.meta as any).env?.VITE_BACKEND_URL || "").trim().replace(/\/+$/, "");
+  const base = String((import.meta as any).env?.VITE_BACKEND_URL || (import.meta as any).env?.VITE_API_URL || "").trim().replace(/\/+$/, "").replace(/\/api$/, "");
   if (url.startsWith("/")) {
     return base ? `${base}${url}` : url;
   }
@@ -60,13 +68,11 @@ export default function ProductCard({ product }: Props) {
   const price = Number(product?.price ?? product?.min_variant_price ?? product?.base_price ?? defaultVariant?.price ?? 0);
 
   const meta = useMemo(() => {
-    const sizes = sortSizes(
-      uniq(
-        (variantList || [])
-          .map((v) => String(v?.size?.name || v?.size || ""))
-          .filter(Boolean)
-      )
-    );
+    const variantSizes = (variantList || [])
+      .map((v) => String(v?.size?.name || v?.size || ""))
+      .filter(Boolean);
+    const productSizes = Array.isArray(product?.sizes) ? product.sizes.map((x: any) => String(x || "")).filter(Boolean) : [];
+    const sizes = sortSizes(uniq([...variantSizes, ...productSizes]).filter(isReasonableSizeChip));
     const colors = uniq(
       (variantList || [])
         .map((v) => String(v?.color?.name || v?.color || ""))
