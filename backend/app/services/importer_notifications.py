@@ -18,7 +18,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import models
 from app.db.session import SessionLocal
-from app.services.supplier_intelligence import split_size_tokens, _extract_size_stock_map as _sheet_extract_size_stock_map
+from app.services.supplier_intelligence import (
+    split_size_tokens,
+    _extract_size_stock_map as _sheet_extract_size_stock_map,
+    extract_image_urls_from_html_page,
+)
+from app.services import media_store
 
 logger = logging.getLogger("tg_importer")
 logger.setLevel(logging.INFO)
@@ -37,10 +42,11 @@ COLOR_RE = re.compile(r'цвет(?:а|ов)?[:\s]*([A-Za-zА-Яа-яЁё0-9,#\s\
 HASHTAG_RE = re.compile(r'#([\w\-А-Яа-яёЁ]+)', flags=re.UNICODE)
 STOCK_RE = re.compile(r'(?:остаток|в\s*наличии|наличие|stock|склад|qty|кол-?во|количество)[:\s\-]*([0-9]{1,5})', flags=re.IGNORECASE)
 RRC_KEYWORDS_RE = re.compile(r'(?:ррц|rrc|мрц|mrc|розниц(?:а|ная)?\s*цена|retail)[:\s\-]*([0-9][0-9\s,.\u00A0]*)', flags=re.IGNORECASE)
-URL_RE = re.compile(r"https?://[^\s<>\"'']+", flags=re.IGNORECASE)
+URL_RE = re.compile(r'https?://[^\s<>"\']+', flags=re.IGNORECASE)
 
 IMPORT_FALLBACK_STOCK_QTY = 9_999
 RRC_DISCOUNT_RUB = Decimal("300")
+LOCALIZE_IMPORTED_IMAGES = str(os.getenv("LOCALIZE_IMPORTED_IMAGES", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _send_telegram_message(chat_id: str, text: str) -> Optional[Dict[str, Any]]:
@@ -285,6 +291,23 @@ def _extract_urls_from_text(text: Optional[str]) -> List[str]:
         out.append(u)
     return out
 
+
+def _detect_supplier_from_payload(payload: Dict[str, Any], text: Optional[str] = None) -> Optional[str]:
+    raw_candidates: List[str] = []
+    for key in ("supplier", "supplier_name", "import_supplier_name"):
+        v = payload.get(key)
+        if isinstance(v, str) and v.strip():
+            raw_candidates.append(v.strip().lower())
+    txt = str(text or payload.get("text") or payload.get("caption") or "").lower()
+    all_links = _split_image_candidates(payload.get("image_urls")) + _split_image_candidates(payload.get("image")) + _extract_urls_from_text(txt)
+    raw_candidates.extend(all_links)
+    raw_candidates.append(txt)
+
+    for c in raw_candidates:
+        if "shop_vkus" in c or "shop-vkus" in c or "shopvkus" in c or "t.me/shop_vkus" in c:
+            return "shop_vkus"
+    return None
+
 def _split_image_candidates(raw: Any) -> List[str]:
     if raw is None:
         return []
@@ -378,6 +401,17 @@ def _expand_gallery_url_to_images(url: str) -> List[str]:
     candidates = [clean_url]
     if clean_url != url:
         candidates.append(url)
+
+    # Supplier-specific strategy: shop_vkus pages are often JS-heavy.
+    # Reuse robust extractor from supplier_intelligence first.
+    if any(x in clean_url.lower() for x in ("shop_vkus", "shop-vkus", "shopvkus")):
+        try:
+            rich = extract_image_urls_from_html_page(clean_url, timeout_sec=20, limit=20)
+            if rich:
+                return [_upgrade_image_url_quality(x) for x in rich if str(x or "").strip()]
+        except Exception:
+            logger.exception("shop_vkus specific image expansion failed: %s", clean_url)
+
     headers = {"User-Agent": "Mozilla/5.0 (compatible; TGImporter/1.0)"}
     for target in candidates:
         try:
@@ -432,6 +466,32 @@ def _normalize_image_urls(payload: Dict[str, Any]) -> List[str]:
     if not out:
         out = thumbs
     return out
+
+def _localize_image_urls(urls: List[str], title_hint: Optional[str] = None) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for idx, u in enumerate(urls or []):
+        cand = str(u or "").strip()
+        if not cand:
+            continue
+        localized = cand
+        if LOCALIZE_IMPORTED_IMAGES and cand.lower().startswith(("http://", "https://")):
+            try:
+                localized = media_store.save_remote_image_to_local(
+                    cand,
+                    folder="products",
+                    timeout_sec=20,
+                    filename_hint=(title_hint or f"imported-{idx+1}"),
+                    referer=cand,
+                )
+            except Exception:
+                logger.exception("Could not localize imported image url: %s", cand)
+                localized = cand
+        if localized not in seen:
+            seen.add(localized)
+            out.append(localized)
+    return out
+
 
 
 def _get_or_create_category(db: Session, tag: str):
@@ -493,6 +553,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
         merged = list(payload_with_text_links.get("image_urls") or []) + text_links
         payload_with_text_links["image_urls"] = merged
     images = _normalize_image_urls(payload_with_text_links)
+    images = _localize_image_urls(images, title_hint=(payload.get("title") or ""))
     title = None
     for line in (text.splitlines() if text else []):
         ln = line.strip()
@@ -516,6 +577,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
     colors = _extract_colors(text)
     hashtags = _extract_hashtags(text)
     stock_quantity = _extract_stock_quantity(text, payload)
+    supplier_name = _detect_supplier_from_payload(payload_with_text_links, text=text)
     effective_stock_quantity = max(0, int(stock_quantity)) if stock_quantity is not None else IMPORT_FALLBACK_STOCK_QTY
     visible = False if (is_draft or len(hashtags) == 0) else True
     category = None
@@ -551,6 +613,8 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                     pass
             if hasattr(existing, "updated_at"):
                 existing.updated_at = datetime.utcnow()
+            if supplier_name and hasattr(existing, "import_supplier_name"):
+                existing.import_supplier_name = supplier_name
             existing.visible = visible
             if category:
                 if hasattr(existing, "category"):
@@ -631,6 +695,8 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
             "visible": visible,
             "created_at": now,
             "updated_at": now,
+            "import_supplier_name": supplier_name,
+            "import_source_kind": "telegram_channel_post",
         }
         if hasattr(models.Product, "description"):
             prod_kwargs["description"] = text[:4000]
@@ -665,7 +731,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
         if sizes and colors:
             for s in sizes:
                 size_obj = _get_or_create_size(db, s)
-                per_size_stock = max(0, int(size_stock_map.get(str(s), effective_stock_quantity))) if size_stock_map else effective_stock_quantity
+                per_size_stock = max(0, int(size_stock_map.get(str(s), 0))) if size_stock_map else effective_stock_quantity
                 for c in colors:
                     color_obj = _get_or_create_color(db, c)
                     v_kwargs = {
@@ -684,7 +750,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
         elif sizes:
             for s in sizes:
                 size_obj = _get_or_create_size(db, s)
-                per_size_stock = max(0, int(size_stock_map.get(str(s), effective_stock_quantity))) if size_stock_map else effective_stock_quantity
+                per_size_stock = max(0, int(size_stock_map.get(str(s), 0))) if size_stock_map else effective_stock_quantity
                 v_kwargs = {
                     "product_id": prod.id,
                     "price": sale_price,

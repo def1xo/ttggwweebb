@@ -109,3 +109,73 @@ def test_parse_and_save_post_uses_shop_link_from_text_when_no_direct_images(tmp_
 def test_extract_size_stock_map_fallback_for_42_1sht():
     parsed = importer._extract_size_stock_map("в наличии: 41(0шт), 42(1шт), 43(0шт)")
     assert parsed == {"41": 0, "42": 1, "43": 0}
+
+
+
+def test_parse_and_save_post_localizes_remote_images(tmp_db, monkeypatch):
+    db = tmp_db
+
+    def fake_localize(url: str, **kwargs):
+        if "p1.jpg" in url:
+            return "/uploads/products/local-1.jpg"
+        return "/uploads/products/local-2.jpg"
+
+    monkeypatch.setattr(importer.media_store, "save_remote_image_to_local", fake_localize)
+
+    prod = parse_and_save_post(
+        db,
+        {
+            "message_id": 77702,
+            "text": "#sneakers\nКроссы\nhttps://shop-vkus.example/item/abc?single=true",
+            "image_urls": ["https://cdn.example.com/p1.jpg", "https://cdn.example.com/p2.jpg"],
+        },
+    )
+    assert prod is not None
+    assert prod.default_image == "/uploads/products/local-1.jpg"
+    urls = [x.url for x in (prod.images or [])]
+    assert urls == ["/uploads/products/local-1.jpg", "/uploads/products/local-2.jpg"]
+
+
+
+def test_size_stock_map_overrides_unmapped_sizes_to_zero_stock(tmp_db):
+    db = tmp_db
+    prod = parse_and_save_post(
+        db,
+        {
+            "message_id": 77703,
+            "text": "#sneakers\nМодель\nРазмеры: 41,42,43\nналичие: 42(1шт)",
+            "image_urls": ["https://example.com/a.jpg"],
+        },
+    )
+    assert prod is not None
+
+    variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == prod.id).all()
+    stocks = {v.size.name: int(v.stock_quantity or 0) for v in variants}
+    assert stocks == {"41": 0, "42": 1, "43": 0}
+
+
+
+def test_shop_vkus_sets_supplier_name_and_uses_supplier_specific_extractor(tmp_db, monkeypatch):
+    db = tmp_db
+    calls = []
+
+    def fake_extract(url: str, timeout_sec: int = 20, limit: int = 20):
+        calls.append(url)
+        return ["https://cdn.example.com/shopvkus-1.jpg", "https://cdn.example.com/shopvkus-2.jpg"]
+
+    monkeypatch.setattr(importer, "extract_image_urls_from_html_page", fake_extract)
+    monkeypatch.setattr(importer.media_store, "save_remote_image_to_local", lambda url, **kwargs: url)
+
+    prod = parse_and_save_post(
+        db,
+        {
+            "message_id": 77704,
+            "text": "#sneakers\nShop item\nhttps://shop-vkus.example/item/xyz?single=true",
+            "image_urls": [],
+        },
+    )
+    assert prod is not None
+    assert prod.import_supplier_name == "shop_vkus"
+    assert calls and calls[0].startswith("https://shop-vkus.example/item/xyz")
+    urls = [x.url for x in (prod.images or [])]
+    assert urls == ["https://cdn.example.com/shopvkus-1.jpg", "https://cdn.example.com/shopvkus-2.jpg"]
