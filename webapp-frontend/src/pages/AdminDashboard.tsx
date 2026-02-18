@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import api, { adminLogin, createAdminNews, createAdminSupplierSource, deleteAdminNews, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminNews, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, patchAdminNews, patchAdminSupplierSource, sendAdminCatalogToTelegram, sendAdminSalesExportToTelegram, sendOrderProofToTelegram, triggerSupplierAutoImportNow, getSupplierImportTaskStatus } from "../services/api";
+import api, { adminLogin, bulkUpsertAdminSupplierSources, createAdminNews, createAdminSupplierSource, deleteAdminNews, deleteAdminSupplierSource, getAdminAnalyticsFunnel, getAdminAnalyticsTopProducts, getAdminNews, getAdminOpsNeedsAttention, getAdminStats, getAdminSupplierSources, patchAdminNews, patchAdminSupplierSource, sendAdminCatalogToTelegram, sendAdminSalesExportToTelegram, sendOrderProofToTelegram, triggerSupplierAutoImportNow, getSupplierImportTaskStatus } from "../services/api";
 import SalesChart from "../components/SalesChart";
 import AdminManagersView from "../components/AdminManagersView";
 import AdminProductManager from "../components/AdminProductManager";
@@ -76,17 +76,63 @@ type OpsNeedsAttention = {
   }>;
 };
 
-const DEFAULT_SUPPLIER_SOURCE_LINKS = [
-  "https://docs.google.com/spreadsheets/d/1Pv_iyCw5WCbBHXvhdH5w7pRjxfsjTbCm3SjHPElC_wA/edit?usp=sharing",
-  "https://docs.google.com/spreadsheets/d/1JQ5p32JknAm34W42fiTXzAFKYOhb9QEcMFAwSernwI4/htmlview",
-  "https://docs.google.com/spreadsheets/d/1Xfjpx1Bs9GDUlgKalrzzm3u2M6dpxwuHZQwCqihjw2Q/htmlview",
-  "https://docs.google.com/spreadsheets/d/1wfZJPJMO34WfcbGNxP-IWl5w0V1vEDf6FHakAqoJsBw/htmlview",
-  "https://docs.google.com/spreadsheets/d/1fvLjH86AAD2upGbQ9npo-mtUbFAsl3cmx8wDIczTCeE/htmlview",
-  "https://b2b.moysklad.ru/public/oWXBoG49bkuB/catalog",
-  "https://t.me/firmachdroppp",
-  "https://t.me/optobaza",
-  "https://t.me/venomopt12",
-  "https://t.me/shop_vkus",
+type SupplierSeedEntry = {
+  supplier_name: string;
+  manager_name?: string;
+  manager_contact?: string;
+  table_url?: string;
+  tg_channel_url?: string;
+};
+
+const DEFAULT_SUPPLIER_SEED: SupplierSeedEntry[] = [
+  {
+    supplier_name: "shop_vkus",
+    manager_name: "Manager Shop Vkus",
+    manager_contact: "@Manager_Shop_Vkus",
+    table_url: "https://docs.google.com/spreadsheets/d/1Pv_iyCw5WCbBHXvhdH5w7pRjxfsjTbCm3SjHPElC_wA/edit?usp=sharing",
+    tg_channel_url: "https://t.me/shop_vkus",
+  },
+  {
+    supplier_name: "Фирмач дроп",
+    manager_name: "evs17",
+    manager_contact: "@evs17",
+    table_url: "https://docs.google.com/spreadsheets/d/1JQ5p32JknAm34W42fiTXzAFKYOhb9QEcMFAwSernwI4/htmlview",
+    tg_channel_url: "https://t.me/firmachdroppp",
+  },
+  {
+    supplier_name: "Профит дроп",
+    manager_name: "managerProfitDROP",
+    manager_contact: "@managerProfitDROP",
+    table_url: "https://docs.google.com/spreadsheets/d/1Xfjpx1Bs9GDUlgKalrzzm3u2M6dpxwuHZQwCqihjw2Q/htmlview",
+    tg_channel_url: "https://t.me/+b-xpNhKNEVE0ZjRi",
+  },
+  {
+    supplier_name: "Venom",
+    manager_name: "manager_venom",
+    manager_contact: "@manager_venom",
+    table_url: "https://docs.google.com/spreadsheets/d/1wfZJPJMO34WfcbGNxP-IWl5w0V1vEDf6FHakAqoJsBw/htmlview",
+    tg_channel_url: "https://t.me/venomopt12",
+  },
+  {
+    supplier_name: "Empire",
+    manager_name: "manager111_0",
+    manager_contact: "@manager111_0",
+    table_url: "https://docs.google.com/spreadsheets/d/1fvLjH86AAD2upGbQ9npo-mtUbFAsl3cmx8wDIczTCeE/htmlview",
+    tg_channel_url: "https://t.me/dropempire1",
+  },
+  {
+    supplier_name: "Оптобаза",
+    manager_name: "dropbazaadmin",
+    manager_contact: "@dropbazaadmin",
+    table_url: "https://b2b.moysklad.ru/public/oWXBoG49bkuB/catalog",
+    tg_channel_url: "https://t.me/optobaza",
+  },
+  {
+    supplier_name: "HHHB",
+    manager_name: "HANISPIRIT",
+    manager_contact: "@HANISPIRIT",
+    tg_channel_url: "https://t.me/HHHB_STORE",
+  },
 ];
 
 type ViewKey =
@@ -1046,17 +1092,41 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
 
   const seedDefaultSources = async () => {
     try {
-      let created = 0;
-      let skipped = 0;
-      for (const source_url of DEFAULT_SUPPLIER_SOURCE_LINKS) {
-        try {
-          await createAdminSupplierSource({ source_url, note: "seed: стартовый набор источников" });
-          created += 1;
-        } catch {
-          skipped += 1;
+      const entries: Array<{
+        source_url: string;
+        supplier_name?: string;
+        manager_name?: string;
+        manager_contact?: string;
+        note?: string;
+      }> = [];
+
+      for (const src of DEFAULT_SUPPLIER_SEED) {
+        const common = {
+          supplier_name: src.supplier_name,
+          manager_name: src.manager_name,
+          manager_contact: src.manager_contact,
+        };
+        if (src.table_url) {
+          entries.push({
+            source_url: src.table_url,
+            ...common,
+            note: "seed: стартовый набор • role=price_stock_table",
+          });
+        }
+        if (src.tg_channel_url) {
+          entries.push({
+            source_url: src.tg_channel_url,
+            ...common,
+            note: "seed: стартовый набор • role=tg_media",
+          });
         }
       }
-      setMsg(`Стартовые источники: +${created} новых, ${skipped} уже были`);
+
+      const res: any = await bulkUpsertAdminSupplierSources(entries);
+      const created = Number(res?.created || 0);
+      const updated = Number(res?.updated || 0);
+      const skipped = Number(res?.skipped || 0);
+      setMsg(`Стартовые источники: +${created} новых, обновлено ${updated}, без изменений ${skipped}`);
       load();
     } catch (e: any) {
       setMsg(e?.message || "Не удалось добавить стартовые источники");

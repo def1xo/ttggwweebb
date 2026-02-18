@@ -468,11 +468,35 @@ def _extract_size_from_title(title: str) -> str | None:
     return None
 
 
+def _extract_size_from_row_text(row: list[str]) -> str | None:
+    text = " ".join([_norm(x) for x in (row or []) if _norm(x)])
+    if not text:
+        return None
+
+    # Parse sizes only from explicit size-marked fragments.
+    # Avoid scanning the whole row blindly to prevent pollution by prices/codes
+    # (e.g. 24/25/28 leaking into size grid).
+    matches = re.findall(r"(?i)(?:размер(?:ы)?|size)\s*[:#-]?\s*([^\n]+)", text)
+    out: list[str] = []
+    for chunk in matches:
+        cleaned = re.split(
+            r"(?i)\b(?:цена|стоимость|руб|ррц|rrc|мрц|mrc|наличие|остаток|stock|арт(?:икул)?|код)\b",
+            chunk,
+            maxsplit=1,
+        )[0]
+        for tok in split_size_tokens(cleaned):
+            if tok not in out:
+                out.append(tok)
+    if out:
+        return " ".join(out[:12])
+    return None
+
+
 def split_size_tokens(raw: Any) -> list[str]:
     txt = _norm(raw).upper()
     if not txt:
         return []
-    txt = txt.replace("РАЗМЕР", " ").replace("SIZE", " ")
+    txt = re.sub(r"(?i)\b(?:РАЗМЕРЫ?|SIZE|SIZES?)\b", " ", txt)
     txt = txt.replace("–", "-").replace("—", "-").replace("−", "-")
     out: list[str] = []
 
@@ -487,7 +511,7 @@ def split_size_tokens(raw: Any) -> list[str]:
             bb = int(b)
         except Exception:
             continue
-        if aa <= bb and bb - aa <= 8:
+        if aa <= bb and bb - aa <= 20:
             for size_num in range(aa, bb + 1):
                 _push(str(size_num))
 
@@ -725,6 +749,20 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             if alt_low:
                 price = float(max(alt_low))
 
+        # Footwear sanity check: very low prices (e.g. 799) are often wrong columns
+        # in mixed supplier sheets where wholesale is in another numeric field.
+        if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|574|9060|1906|2002)\b", title) and price < 1200:
+            excluded_with_price = set(excluded)
+            if idx_price is not None:
+                excluded_with_price.add(idx_price)
+            alt_footwear = [
+                x
+                for x in _price_candidates_from_row(row, exclude_indices=excluded_with_price)
+                if 1200 <= x <= 9_999
+            ]
+            if alt_footwear:
+                price = float(min(alt_footwear))
+
         # Guard against accidentally selected retail-like column.
         # If picked price is very high, but the row contains plausible purchase price,
         # prefer that lower candidate.
@@ -751,6 +789,8 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         size = _norm(row[idx_size]) if idx_size is not None and idx_size < len(row) else ""
         if not size:
             size = _extract_size_from_title(title) or ""
+        if not size:
+            size = _extract_size_from_row_text(row) or ""
         stock = _to_int(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else None
         raw_image = _norm(row[idx_image]) if idx_image is not None and idx_image < len(row) else ""
         image_urls = _split_image_urls(raw_image)

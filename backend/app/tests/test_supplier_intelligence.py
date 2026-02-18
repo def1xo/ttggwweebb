@@ -706,3 +706,41 @@ def test_extract_image_urls_from_html_page_expands_telegram_post_block(monkeypat
 def test_split_image_urls_supports_www_prefix():
     got = si._split_image_urls("www.example.com/pic.jpg")
     assert got == ["https://www.example.com/pic.jpg"]
+
+def test_extract_catalog_items_parses_sizes_from_row_text_when_no_size_column():
+    rows = [
+        ["Товар", "Дроп цена", "Комментарий"],
+        ["NB 574 black", "3490", "Размеры: 41-43"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "41 42 43"
+
+
+def test_extract_catalog_items_footwear_price_prefers_plausible_purchase_column():
+    rows = [
+        ["Товар", "Цена", "Опт", "РРЦ"],
+        ["New Balance 574", "799", "2890", "6990"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 2890.0
+
+def test_extract_catalog_items_does_not_pollute_sizes_from_price_numbers_in_row_text():
+    rows = [
+        ["Товар", "Цена", "Комментарий"],
+        ["New Balance 574", "2999", "цена 2499 / 2599, наличие 5"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] is None
+
+
+def test_extract_catalog_items_size_row_text_trims_after_price_keywords():
+    rows = [
+        ["Товар", "Дроп цена", "Комментарий"],
+        ["New Balance 574", "2999", "Размеры: 36-45 цена 2999"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "36 37 38 39 40 41 42 43 44 45"

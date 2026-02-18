@@ -30,7 +30,7 @@ PRICE_CURRENCY_RE = re.compile(
 )
 PRICE_KEYWORDS_RE = re.compile(r'(?:цена|продажа|стоимость)[:\s\-]*([0-9\s,.\u00A0]+)', flags=re.IGNORECASE)
 COST_KEYWORDS_RE = re.compile(r'(?:закуп|себест|себестоимость|cost)[:\s\-]*([0-9\s,.\u00A0]+)', flags=re.IGNORECASE)
-SIZE_RE = re.compile(r'размер(?:ы)?[:\s]*([0-9A-Za-zА-Яа-яЁё,;/\-\s]+)', flags=re.IGNORECASE)
+SIZE_RE = re.compile(r'размер(?:ы)?[:\s]*([^\n#]+)', flags=re.IGNORECASE)
 COLOR_RE = re.compile(r'цвет(?:а|ов)?[:\s]*([A-Za-zА-Яа-яЁё0-9,#\s\-]+)', flags=re.IGNORECASE)
 HASHTAG_RE = re.compile(r'#([\w\-А-Яа-яёЁ]+)', flags=re.UNICODE)
 STOCK_RE = re.compile(r'(?:остаток|в\s*наличии|наличие|stock|склад|qty|кол-?во|количество)[:\s\-]*([0-9]{1,5})', flags=re.IGNORECASE)
@@ -171,11 +171,29 @@ def _extract_cost_price(text: Optional[str]) -> Optional[Decimal]:
 def _extract_sizes(text: Optional[str]) -> List[str]:
     if not text:
         return []
-    m = SIZE_RE.search(text)
-    if not m:
-        return []
-    parts = re.split(r'[;,/\\\n]', m.group(1))
-    return [p.strip() for p in parts if p.strip()]
+    found: List[str] = []
+    for m in SIZE_RE.finditer(text):
+        chunk = (m.group(1) or "").strip()
+        if not chunk:
+            continue
+        parts = re.split(r'[;,/\\\n]', chunk)
+        for p in parts:
+            token = re.sub(r'\s+', ' ', p).strip()
+            if not token:
+                continue
+            # Trim common trailing descriptors from the same line.
+            token = re.split(r'\b(?:цвет(?:а|ов)?|цена|наличие|остаток|склад|арт(?:икул)?|код)\b', token, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,.;:-")
+            if token:
+                found.append(token)
+    out: List[str] = []
+    seen = set()
+    for s in found:
+        key = s.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return out
 
 
 def _extract_colors(text: Optional[str]) -> List[str]:
