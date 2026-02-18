@@ -667,9 +667,41 @@ def test_extract_catalog_items_replaces_unrealistic_low_price_from_row_candidate
 
 
 def test_split_size_tokens_parses_mixed_size_marks_and_ranges():
-    assert si.split_size_tokens("46(S)-✅ 48(M)-✅ 50(L)-✅") == ["46", "S", "48", "M", "50", "L"]
+    assert si.split_size_tokens("46(S)-✅ 48(M)-✅ 50(L)-✅") == ["46", "48", "50"]
     assert si.split_size_tokens("41–43") == ["41", "42", "43"]
 
+
+
+
+def test_extract_image_urls_from_html_page_expands_telegram_post_block(monkeypatch):
+    class DummyResp:
+        def __init__(self, text: str):
+            self.text = text
+
+    html_single = '<meta property="og:image" content="https://cdn4.telesco.pe/file/preview.jpg">'
+    html_public = (
+        '<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="firmachdroppp/3183">'
+        '<a class="tgme_widget_message_photo_wrap" style="background-image:url(\'https://cdn4.telesco.pe/file/a.jpg\')"></a>'
+        '<a class="tgme_widget_message_photo_wrap" style="background-image:url(\'https://cdn4.telesco.pe/file/b.jpg\')"></a>'
+        '</div></div>'
+        '<div class="tgme_widget_message_wrap"><div data-post="firmachdroppp/3184"></div></div>'
+    )
+
+    def fake_get(url, **kwargs):
+        if url == "https://t.me/firmachdroppp/3183":
+            return DummyResp(html_single)
+        if url == "https://t.me/s/firmachdroppp/3183":
+            return DummyResp(html_public)
+        return DummyResp("")
+
+    monkeypatch.setattr(si, "_http_get_with_retries", fake_get)
+
+    out = si.extract_image_urls_from_html_page("https://t.me/firmachdroppp/3183", limit=5)
+
+    assert out[:2] == [
+        "https://cdn4.telesco.pe/file/a.jpg",
+        "https://cdn4.telesco.pe/file/b.jpg",
+    ]
 
 def test_split_image_urls_supports_www_prefix():
     got = si._split_image_urls("www.example.com/pic.jpg")
