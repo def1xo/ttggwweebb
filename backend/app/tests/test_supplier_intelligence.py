@@ -375,3 +375,32 @@ def test_map_category_detects_sneakers_by_brand_model():
 def test_normalize_retail_price_rounds_to_x99():
     got = si.normalize_retail_price(12684)
     assert got == 12699.0
+
+
+def test_extract_catalog_items_fallbacks_image_from_any_row_cell():
+    rows = [
+        ["Наименование", "Цена", "Колонка без фото"],
+        ["Жилетка Canada Goose", "3899", "смотри https://cdn.site/img1.jpg"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["image_url"] == "https://cdn.site/img1.jpg"
+
+
+def test_extract_catalog_items_infers_size_from_title():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["NIKE AIR FORCE 1 low SP clonex 42", "2803"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "42"
+
+
+def test_split_image_urls_supports_protocol_relative():
+    got = si._split_image_urls("//cdn.site/pic.jpg")
+    assert got == ["https://cdn.site/pic.jpg"]
+
+
+def test_map_category_detects_vest_not_accessory():
+    assert map_category("Жилетка Canada Goose") == "Куртки"

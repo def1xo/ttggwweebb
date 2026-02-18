@@ -62,12 +62,12 @@ def _download_image_bytes(url: str, timeout_sec: int = 20, max_bytes: int = 6_00
 CATEGORY_RULES: dict[str, tuple[str, ...]] = {
     "Кофты": ("худи", "zip", "зип", "толстов", "свитшот", "hoodie"),
     "Футболки": ("футбол", "tee", "t-shirt", "майка"),
-    "Куртки": ("курт", "бомбер", "ветров", "пухов"),
+    "Куртки": ("курт", "бомбер", "ветров", "пухов", "жилет", "vest"),
     "Брюки": ("штаны", "брюк", "джинс", "карго", "sweatpants"),
     "Шорты": ("шорт", "shorts"),
     "Рубашки": ("рубаш", "shirt"),
     "Лонгсливы": ("лонгслив", "longsleeve", "long sleeve"),
-    "Свитера": ("свитер", "джемпер", "pullover"),
+    "Свитера": ("свитер", "джемпер", "pullover", "костюм", "suit", "set"),
     "Обувь": (
         "кросс", "sneaker", "кеды", "обув", "ботин", "лофер", "сланц",
         "new balance", "nb ", "nike", "adidas", "asics", "puma", "reebok", "jordan", "yeezy",
@@ -327,20 +327,60 @@ def _to_int(raw: Any) -> int | None:
         return None
 
 
+def _normalize_image_candidate(url: str) -> str | None:
+    u = str(url or "").strip().strip("\"'()[]{}<>")
+    if not u:
+        return None
+    if u.startswith("//"):
+        u = "https:" + u
+    elif u.lower().startswith("www."):
+        u = "https://" + u
+    if not re.match(r"^https?://", u, flags=re.I):
+        return None
+    return u
+
+
 def _split_image_urls(raw: Any) -> list[str]:
     txt = _norm(raw)
     if not txt:
         return []
+
     out: list[str] = []
-    for chunk in re.split(r"[\s,;|]+", txt):
-        u = (chunk or "").strip()
-        if not u:
-            continue
-        if not re.match(r"^https?://", u, flags=re.I):
-            continue
-        if u not in out:
+
+    # collect explicit urls first (handles markdown/text with punctuation)
+    for m in re.findall(r'((?:https?:)?//[^\s,;|)\]>\'"]+)', txt, flags=re.I):
+        u = _normalize_image_candidate(m)
+        if u and u not in out:
             out.append(u)
+
+    # fallback tokenization for plain cells
+    for chunk in re.split(r"[\s,;|]+", txt):
+        u = _normalize_image_candidate(chunk)
+        if u and u not in out:
+            out.append(u)
+
     return out
+
+
+def _row_fallback_images(row: list[str]) -> list[str]:
+    out: list[str] = []
+    for cell in row:
+        for u in _split_image_urls(cell):
+            if u not in out:
+                out.append(u)
+    return out
+
+
+def _extract_size_from_title(title: str) -> str | None:
+    t = str(title or "")
+    if not t:
+        return None
+    # examples: "NB 9060 42", "hoodie XL", "size M"
+    m = re.search(r"(?i)\b(?:size\s*)?(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3})\b", t)
+    if not m:
+        return None
+    return str(m.group(1)).upper()
+
 
 
 def split_size_tokens(raw: Any) -> list[str]:
@@ -373,8 +413,6 @@ def split_size_tokens(raw: Any) -> list[str]:
             if cleaned not in out:
                 out.append(cleaned)
     return out
-
-
 
 
 _COLOR_CANONICAL_MAP: tuple[tuple[str, str], ...] = (
@@ -534,9 +572,13 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             color = inferred_color
 
         size = _norm(row[idx_size]) if idx_size is not None and idx_size < len(row) else ""
+        if not size:
+            size = _extract_size_from_title(title) or ""
         stock = _to_int(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else None
         raw_image = _norm(row[idx_image]) if idx_image is not None and idx_image < len(row) else ""
         image_urls = _split_image_urls(raw_image)
+        if not image_urls:
+            image_urls = _row_fallback_images(row)
         image_url = image_urls[0] if image_urls else None
         description = _norm(row[idx_desc]) if idx_desc is not None and idx_desc < len(row) else ""
 
