@@ -363,6 +363,12 @@ def supplier_auto_import_24h_task():
         if not source_ids:
             return {"ok": True, "source_count": 0, "message": "no active supplier sources"}
 
+        from app.api.v1.admin_supplier_intelligence import (
+            _default_auto_import_fetch_timeout_sec,
+            _default_auto_import_max_items_per_source,
+            _default_auto_import_tg_fallback_limit,
+        )
+
         payload = {
             "source_ids": source_ids,
             "dry_run": False,
@@ -371,9 +377,9 @@ def supplier_auto_import_24h_task():
             "ai_description_enabled": True,
             "use_avito_pricing": False,
             "avito_max_pages": 1,
-            "max_items_per_source": 1_000_000,
-            "fetch_timeout_sec": 180,
-            "tg_fallback_limit": 1_000_000,
+            "max_items_per_source": _default_auto_import_max_items_per_source(),
+            "fetch_timeout_sec": _default_auto_import_fetch_timeout_sec(),
+            "tg_fallback_limit": _default_auto_import_tg_fallback_limit(),
         }
         return _run_supplier_import(db, payload)
     except Exception as exc:

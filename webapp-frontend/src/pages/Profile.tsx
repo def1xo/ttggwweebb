@@ -237,11 +237,6 @@ export default function Profile() {
     <div className="container" style={{ paddingTop: 12, paddingBottom: 90 }}>
       <div className="page-head">
         <div className="page-head__title">Профиль</div>
-        <div className="page-head__actions">
-          <Link to="/catalog" className="btn ghost" style={{ textDecoration: "none" }}>
-            Каталог
-          </Link>
-        </div>
       </div>
 
       <div className="card" style={{ padding: 14, marginTop: 12 }}>
@@ -428,9 +423,6 @@ export default function Profile() {
                         style={{ textDecoration: "none" }}
                       >
                         Открыть
-                      </Link>
-                      <Link to="/catalog" className="btn ghost btn-sm" style={{ textDecoration: "none" }}>
-                        В каталог
                       </Link>
                     </div>
                   </div>

@@ -473,30 +473,48 @@ def split_size_tokens(raw: Any) -> list[str]:
     if not txt:
         return []
     txt = txt.replace("РАЗМЕР", " ").replace("SIZE", " ")
+    txt = txt.replace("–", "-").replace("—", "-").replace("−", "-")
     out: list[str] = []
+
+    def _push(token: str) -> None:
+        if token and token not in out:
+            out.append(token)
+
+    # numeric ranges in any textual form, e.g. "41-45", "41–45"
+    for a, b in re.findall(r"\b(\d{2,3})\s*-\s*(\d{2,3})\b", txt):
+        try:
+            aa = int(a)
+            bb = int(b)
+        except Exception:
+            continue
+        if aa <= bb and bb - aa <= 8:
+            for size_num in range(aa, bb + 1):
+                _push(str(size_num))
+
     for chunk in re.split(r"[\s,;|/]+", txt):
         token = chunk.strip().strip(".")
         if not token:
             continue
+
         if "-" in token and re.match(r"^[0-9]{2,3}-[0-9]{2,3}$", token):
-            a, b = token.split("-", 1)
-            try:
-                aa = int(a)
-                bb = int(b)
-                if aa <= bb and bb - aa <= 6:
-                    for size_num in range(aa, bb + 1):
-                        val = str(size_num)
-                        if val not in out:
-                            out.append(val)
-                    continue
-            except Exception:
-                pass
+            continue
+
         cleaned = re.sub(r"[^A-Z0-9+-]", "", token)
         if not cleaned:
             continue
         if re.match(r"^(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3})$", cleaned):
-            if cleaned not in out:
-                out.append(cleaned)
+            _push(cleaned)
+
+    # fallback parser for formats like "46(S)-✅ 48(M)-✅ 50(L)-✅"
+    for token in re.findall(r"\b(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3})\b", txt):
+        _push(token)
+
+    # If supplier row contains paired numeric + letter labels (e.g. 46(S)),
+    # keep numeric sizes to avoid duplicate variants like 46 and S.
+    numeric_count = sum(1 for x in out if re.fullmatch(r"\d{2,3}", x))
+    if numeric_count >= 2:
+        out = [x for x in out if re.fullmatch(r"\d{2,3}", x)]
+
     return out
 
 
@@ -525,6 +543,7 @@ _COLOR_CANONICAL_MAP: tuple[tuple[str, str], ...] = (
 
 
 MIN_REASONABLE_DROPSHIP_PRICE = 300
+MIN_ABSOLUTE_DROPSHIP_PRICE = 100
 
 
 def _is_size_only_title(text: str) -> bool:
@@ -691,8 +710,20 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         raw_price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
         excluded = {x for x in [idx_title, idx_size, idx_stock] if x is not None}
         price = _coerce_row_price(raw_price, row, exclude_indices=excluded)
-        if price is None or price < MIN_REASONABLE_DROPSHIP_PRICE:
+        if price is None or price < MIN_ABSOLUTE_DROPSHIP_PRICE:
             continue
+
+        # Some supplier sheets contain legitimately low wholesale prices
+        # (e.g. accessories), so do not hard-drop them if they are >=100.
+        if price < MIN_REASONABLE_DROPSHIP_PRICE:
+            excluded_low = {x for x in [idx_title, idx_size, idx_stock] if x is not None}
+            alt_low = [
+                x
+                for x in _price_candidates_from_row(row, exclude_indices=excluded_low)
+                if x >= MIN_REASONABLE_DROPSHIP_PRICE
+            ]
+            if alt_low:
+                price = float(max(alt_low))
 
         # Guard against accidentally selected retail-like column.
         # If picked price is very high, but the row contains plausible purchase price,
@@ -867,24 +898,52 @@ def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: in
 
     urls: list[str] = []
 
+    def _push(raw_u: str | None, base_url: str | None = None) -> None:
+        u = str(raw_u or "").strip().strip('"\'')
+        if not u:
+            return
+        if u.startswith("//"):
+            u = "https:" + u
+        elif u.startswith("/"):
+            parsed = urlparse(base_url or url)
+            if parsed.scheme and parsed.netloc:
+                u = f"{parsed.scheme}://{parsed.netloc}{u}"
+        if u.lower().startswith(("http://", "https://")) and u not in urls:
+            urls.append(u)
+
+    # Telegram direct post pages often expose only one preview image in og:image.
+    # Public /s/channel/id pages usually contain the full media set for that post.
+    tg_m = re.search(r"https?://t\.me/(?:(?:s/)?)([A-Za-z0-9_]{3,})/(\d+)(?:\?.*)?$", str(url).strip(), flags=re.I)
+    if tg_m:
+        channel = tg_m.group(1)
+        msg_id = tg_m.group(2)
+        tg_public = f"https://t.me/s/{channel}/{msg_id}"
+        try:
+            tg_html = _http_get_with_retries(tg_public, timeout_sec=timeout_sec, headers=headers, max_attempts=2).text or ""
+            marker = f'data-post="{channel}/{msg_id}"'
+            pos = tg_html.find(marker)
+            if pos >= 0:
+                start = tg_html.rfind('<div class="tgme_widget_message_wrap', 0, pos)
+                if start < 0:
+                    start = pos
+                end = tg_html.find('<div class="tgme_widget_message_wrap', pos + len(marker))
+                block = tg_html[start:(end if end > start else len(tg_html))]
+
+                for m in re.findall(r"background-image:url\(([^)]+)\)", block, flags=re.I):
+                    _push(m, tg_public)
+
+                for m in re.findall(r'https://cdn\d?\.telesco\.pe/file/[^"\'\s<)]+', block, flags=re.I):
+                    _push(m, tg_public)
+        except Exception:
+            pass
+
     # og/twitter image meta
     for m in re.findall(r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]+content=["\']([^"\']+)["\']', html, flags=re.I):
-        u = str(m).strip()
-        if u and u not in urls:
-            urls.append(u)
+        _push(m, url)
 
     # plain img src
     for m in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html, flags=re.I):
-        u = str(m).strip()
-        if not u:
-            continue
-        if u.startswith("//"):
-            u = "https:" + u
-        if u.startswith("/"):
-            parsed = urlparse(url)
-            u = f"{parsed.scheme}://{parsed.netloc}{u}"
-        if u not in urls:
-            urls.append(u)
+        _push(m, url)
         if len(urls) >= limit:
             break
     return urls[:limit]
