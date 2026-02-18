@@ -243,31 +243,60 @@ def _extract_stock_quantity(text: Optional[str], payload: Optional[Dict[str, Any
             return None
     return None
 
+def _split_image_candidates(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        out: List[str] = []
+        for item in raw:
+            out.extend(_split_image_candidates(item))
+        return out
+    if isinstance(raw, dict):
+        out: List[str] = []
+        for key in ("url", "file_url", "photo_url", "src", "image", "image_url", "thumb"):
+            if key in raw:
+                out.extend(_split_image_candidates(raw.get(key)))
+        return out
+    value = str(raw or "").strip()
+    if not value:
+        return []
+    parts = [p.strip() for p in re.split(r"[\n\r\t,;|\s]+", value) if p and p.strip()]
+    if len(parts) <= 1:
+        return [value]
+    return [p for p in parts if re.match(r"(?i)^https?://", p) or p.startswith("/")]
+
+
+def _looks_like_thumbnail(url: str) -> bool:
+    u = str(url or "").lower()
+    if not u:
+        return False
+    if any(x in u for x in ("thumb", "thumbnail", "preview", "_small", "/small/")):
+        return True
+    return bool(re.search(r"(?:^|[?&])(w|width|h|height|q|quality|size)=", u))
+
+
 def _normalize_image_urls(payload: Dict[str, Any]) -> List[str]:
     urls: List[str] = []
-    if isinstance(payload.get("image_urls"), list):
-        urls.extend([u for u in payload["image_urls"] if isinstance(u, str)])
-    if isinstance(payload.get("photos"), list):
-        urls.extend([u for u in payload["photos"] if isinstance(u, str)])
+    urls.extend(_split_image_candidates(payload.get("image_urls")))
+    urls.extend(_split_image_candidates(payload.get("photos")))
     if isinstance(payload.get("media"), list):
         for mi in payload["media"]:
-            if isinstance(mi, dict):
-                for key in ("url", "file_url", "photo_url", "thumb", "src"):
-                    v = mi.get(key)
-                    if isinstance(v, str) and v:
-                        urls.append(v)
-            elif isinstance(mi, str):
-                urls.append(mi)
-    if isinstance(payload.get("image"), str):
-        urls.append(payload["image"])
+            urls.extend(_split_image_candidates(mi))
+    urls.extend(_split_image_candidates(payload.get("image")))
     seen = set()
     out: List[str] = []
+    thumbs: List[str] = []
     for u in urls:
         if not u:
             continue
         if u not in seen:
             seen.add(u)
-            out.append(u)
+            if _looks_like_thumbnail(u):
+                thumbs.append(u)
+            else:
+                out.append(u)
+    if not out:
+        out = thumbs
     return out
 
 
