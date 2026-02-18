@@ -562,6 +562,23 @@ class SupplierImportTaskStatusOut(BaseModel):
     result: dict | None = None
 
 
+class ImportQualityAuditItem(BaseModel):
+    product_id: int
+    title: str
+    category_id: int | None = None
+    supplier: str | None = None
+    issue: str
+
+
+class ImportQualityAuditOut(BaseModel):
+    total_visible: int
+    one_photo_count: int
+    no_size_count: int
+    duplicate_title_count: int
+    no_stock_count: int
+    sample_items: list[ImportQualityAuditItem] = Field(default_factory=list)
+
+
 def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
     return ImportSourceReport(source_id=source_id, url=source_url)
 
@@ -1659,6 +1676,73 @@ def get_supplier_import_task_status(
         successful=bool(result.successful()),
         failed=bool(result.failed()),
         result=payload,
+    )
+
+
+@router.get("/supplier-intelligence/import-quality-audit", response_model=ImportQualityAuditOut)
+def import_quality_audit(
+    sample_limit: int = 60,
+    _admin=Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    sample_limit = max(1, min(int(sample_limit or 60), 300))
+    products = db.query(models.Product).filter(models.Product.visible == True).all()  # noqa: E712
+
+    one_photo = 0
+    no_size = 0
+    duplicate_title = 0
+    no_stock = 0
+    samples: list[ImportQualityAuditItem] = []
+
+    title_buckets: dict[tuple[int | None, str], list[models.Product]] = {}
+    for p in products:
+        key = (getattr(p, "category_id", None), re.sub(r"\s+", " ", str(getattr(p, "title", "") or "").strip().lower()))
+        title_buckets.setdefault(key, []).append(p)
+
+    duplicate_ids: set[int] = set()
+    for bucket in title_buckets.values():
+        if len(bucket) > 1:
+            duplicate_title += len(bucket)
+            for p in bucket:
+                if getattr(p, "id", None):
+                    duplicate_ids.add(int(p.id))
+
+    for p in products:
+        pid = int(getattr(p, "id", 0) or 0)
+        if pid <= 0:
+            continue
+        imgs = list(getattr(p, "images", []) or [])
+        image_count = len(imgs)
+        if not image_count and getattr(p, "default_image", None):
+            image_count = 1
+        if image_count <= 1:
+            one_photo += 1
+            if len(samples) < sample_limit:
+                samples.append(ImportQualityAuditItem(product_id=pid, title=str(getattr(p, "title", "") or ""), category_id=getattr(p, "category_id", None), supplier=getattr(p, "import_supplier_name", None), issue="one_photo"))
+
+        variants = list(getattr(p, "variants", []) or [])
+        size_names = [str(getattr(getattr(v, "size", None), "name", "") or "").strip() for v in variants]
+        if not any(size_names):
+            no_size += 1
+            if len(samples) < sample_limit:
+                samples.append(ImportQualityAuditItem(product_id=pid, title=str(getattr(p, "title", "") or ""), category_id=getattr(p, "category_id", None), supplier=getattr(p, "import_supplier_name", None), issue="no_size"))
+
+        has_stock = any(int(getattr(v, "stock_quantity", 0) or 0) > 0 for v in variants)
+        if not has_stock:
+            no_stock += 1
+            if len(samples) < sample_limit:
+                samples.append(ImportQualityAuditItem(product_id=pid, title=str(getattr(p, "title", "") or ""), category_id=getattr(p, "category_id", None), supplier=getattr(p, "import_supplier_name", None), issue="no_stock"))
+
+        if pid in duplicate_ids and len(samples) < sample_limit:
+            samples.append(ImportQualityAuditItem(product_id=pid, title=str(getattr(p, "title", "") or ""), category_id=getattr(p, "category_id", None), supplier=getattr(p, "import_supplier_name", None), issue="duplicate_title"))
+
+    return ImportQualityAuditOut(
+        total_visible=len(products),
+        one_photo_count=one_photo,
+        no_size_count=no_size,
+        duplicate_title_count=duplicate_title,
+        no_stock_count=no_stock,
+        sample_items=samples,
     )
 
 
