@@ -601,6 +601,11 @@ def test_extract_catalog_items_replaces_unrealistic_low_price_from_row_candidate
     assert items[0]["dropship_price"] == 9379.0
 
 
+def test_split_size_tokens_parses_mixed_size_marks_and_ranges():
+    assert si.split_size_tokens("46(S)-✅ 48(M)-✅ 50(L)-✅") == ["46", "S", "48", "M", "50", "L"]
+    assert si.split_size_tokens("41–43") == ["41", "42", "43"]
+
+
 def test_split_image_urls_supports_www_prefix():
     got = si._split_image_urls("www.example.com/pic.jpg")
     assert got == ["https://www.example.com/pic.jpg"]

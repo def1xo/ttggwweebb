@@ -1027,6 +1027,30 @@ def import_products_from_sources(
                     if uu and uu not in image_urls:
                         image_urls.append(uu)
 
+                # expand telegram post links into direct image URLs
+                expanded_image_urls: list[str] = []
+                for candidate in image_urls:
+                    cu = str(candidate or "").strip()
+                    if not cu:
+                        continue
+                    if "t.me/" in cu or "telegram.me/" in cu:
+                        try:
+                            tg_media = extract_image_urls_from_html_page(cu, limit=8)
+                        except Exception:
+                            tg_media = []
+                        if tg_media:
+                            for media_u in tg_media:
+                                uu = _resolve_source_image_url(media_u, cu)
+                                if uu and uu not in expanded_image_urls:
+                                    expanded_image_urls.append(uu)
+                            continue
+                    if cu not in expanded_image_urls:
+                        expanded_image_urls.append(cu)
+
+                if expanded_image_urls:
+                    image_urls = expanded_image_urls
+                    image_url = image_urls[0]
+
                 # store supplier images locally when possible so they are stable
                 # across devices and not affected by source-side hotlink limits.
                 localized_image_urls: list[str] = []
