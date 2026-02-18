@@ -37,7 +37,7 @@ HASHTAG_RE = re.compile(r'#([\w\-А-Яа-яёЁ]+)', flags=re.UNICODE)
 STOCK_RE = re.compile(r'(?:остаток|в\s*наличии|наличие|stock|склад|qty|кол-?во|количество)[:\s\-]*([0-9]{1,5})', flags=re.IGNORECASE)
 RRC_KEYWORDS_RE = re.compile(r'(?:ррц|rrc|мрц|mrc|розниц(?:а|ная)?\s*цена|retail)[:\s\-]*([0-9][0-9\s,.\u00A0]*)', flags=re.IGNORECASE)
 
-IMPORT_FALLBACK_STOCK_QTY = 1
+IMPORT_FALLBACK_STOCK_QTY = 9_999
 RRC_DISCOUNT_RUB = Decimal("300")
 
 

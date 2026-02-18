@@ -390,6 +390,56 @@ def _to_int(raw: Any) -> int | None:
         return None
 
 
+def _parse_stock_cell_qty(raw: Any) -> int | None:
+    txt = _norm(raw)
+    if not txt:
+        return None
+    m = re.search(r"-?\d+", txt)
+    if not m:
+        return None
+    try:
+        val = int(m.group(0))
+    except Exception:
+        return None
+    return val if val >= 0 else None
+
+
+def _parse_size_header_token(raw_header: Any) -> str | None:
+    token = _norm(raw_header).upper().replace(",", ".")
+    if not token:
+        return None
+    m = re.fullmatch(r"(\d{2,3})(?:\.5)?", token)
+    if not m:
+        return None
+    try:
+        val = float(token)
+    except Exception:
+        return None
+    if val < 20 or val > 60:
+        return None
+    if token.endswith(".0"):
+        return str(int(val))
+    return token
+
+
+
+
+def _explicit_out_of_stock(raw: Any) -> bool:
+    txt = _norm(raw).lower()
+    if not txt:
+        return False
+    markers = (
+        "нет в наличии",
+        "нету",
+        "sold out",
+        "out of stock",
+        "распродан",
+        "законч",
+        "0 шт",
+        "нет",
+    )
+    return any(m in txt for m in markers)
+
 def _extract_size_stock_map(raw: Any) -> dict[str, int]:
     txt = _norm(raw).upper()
     if not txt:
@@ -766,6 +816,11 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
     idx_stock = _find_col(headers, ("остат", "налич", "stock", "qty", "кол-во"))
     idx_image_cols = _find_cols(headers, ("фото", "image", "img", "картин", "photo", "pic", "ссыл", "url"))
     idx_desc = _find_col(headers, ("опис", "desc", "description"))
+    size_header_cols: list[tuple[int, str]] = []
+    for idx, h in enumerate(headers):
+        parsed_size = _parse_size_header_token(h)
+        if parsed_size:
+            size_header_cols.append((idx, parsed_size))
 
     # if header row is not real header, fallback to positional guess
     if idx_title is None and body:
@@ -845,11 +900,33 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             size = _extract_size_from_row_text(row) or ""
         stock_raw = _norm(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else ""
         stock_map = _extract_size_stock_map(stock_raw)
+        explicit_out_of_stock = _explicit_out_of_stock(stock_raw)
+
+        size_header_stock_map: dict[str, int] = {}
+        for col_idx, size_name in size_header_cols:
+            if col_idx >= len(row):
+                continue
+            qty = _parse_stock_cell_qty(row[col_idx])
+            if qty is None:
+                continue
+            size_header_stock_map[size_name] = qty
+
+        if size_header_stock_map:
+            merged_map = dict(stock_map)
+            for sz, qty in size_header_stock_map.items():
+                merged_map[sz] = max(merged_map.get(sz, 0), qty)
+            stock_map = merged_map
+
+        if not size and size_header_cols:
+            size_order = [sz for _, sz in size_header_cols]
+            size = " ".join(sorted(size_order, key=lambda x: float(str(x).replace(",", "."))))
         if not size and stock_map:
             size = " ".join(sorted(stock_map.keys(), key=lambda x: float(str(x).replace(",", "."))))
         stock = _to_int(stock_raw) if stock_raw else None
         if stock_map:
             stock = int(sum(max(0, int(v)) for v in stock_map.values()))
+        elif explicit_out_of_stock:
+            stock = 0
 
         image_urls: list[str] = []
         for i in idx_image_cols:

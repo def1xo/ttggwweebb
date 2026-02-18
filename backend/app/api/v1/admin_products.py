@@ -23,6 +23,22 @@ def _money(v: Optional[str], default: Decimal = Decimal("0.00")) -> Decimal:
         return default
 
 
+def _upsert_product_cost(db: Session, variant_id: int, cost_price: Decimal) -> None:
+    try:
+        latest = (
+            db.query(models.ProductCost)
+            .filter(models.ProductCost.variant_id == int(variant_id))
+            .order_by(models.ProductCost.created_at.desc(), models.ProductCost.id.desc())
+            .first()
+        )
+        if latest and latest.cost_price == cost_price:
+            return
+        db.add(models.ProductCost(variant_id=int(variant_id), cost_price=cost_price))
+    except Exception:
+        # cost history is best-effort and must not break product save
+        return
+
+
 def _parse_colors(raw: Optional[str]) -> List[str]:
     if not raw:
         return []
@@ -147,6 +163,20 @@ def list_products(db: Session = Depends(get_db), admin: models.User = Depends(ge
     for p in items:
         sizes = []
         colors = []
+        variant_ids = [int(v.id) for v in (p.variants or []) if getattr(v, "id", None)]
+        latest_cost_by_variant: dict[int, float] = {}
+        if variant_ids:
+            rows = (
+                db.query(models.ProductCost)
+                .filter(models.ProductCost.variant_id.in_(variant_ids))
+                .order_by(models.ProductCost.variant_id.asc(), models.ProductCost.created_at.desc(), models.ProductCost.id.desc())
+                .all()
+            )
+            for r in rows:
+                vid = int(getattr(r, "variant_id", 0) or 0)
+                if vid <= 0 or vid in latest_cost_by_variant:
+                    continue
+                latest_cost_by_variant[vid] = float(getattr(r, "cost_price", 0) or 0)
         try:
             sizes = sorted({(v.size.name if getattr(v, "size", None) else None) for v in (p.variants or []) if (getattr(v, "size", None) and v.size.name)})
             colors = sorted({(v.color.name if getattr(v, "color", None) else None) for v in (p.variants or []) if (getattr(v, "color", None) and v.color.name)})
@@ -170,6 +200,7 @@ def list_products(db: Session = Depends(get_db), admin: models.User = Depends(ge
             "sizes": sizes,
             "colors": colors,
             "variants": [{"id": v.id, "price": float(v.price or p.base_price or 0), "stock_quantity": int(v.stock_quantity or 0)} for v in (p.variants or [])],
+            "cost_price": (round(sum(latest_cost_by_variant.values()) / len(latest_cost_by_variant), 2) if latest_cost_by_variant else None),
         })
     return {"products": out}
 
@@ -188,6 +219,7 @@ def create_product(
     sizes: Optional[str] = Form(None),
     color: Optional[str] = Form(None),
     stock_quantity: Optional[int] = Form(None),
+    cost_price: Optional[str] = Form(None),
     payload: Optional[dict] = Body(None),
     db: Session = Depends(get_db),
     admin: models.User = Depends(get_current_admin_user),
@@ -204,6 +236,8 @@ def create_product(
         color = payload.get("color")
         if "stock_quantity" in payload:
             stock_quantity = payload.get("stock_quantity")
+        if "cost_price" in payload:
+            cost_price = payload.get("cost_price")
 
     if not title or not str(title).strip():
         raise HTTPException(400, detail="title required")
@@ -246,7 +280,8 @@ def create_product(
             # non-fatal
             pass
 
-    stock_value = int(stock_quantity) if stock_quantity is not None else 0
+    stock_value = int(stock_quantity) if stock_quantity is not None else 9_999
+    cost_value = _money(cost_price, default=Decimal("0")) if cost_price is not None else None
     if stock_value < 0:
         stock_value = 0
 
@@ -278,6 +313,11 @@ def create_product(
             else:
                 db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=None, stock_quantity=stock_value))
 
+    if cost_value is not None and cost_value >= 0:
+        for v in (p.variants or []):
+            if getattr(v, "id", None):
+                _upsert_product_cost(db, int(v.id), cost_value)
+
     db.commit()
     db.refresh(p)
 
@@ -292,6 +332,7 @@ def create_product(
             "sizes": size_list,
             "colors": [c.name for c in color_objs],
             "stock_quantity": stock_value,
+            "cost_price": float(cost_value or 0) if cost_value is not None else None,
         },
     }
 
@@ -309,6 +350,7 @@ def update_product(
     sizes: Optional[str] = Form(None),
     color: Optional[str] = Form(None),
     stock_quantity: Optional[int] = Form(None),
+    cost_price: Optional[str] = Form(None),
     payload: Optional[dict] = Body(None),
     db: Session = Depends(get_db),
     admin: models.User = Depends(get_current_admin_user),
@@ -328,6 +370,8 @@ def update_product(
         color = payload.get("color")
         if "stock_quantity" in payload:
             stock_quantity = payload.get("stock_quantity")
+        if "cost_price" in payload:
+            cost_price = payload.get("cost_price")
 
     if title is not None:
         p.title = str(title).strip()[:512]
@@ -391,6 +435,8 @@ def update_product(
             except Exception:
                 pass
 
+    stock_value = int((p.variants[0].stock_quantity if p.variants else 0) or 0)
+
     # variants adjustments
     if sizes is not None or color is not None:
         size_list = _parse_sizes(sizes) if sizes is not None else []
@@ -443,6 +489,12 @@ def update_product(
                 else:
                     db.add(models.ProductVariant(product_id=p.id, price=p.base_price, color_id=None, stock_quantity=stock_value))
 
+    cost_value = _money(cost_price, default=Decimal("0")) if cost_price is not None else None
+    if cost_value is not None and cost_value >= 0:
+        for v in (p.variants or []):
+            if getattr(v, "id", None):
+                _upsert_product_cost(db, int(v.id), cost_value)
+
     db.add(p)
     db.commit()
     db.refresh(p)
@@ -461,6 +513,7 @@ def update_product(
             "sizes": sizes_out,
             "colors": colors_out,
             "stock_quantity": int((p.variants[0].stock_quantity if p.variants else 0) or 0),
+            "cost_price": float(cost_value or 0) if cost_value is not None else None,
         },
     }
 
