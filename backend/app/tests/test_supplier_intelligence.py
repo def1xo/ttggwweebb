@@ -271,6 +271,20 @@ def test_prefer_local_image_url_uses_localized_url(monkeypatch):
     assert asi._prefer_local_image_url("https://cdn.example.com/a.jpg") == "/uploads/products/a.jpg"
 
 
+def test_import_products_in_defaults_allow_large_supplier_batches():
+    payload = asi.ImportProductsIn(source_ids=[1])
+    assert payload.max_items_per_source == 2500
+    assert payload.fetch_timeout_sec == 60
+
+
+def test_import_products_in_rejects_too_large_batch_size():
+    try:
+        asi.ImportProductsIn(source_ids=[1], max_items_per_source=20000)
+        assert False, "expected validation error"
+    except Exception as exc:
+        assert "max_items_per_source" in str(exc)
+
+
 def test_classify_import_error_codes():
     assert asi._classify_import_error(RuntimeError("request timeout on supplier")) == asi.ERROR_CODE_NETWORK_TIMEOUT
     assert asi._classify_import_error(RuntimeError("content is not an image")) == asi.ERROR_CODE_INVALID_IMAGE

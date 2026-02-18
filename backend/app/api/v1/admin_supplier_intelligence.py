@@ -410,8 +410,9 @@ def analyze_stored_sources(payload: AnalyzeStoredSourcesIn, _admin=Depends(get_c
 
 
 class ImportProductsIn(BaseModel):
-    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=100)
-    max_items_per_source: int = Field(default=40, ge=1, le=200)
+    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=300)
+    max_items_per_source: int = Field(default=2500, ge=1, le=10000)
+    fetch_timeout_sec: int = Field(default=60, ge=10, le=300)
     dry_run: bool = True
     publish_visible: bool = False
     ai_style_description: bool = True
@@ -843,7 +844,11 @@ def import_products_from_sources(
             source_items_map[int(src.id)] = []
             continue
         try:
-            preview = fetch_tabular_preview(src_url, max_rows=max(5, payload.max_items_per_source + 1))
+            preview = fetch_tabular_preview(
+                src_url,
+                timeout_sec=payload.fetch_timeout_sec,
+                max_rows=max(5, payload.max_items_per_source + 1),
+            )
             rows = preview.get("rows_preview") or []
             items = extract_catalog_items(rows, max_items=payload.max_items_per_source)
             if not items and "t.me/" in src_url:
@@ -1163,6 +1168,13 @@ def import_products_from_sources(
             except Exception as exc:
                 _register_source_error(report, exc)
 
+        if not payload.dry_run:
+            try:
+                db.commit()
+            except Exception as exc:
+                db.rollback()
+                _register_source_error(report, exc)
+
         source_reports.append(report)
 
     top_failing_sources = sorted(
@@ -1181,8 +1193,6 @@ def import_products_from_sources(
 
     if payload.dry_run:
         db.rollback()
-    else:
-        db.commit()
 
     return ImportProductsOut(
         created_categories=created_categories,
@@ -1215,9 +1225,10 @@ def run_auto_import_now(
             "publish_visible": True,
             "ai_style_description": True,
             "ai_description_enabled": True,
-            "use_avito_pricing": True,
+            "use_avito_pricing": False,
             "avito_max_pages": 1,
-            "max_items_per_source": 40,
+            "max_items_per_source": 2500,
+            "fetch_timeout_sec": 60,
         }
     })
 
