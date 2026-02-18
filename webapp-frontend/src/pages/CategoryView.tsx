@@ -117,13 +117,28 @@ export default function CategoryView() {
           ? parsedId
           : Number((catData as any)?.id);
 
-        const params = Number.isFinite(categoryId) && categoryId > 0
+        const categoryFilter = Number.isFinite(categoryId) && categoryId > 0
           ? { category_id: categoryId }
-          : undefined;
+          : {};
 
-        const prods = await api.getProducts(params);
-        const data = (prods as any)?.data ?? prods;
-        setProducts(Array.isArray(data) ? data : data?.items || []);
+        // Backend defaults to per_page=50. For categories with larger catalogs,
+        // fetch all pages to avoid "new items push old out" effect.
+        const perPage = 500;
+        let page = 1;
+        const merged: ProductAny[] = [];
+        while (page <= 50) {
+          const prods = await api.getProducts({ ...categoryFilter, page, per_page: perPage });
+          const data = (prods as any)?.data ?? prods;
+          const items = Array.isArray(data) ? data : data?.items || [];
+          if (!Array.isArray(items) || items.length === 0) break;
+          merged.push(...items);
+
+          const total = Number((data as any)?.total || 0);
+          if (total > 0 && merged.length >= total) break;
+          if (items.length < perPage) break;
+          page += 1;
+        }
+        setProducts(merged);
       } catch {
         // noop
       }
