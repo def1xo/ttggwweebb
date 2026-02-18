@@ -53,6 +53,16 @@ ERROR_SAMPLES_LIMIT = 3
 ERROR_MESSAGE_MAX_LEN = 500
 IMPORT_FALLBACK_STOCK_QTY = 1
 RRC_DISCOUNT_RUB = 300
+MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT = 40
+
+
+def _looks_like_direct_image_url(url: str | None) -> bool:
+    u = str(url or "").strip().lower()
+    if not u:
+        return False
+    if any(ext in u for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif")):
+        return True
+    return any(token in u for token in ("/file/", "/image/", "/photo/"))
 
 
 def _normalize_error_message(exc: Exception) -> str:
@@ -139,6 +149,37 @@ def _default_tg_fallback_limit() -> int:
     return _env_int("SUPPLIER_IMPORT_TG_FALLBACK_LIMIT", 1_000_000)
 
 
+def _default_pre_scan_rows_cap() -> int:
+    return _env_int("SUPPLIER_IMPORT_PRE_SCAN_ROWS_CAP", 5_000)
+
+
+def _default_auto_import_max_items_per_source() -> int:
+    return _env_int("SUPPLIER_AUTO_IMPORT_MAX_ITEMS_PER_SOURCE", 10_000)
+
+
+def _default_auto_import_fetch_timeout_sec() -> int:
+    return _env_int("SUPPLIER_AUTO_IMPORT_FETCH_TIMEOUT_SEC", 180)
+
+
+def _default_auto_import_tg_fallback_limit() -> int:
+    return _env_int("SUPPLIER_AUTO_IMPORT_TG_FALLBACK_LIMIT", 5_000)
+
+
+def _force_sync_auto_import() -> bool:
+    return str(os.getenv("SUPPLIER_AUTO_IMPORT_FORCE_SYNC") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _has_online_celery_workers() -> bool:
+    try:
+        insp = celery_app.control.inspect(timeout=1.0)
+        if not insp:
+            return False
+        ping = insp.ping() or {}
+        return bool(ping)
+    except Exception:
+        return False
+
+
 def _classify_import_error(exc: Exception) -> str:
     if isinstance(exc, IntegrityError):
         return ERROR_CODE_DB_CONFLICT
@@ -188,7 +229,7 @@ class SupplierSourceBulkEntryIn(BaseModel):
 
 
 class SupplierSourceBulkUpsertIn(BaseModel):
-    entries: list[SupplierSourceBulkEntryIn] = Field(default_factory=list, min_items=1, max_items=200)
+    entries: list[SupplierSourceBulkEntryIn] = Field(default_factory=list, min_length=1, max_length=200)
 
 
 class SupplierSourceBulkUpsertOut(BaseModel):
@@ -199,11 +240,11 @@ class SupplierSourceBulkUpsertOut(BaseModel):
 
 
 class AnalyzeLinksIn(BaseModel):
-    links: list[str] = Field(default_factory=list, min_items=1, max_items=30)
+    links: list[str] = Field(default_factory=list, min_length=1, max_length=30)
 
 
 class AnalyzeStoredSourcesIn(BaseModel):
-    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=50)
+    source_ids: list[int] = Field(default_factory=list, min_length=1, max_length=50)
 
 
 class AnalyzeLinksOut(BaseModel):
@@ -462,7 +503,7 @@ def analyze_stored_sources(payload: AnalyzeStoredSourcesIn, _admin=Depends(get_c
 
 
 class ImportProductsIn(BaseModel):
-    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=1_000_000)
+    source_ids: list[int] = Field(default_factory=list, min_length=1, max_length=1_000_000)
     max_items_per_source: int = Field(default_factory=_default_max_items_per_source, ge=1, le=1_000_000)
     fetch_timeout_sec: int = Field(default_factory=_default_fetch_timeout_sec, ge=10, le=3600)
     tg_fallback_limit: int = Field(default_factory=_default_tg_fallback_limit, ge=1, le=1_000_000)
@@ -545,7 +586,7 @@ class AvitoMarketScanOut(BaseModel):
 
 
 class TelegramMediaPreviewIn(BaseModel):
-    urls: list[str] = Field(default_factory=list, min_items=1, max_items=50)
+    urls: list[str] = Field(default_factory=list, min_length=1, max_length=50)
 
 
 class TelegramMediaPreviewOut(BaseModel):
@@ -555,7 +596,7 @@ class TelegramMediaPreviewOut(BaseModel):
 
 
 class ImageAnalysisIn(BaseModel):
-    image_urls: list[str] = Field(default_factory=list, min_items=1, max_items=50)
+    image_urls: list[str] = Field(default_factory=list, min_length=1, max_length=50)
 
 
 class ImageAnalysisOut(BaseModel):
@@ -566,7 +607,7 @@ class ImageAnalysisOut(BaseModel):
 
 class SimilarImagesIn(BaseModel):
     reference_image_url: str = Field(min_length=5, max_length=2000)
-    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=200)
+    source_ids: list[int] = Field(default_factory=list, min_length=1, max_length=200)
     per_source_limit: int = Field(default=15, ge=1, le=60)
     max_hamming_distance: int = Field(default=8, ge=1, le=20)
     max_results: int = Field(default=20, ge=1, le=100)
@@ -680,7 +721,7 @@ class OfferIn(BaseModel):
 class BestOfferIn(BaseModel):
     desired_color: str | None = None
     desired_size: str | None = None
-    offers: list[OfferIn] = Field(default_factory=list, min_items=1, max_items=100)
+    offers: list[OfferIn] = Field(default_factory=list, min_length=1, max_length=100)
 
 
 class BestOfferOut(BaseModel):
@@ -749,6 +790,9 @@ def import_products_from_sources(
     title_min_dropship: dict[str, float] = {}
     known_image_urls: list[str] = []
     known_item_by_image_url: dict[str, dict[str, object]] = {}
+    telegram_media_cache: dict[str, list[str]] = {}
+    telegram_media_expand_count = 0
+    pre_scan_error_messages: dict[int, str] = {}
 
     def _title_key(raw_title: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
@@ -900,7 +944,7 @@ def import_products_from_sources(
             preview = fetch_tabular_preview(
                 src_url,
                 timeout_sec=payload.fetch_timeout_sec,
-                max_rows=max(5, payload.max_items_per_source + 1),
+                max_rows=max(5, min(payload.max_items_per_source + 1, _default_pre_scan_rows_cap())),
             )
             rows = preview.get("rows_preview") or []
             items = extract_catalog_items(rows, max_items=payload.max_items_per_source)
@@ -935,8 +979,11 @@ def import_products_from_sources(
                         if uu not in known_item_by_image_url:
                             known_item_by_image_url[uu] = dict(it)
                             known_image_urls.append(uu)
-        except Exception:
-            source_items_map[int(src.id)] = []
+        except Exception as exc:
+            src_id = int(src.id)
+            source_items_map[src_id] = []
+            pre_scan_error_messages[src_id] = _normalize_error_message(exc)
+            logger.exception("Supplier pre-scan failed for source_id=%s url=%s", src_id, src_url)
 
     for src in sources:
         src_url = (src.source_url or "").strip()
@@ -949,6 +996,10 @@ def import_products_from_sources(
             _register_source_error(report, exc)
             source_reports.append(report)
             continue
+
+        pre_scan_error = pre_scan_error_messages.get(int(src.id))
+        if pre_scan_error and not items:
+            _register_source_error(report, RuntimeError(f"pre-scan failed: {pre_scan_error}"))
 
         for it in items:
             try:
@@ -1026,6 +1077,39 @@ def import_products_from_sources(
                     uu = _resolve_source_image_url(u, src_url)
                     if uu and uu not in image_urls:
                         image_urls.append(uu)
+
+                # expand telegram post links into direct image URLs with safety caps,
+                # otherwise large imports can spend minutes on network lookups.
+                expanded_image_urls: list[str] = []
+                has_direct_image = any(_looks_like_direct_image_url(u) for u in image_urls)
+                for candidate in image_urls:
+                    cu = str(candidate or "").strip()
+                    if not cu:
+                        continue
+                    if ("t.me/" in cu or "telegram.me/" in cu) and not has_direct_image:
+                        tg_media = telegram_media_cache.get(cu)
+                        if tg_media is None:
+                            if telegram_media_expand_count >= MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT:
+                                tg_media = []
+                            else:
+                                telegram_media_expand_count += 1
+                                try:
+                                    tg_media = extract_image_urls_from_html_page(cu, limit=8)
+                                except Exception:
+                                    tg_media = []
+                                telegram_media_cache[cu] = list(tg_media)
+                        if tg_media:
+                            for media_u in tg_media:
+                                uu = _resolve_source_image_url(media_u, cu)
+                                if uu and uu not in expanded_image_urls:
+                                    expanded_image_urls.append(uu)
+                            continue
+                    if cu not in expanded_image_urls:
+                        expanded_image_urls.append(cu)
+
+                if expanded_image_urls:
+                    image_urls = expanded_image_urls
+                    image_url = image_urls[0]
 
                 # store supplier images locally when possible so they are stable
                 # across devices and not affected by source-side hotlink limits.
@@ -1227,14 +1311,13 @@ def import_products_from_sources(
 
 
                 report.imported += 1
+                # persist each processed item immediately so long imports
+                # don't lose all progress on later failures.
+                if not payload.dry_run:
+                    db.commit()
             except Exception as exc:
-                _register_source_error(report, exc)
-
-        if not payload.dry_run:
-            try:
-                db.commit()
-            except Exception as exc:
-                db.rollback()
+                if not payload.dry_run:
+                    db.rollback()
                 _register_source_error(report, exc)
 
         source_reports.append(report)
@@ -1280,20 +1363,38 @@ def run_auto_import_now(
     if not source_ids:
         raise HTTPException(status_code=400, detail="Нет активных источников")
 
-    task = celery_app.send_task("tasks.supplier_import_from_sources", kwargs={
-        "payload": {
-            "source_ids": source_ids,
-            "dry_run": False,
-            "publish_visible": True,
-            "ai_style_description": True,
-            "ai_description_enabled": True,
-            "use_avito_pricing": False,
-            "avito_max_pages": 1,
-            "max_items_per_source": 1_000_000,
-            "fetch_timeout_sec": 180,
-            "tg_fallback_limit": 1_000_000,
-        }
-    })
+    payload = {
+        "source_ids": source_ids,
+        "dry_run": False,
+        "publish_visible": True,
+        "ai_style_description": True,
+        "ai_description_enabled": True,
+        "use_avito_pricing": False,
+        "avito_max_pages": 1,
+        "max_items_per_source": _default_auto_import_max_items_per_source(),
+        "fetch_timeout_sec": _default_auto_import_fetch_timeout_sec(),
+        "tg_fallback_limit": _default_auto_import_tg_fallback_limit(),
+    }
+
+    if _force_sync_auto_import() or not _has_online_celery_workers():
+        result = import_products_from_sources(
+            payload=ImportProductsIn(**payload),
+            _admin=True,
+            db=db,
+        )
+        return AutoImportNowOut(
+            queued=False,
+            source_count=len(source_ids),
+            task="tasks.supplier_import_from_sources",
+            status="SUCCESS",
+            created_categories=int(getattr(result, "created_categories", 0) or 0),
+            created_products=int(getattr(result, "created_products", 0) or 0),
+            updated_products=int(getattr(result, "updated_products", 0) or 0),
+            created_variants=int(getattr(result, "created_variants", 0) or 0),
+            source_reports=list(getattr(result, "source_reports", []) or []),
+        )
+
+    task = celery_app.send_task("tasks.supplier_import_from_sources", kwargs={"payload": payload})
 
     return AutoImportNowOut(
         queued=True,
@@ -1322,7 +1423,7 @@ def get_supplier_import_task_status(
 
 
 class MarketPriceIn(BaseModel):
-    prices: list[float] = Field(default_factory=list, min_items=1, max_items=300)
+    prices: list[float] = Field(default_factory=list, min_length=1, max_length=300)
 
 
 class MarketPriceOut(BaseModel):
