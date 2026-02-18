@@ -394,6 +394,15 @@ def _parse_stock_cell_qty(raw: Any) -> int | None:
     txt = _norm(raw)
     if not txt:
         return None
+    low = txt.lower()
+
+    positive_markers = ("✅", "✔", "☑", "есть", "in stock", "available", "+")
+    negative_markers = ("❌", "✖", "✗", "нет", "sold out", "out of stock", "-")
+    if any(m in txt for m in positive_markers):
+        return 1
+    if any(m in low for m in negative_markers):
+        return 0
+
     m = re.search(r"-?\d+", txt)
     if not m:
         return None
@@ -822,37 +831,93 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
     if not rows:
         return []
 
-    headers = [str(x or "").strip() for x in rows[0]]
-    body = rows[1:] if len(rows) > 1 else []
+    def _compute_layout(header_like: list[str]):
+        idx_title_local = _find_col(header_like, ("товар", "назв", "title", "item", "модель", "наимен", "product", "позиц"))
+        idx_price_local = _pick_price_column(header_like)
+        idx_rrc_local = _find_col(header_like, ("ррц", "rrc", "мрц", "mrc", "розниц", "retail"))
+        idx_color_local = _find_col(header_like, ("цвет", "color"))
+        idx_size_local = _find_col(header_like, ("размер", "size"))
+        idx_stock_local = _find_col(header_like, ("остат", "налич", "stock", "qty", "кол-во"))
+        idx_image_cols_local = _find_cols(header_like, ("фото", "image", "img", "картин", "photo", "pic", "ссыл", "url"))
+        idx_desc_local = _find_col(header_like, ("опис", "desc", "description"))
+        size_header_cols_local: list[tuple[int, str]] = []
+        for idx, h in enumerate(header_like):
+            parsed_size = _parse_size_header_token(h)
+            if parsed_size:
+                size_header_cols_local.append((idx, parsed_size))
+        return {
+            "idx_title": idx_title_local,
+            "idx_price": idx_price_local,
+            "idx_rrc": idx_rrc_local,
+            "idx_color": idx_color_local,
+            "idx_size": idx_size_local,
+            "idx_stock": idx_stock_local,
+            "idx_image_cols": idx_image_cols_local,
+            "idx_desc": idx_desc_local,
+            "size_header_cols": size_header_cols_local,
+        }
 
-    idx_title = _find_col(headers, ("товар", "назв", "title", "item", "модель", "наимен", "product", "позиц"))
-    idx_price = _pick_price_column(headers)
-    idx_rrc = _find_col(headers, ("ррц", "rrc", "мрц", "mrc", "розниц", "retail"))
-    idx_color = _find_col(headers, ("цвет", "color"))
-    idx_size = _find_col(headers, ("размер", "size"))
-    idx_stock = _find_col(headers, ("остат", "налич", "stock", "qty", "кол-во"))
-    idx_image_cols = _find_cols(headers, ("фото", "image", "img", "картин", "photo", "pic", "ссыл", "url"))
-    idx_desc = _find_col(headers, ("опис", "desc", "description"))
-    size_header_cols: list[tuple[int, str]] = []
-    for idx, h in enumerate(headers):
-        parsed_size = _parse_size_header_token(h)
-        if parsed_size:
-            size_header_cols.append((idx, parsed_size))
+    layout = _compute_layout([str(x or "").strip() for x in rows[0]])
 
-    # if header row is not real header, fallback to positional guess
-    if idx_title is None and body:
-        idx_title = 0
-    if idx_price is None and len(headers) >= 2:
-        idx_price = 1
+    if layout["idx_title"] is None:
+        layout["idx_title"] = 0
+    if layout["idx_price"] is None and len(rows[0]) >= 2:
+        layout["idx_price"] = 1
 
     out: list[dict[str, Any]] = []
-    for row in body:
+    for row in rows:
         if len(out) >= max_items:
             break
+
+        row_cells = [str(x or "").strip() for x in row]
+        row_joined = " ".join([_norm(x).lower() for x in row if _norm(x)])
+        looks_like_sidecar_label = bool(re.search(r"(?i)(ссылка\s*на\s*фото|фото|photo\s*link|замер|measure)", row_joined))
+
+        dynamic_layout = _compute_layout(row_cells)
+        header_score = sum(
+            1
+            for key in ("idx_title", "idx_price", "idx_size", "idx_stock", "idx_color")
+            if dynamic_layout.get(key) is not None
+        ) + (1 if len(dynamic_layout["size_header_cols"]) >= 2 else 0)
+        looks_like_header_row = header_score >= 2 and not _looks_like_title(" ".join(row_cells[:2]))
+        if looks_like_header_row:
+            for k, v in dynamic_layout.items():
+                if v is None:
+                    continue
+                if isinstance(v, list) and len(v) == 0:
+                    continue
+                layout[k] = v
+            continue
+
+        idx_title = layout["idx_title"]
+        idx_price = layout["idx_price"]
+        idx_rrc = layout["idx_rrc"]
+        idx_color = layout["idx_color"]
+        idx_size = layout["idx_size"]
+        idx_stock = layout["idx_stock"]
+        idx_image_cols = layout["idx_image_cols"] or []
+        idx_desc = layout["idx_desc"]
+        size_header_cols = layout["size_header_cols"] or []
+
         title = _norm(row[idx_title]) if idx_title is not None and idx_title < len(row) else ""
         if not _looks_like_title(title):
             title = _row_fallback_title(row)
-        if not _looks_like_title(title):
+
+        if looks_like_sidecar_label or not _looks_like_title(title):
+            side_images: list[str] = []
+            for cell in row:
+                for u in _split_image_urls(cell):
+                    if u not in side_images:
+                        side_images.append(u)
+            if side_images and out:
+                prev = out[-1]
+                prev_urls = list(prev.get("image_urls") or [])
+                for u in side_images:
+                    if u not in prev_urls:
+                        prev_urls.append(u)
+                prev["image_urls"] = prev_urls
+                if not prev.get("image_url") and prev_urls:
+                    prev["image_url"] = prev_urls[0]
             continue
 
         raw_price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
@@ -861,44 +926,25 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         if price is None or price < MIN_ABSOLUTE_DROPSHIP_PRICE:
             continue
 
-        # Some supplier sheets contain legitimately low wholesale prices
-        # (e.g. accessories), so do not hard-drop them if they are >=100.
         if price < MIN_REASONABLE_DROPSHIP_PRICE:
             excluded_low = {x for x in [idx_title, idx_size, idx_stock] if x is not None}
-            alt_low = [
-                x
-                for x in _price_candidates_from_row(row, exclude_indices=excluded_low)
-                if x >= MIN_REASONABLE_DROPSHIP_PRICE
-            ]
+            alt_low = [x for x in _price_candidates_from_row(row, exclude_indices=excluded_low) if x >= MIN_REASONABLE_DROPSHIP_PRICE]
             if alt_low:
                 price = float(max(alt_low))
 
-        # Footwear sanity check: very low prices (e.g. 799) are often wrong columns
-        # in mixed supplier sheets where wholesale is in another numeric field.
         if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|574|9060|1906|2002)\b", title) and price < 1200:
             excluded_with_price = set(excluded)
             if idx_price is not None:
                 excluded_with_price.add(idx_price)
-            alt_footwear = [
-                x
-                for x in _price_candidates_from_row(row, exclude_indices=excluded_with_price)
-                if 1200 <= x <= 9_999
-            ]
+            alt_footwear = [x for x in _price_candidates_from_row(row, exclude_indices=excluded_with_price) if 1200 <= x <= 9_999]
             if alt_footwear:
                 price = float(min(alt_footwear))
 
-        # Guard against accidentally selected retail-like column.
-        # If picked price is very high, but the row contains plausible purchase price,
-        # prefer that lower candidate.
         if price >= 10_000:
             exclude_with_price = set(excluded)
             if idx_price is not None:
                 exclude_with_price.add(idx_price)
-            alt_candidates = [
-                x
-                for x in _price_candidates_from_row(row, exclude_indices=exclude_with_price)
-                if 300 <= x <= 9_999
-            ]
+            alt_candidates = [x for x in _price_candidates_from_row(row, exclude_indices=exclude_with_price) if 300 <= x <= 9_999]
             if alt_candidates:
                 price = float(max(alt_candidates))
 
@@ -924,6 +970,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
                     if inferred:
                         size = " ".join(inferred)
                         break
+
         stock_raw = _norm(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else ""
         stock_map = _extract_size_stock_map(stock_raw)
         explicit_out_of_stock = _explicit_out_of_stock(stock_raw)
@@ -948,6 +995,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             size = " ".join(sorted(size_order, key=lambda x: float(str(x).replace(",", "."))))
         if not size and stock_map:
             size = " ".join(sorted(stock_map.keys(), key=lambda x: float(str(x).replace(",", "."))))
+
         stock = _to_int(stock_raw) if stock_raw else None
         if stock_map:
             stock = int(sum(max(0, int(v)) for v in stock_map.values()))

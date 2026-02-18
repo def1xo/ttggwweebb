@@ -851,3 +851,39 @@ def test_extract_catalog_items_reads_size_range_without_size_keyword_from_dedica
     assert len(items) == 1
     assert items[0]["size"] == "41 42 43 44 45"
     assert items[0]["stock_map"] == {"42": 1, "43": 2}
+
+
+def test_extract_catalog_items_handles_repeated_inline_size_headers():
+    rows = [
+        ["Дроп наличие"],
+        ["", "", "название", "ЦЕНА ДРОП", "МРЦ", "38", "39", "40", "41"],
+        ["", "", "Rick Owens Geobasket", "6500", "7990", "✅", "✅", "✅", "✅"],
+        ["", "", "название", "ЦЕНА ДРОП", "МРЦ", "38", "39", "40", "41"],
+        ["", "", "Rick Owens Geobasket Jumbo", "6000", "7490", "❌", "❌", "❌", "✅"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 2
+    assert items[0]["size"] == "38 39 40 41"
+    assert items[0]["stock_map"] == {"38": 1, "39": 1, "40": 1, "41": 1}
+    assert items[1]["stock_map"] == {"38": 0, "39": 0, "40": 0, "41": 1}
+
+
+def test_extract_catalog_items_appends_sidecar_photo_link_rows_to_previous_item():
+    rows = [
+        ["Дроп наличие"],
+        ["название", "цена дроп", "38", "39"],
+        ["Rick Owens Geobasket", "6500", "✅", "✅"],
+        ["Ссылка на фото", "https://t.me/venomdrop12/41/10151"],
+        ["Замеры", "https://t.me/venomdrop12/599/672"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["title"] == "Rick Owens Geobasket"
+    assert items[0]["image_urls"][:2] == [
+        "https://t.me/venomdrop12/41/10151",
+        "https://t.me/venomdrop12/599/672",
+    ]
