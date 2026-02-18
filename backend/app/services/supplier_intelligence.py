@@ -472,14 +472,23 @@ def _extract_size_from_row_text(row: list[str]) -> str | None:
     text = " ".join([_norm(x) for x in (row or []) if _norm(x)])
     if not text:
         return None
-    m = re.search(r"(?i)(?:размер(?:ы)?|size)\s*[:#-]?\s*([^\n]+)", text)
-    if m:
-        tokens = split_size_tokens(m.group(1))
-        if tokens:
-            return " ".join(tokens)
-    tokens = split_size_tokens(text)
-    if tokens:
-        return " ".join(tokens[:12])
+
+    # Parse sizes only from explicit size-marked fragments.
+    # Avoid scanning the whole row blindly to prevent pollution by prices/codes
+    # (e.g. 24/25/28 leaking into size grid).
+    matches = re.findall(r"(?i)(?:размер(?:ы)?|size)\s*[:#-]?\s*([^\n]+)", text)
+    out: list[str] = []
+    for chunk in matches:
+        cleaned = re.split(
+            r"(?i)\b(?:цена|стоимость|руб|ррц|rrc|мрц|mrc|наличие|остаток|stock|арт(?:икул)?|код)\b",
+            chunk,
+            maxsplit=1,
+        )[0]
+        for tok in split_size_tokens(cleaned):
+            if tok not in out:
+                out.append(tok)
+    if out:
+        return " ".join(out[:12])
     return None
 
 
@@ -487,7 +496,7 @@ def split_size_tokens(raw: Any) -> list[str]:
     txt = _norm(raw).upper()
     if not txt:
         return []
-    txt = txt.replace("РАЗМЕР", " ").replace("SIZE", " ")
+    txt = re.sub(r"(?i)\b(?:РАЗМЕРЫ?|SIZE|SIZES?)\b", " ", txt)
     txt = txt.replace("–", "-").replace("—", "-").replace("−", "-")
     out: list[str] = []
 
@@ -502,7 +511,7 @@ def split_size_tokens(raw: Any) -> list[str]:
             bb = int(b)
         except Exception:
             continue
-        if aa <= bb and bb - aa <= 8:
+        if aa <= bb and bb - aa <= 20:
             for size_num in range(aa, bb + 1):
                 _push(str(size_num))
 

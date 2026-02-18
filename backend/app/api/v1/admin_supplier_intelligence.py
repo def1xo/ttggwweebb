@@ -124,7 +124,11 @@ def _prefer_local_image_url(url: str | None, *, title_hint: str | None = None, s
         if local_candidate:
             return local_candidate
     except Exception:
-        pass
+        # keep remote URL only when it already looks like a direct image link;
+        # otherwise we may save broken t.me/page links into product gallery.
+        if _looks_like_direct_image_url(normalized_u):
+            return normalized_u
+        return None
     return normalized_u
 
 
@@ -851,7 +855,7 @@ def import_products_from_sources(
                 best_score = score
                 best_key = k
 
-        if best_key and best_score >= 0.34:
+        if best_key and best_score >= 0.45:
             return list(by_title.get(best_key) or [])
         return []
 
@@ -1176,8 +1180,6 @@ def import_products_from_sources(
                 # Prefer Telegram channel photos for suppliers that have paired table+TG sources.
                 if supplier_key and src_kind != "telegram_channel":
                     tg_images = _pick_tg_images_for_title(supplier_key, title)
-                    if not tg_images:
-                        tg_images = list(supplier_tg_fallback_images.get(supplier_key, [])[:8])
                     if tg_images:
                         merged: list[str] = []
                         for u in [*tg_images, *image_urls]:
