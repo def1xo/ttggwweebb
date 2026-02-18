@@ -370,11 +370,6 @@ export default function Cart() {
             {loading ? "Загрузка…" : refreshing ? "Обновляем…" : availableItems.length ? `${availableItems.length} товар(ов)` : "Пока пусто"}
           </div>
         </div>
-        <div className="page-head__actions">
-          <Link to="/catalog" className="btn ghost" style={{ textDecoration: "none" }}>
-            Каталог
-          </Link>
-        </div>
       </div>
 
       {error ? <div className="card" style={{ padding: 12, borderColor: "#a33", marginBottom: 12 }}>{error}</div> : null}
@@ -388,12 +383,7 @@ export default function Cart() {
               </div>
               <div style={{ fontWeight: 900, fontSize: 18 }}>Корзина пуста</div>
               <div className="small-muted" style={{ marginTop: 8 }}>
-                Перейдите в каталог и добавьте товары.
-              </div>
-              <div style={{ marginTop: 12 }}>
-                <Link to="/catalog" className="btn" style={{ textDecoration: "none" }}>
-                  Перейти в каталог
-                </Link>
+                Добавьте товары из разделов каталога.
               </div>
             </div>
           ) : (

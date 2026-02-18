@@ -1238,15 +1238,12 @@ def import_products_from_sources(
                 if p:
                     remember_product_candidate(base_title_key, int(p.id), sig)
 
-                try:
-                    detected_color = dominant_color_name_from_url(image_url) if image_url else None
-                except Exception:
-                    detected_color = None
-                src_color = it.get("color") or detected_color
+                # Color policy:
+                # - if source has only one color, do not force color variants;
+                # - create color variants only when supplier explicitly gives 2+ colors.
+                src_color = it.get("color")
                 color_tokens = _split_color_tokens(src_color)
-                if not color_tokens and detected_color:
-                    color_tokens = [detected_color]
-                if not color_tokens:
+                if len(color_tokens) <= 1:
                     color_tokens = [""]
 
                 size_tokens = split_size_tokens(it.get("size"))

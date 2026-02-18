@@ -17,9 +17,10 @@ export default function BottomNav() {
   const isManager = role === "manager" || isAdmin;
 
   const active = (p: string) => path === p || path.startsWith(p + "/");
+  const hideCatalogShortcut = path.startsWith("/profile") || path.startsWith("/cart") || path.startsWith("/order/");
 
   const items: Array<{ to: string; label: string; icon: any; show?: boolean }> = [
-    { to: "/catalog", label: "Каталог", icon: "storefront" },
+    { to: "/catalog", label: "Каталог", icon: "storefront", show: !hideCatalogShortcut },
     { to: "/cart", label: "Корзина", icon: "cart" },
     { to: "/profile", label: "Профиль", icon: "user" },
     { to: "/manager", label: "Панель", icon: "briefcase", show: !isAdmin && isManager },
