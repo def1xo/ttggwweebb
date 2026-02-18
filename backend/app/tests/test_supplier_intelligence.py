@@ -330,8 +330,24 @@ def test_prefer_local_image_url_falls_back_to_remote_on_failure(monkeypatch):
 
 
 def test_prefer_local_image_url_uses_localized_url(monkeypatch):
-    monkeypatch.setattr(asi.media_store, "save_remote_image_to_local", lambda *a, **k: "/uploads/products/a.jpg")
-    assert asi._prefer_local_image_url("https://cdn.example.com/a.jpg") == "/uploads/products/a.jpg"
+    monkeypatch.setattr(asi.media_store, "save_remote_image_to_local", lambda *a, **k: "/uploads/products/photos/a.jpg")
+    assert asi._prefer_local_image_url("https://cdn.example.com/a.jpg") == "/uploads/products/photos/a.jpg"
+
+
+def test_prefer_local_image_url_passes_photos_folder_and_title_hint(monkeypatch):
+    captured = {}
+
+    def _fake(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return "/uploads/products/photos/model.jpg"
+
+    monkeypatch.setattr(asi.media_store, "save_remote_image_to_local", _fake)
+    out = asi._prefer_local_image_url("https://cdn.example.com/a.jpg", title_hint="Nike V2K")
+
+    assert out == "/uploads/products/photos/model.jpg"
+    assert captured["folder"] == "products/photos"
+    assert captured["filename_hint"] == "Nike V2K"
 
 
 def test_import_products_in_defaults_allow_large_supplier_batches(monkeypatch):
