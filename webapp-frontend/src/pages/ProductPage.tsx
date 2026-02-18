@@ -165,16 +165,17 @@ export default function ProductPage() {
     for (const sz of sizeOptions) {
       const vv = variantBySize.get(sz) || [];
       if (vv.length === 0) {
-        out[sz] = sizes.includes(sz);
+        // when there is no actual variant for this size, it must be unavailable
+        out[sz] = false;
         continue;
       }
-        const inStock = vv.some((v) => {
-          const c = String(v?.color?.name || v?.color || "");
-          const colorOk = !selectedColor || c === selectedColor;
-          return colorOk && Number(v?.stock_quantity ?? v?.stock ?? 0) > 0;
-        });
-        out[sz] = inStock;
-      }
+      const inStock = vv.some((v) => {
+        const c = String(v?.color?.name || v?.color || "");
+        const colorOk = !selectedColor || c === selectedColor;
+        return colorOk && Number(v?.stock_quantity ?? v?.stock ?? 0) > 0;
+      });
+      out[sz] = inStock;
+    }
     return out;
   }, [variants, sizeOptions, selectedColor, sizes]);
 
@@ -431,7 +432,12 @@ export default function ProductPage() {
               const pTitle = String(p?.title || p?.name || "Товар");
               const pPrice = Number(p?.price ?? p?.base_price ?? 0);
               const img = pickImage(p);
-              const pInStock = Boolean(p?.has_stock ?? (Array.isArray(p?.variants) ? p.variants.some((v: any) => Number(v?.stock ?? 0) > 0) : true));
+              const pInStock = Boolean(
+                p?.has_stock ??
+                  (Array.isArray(p?.variants)
+                    ? p.variants.some((v: any) => Number(v?.stock_quantity ?? v?.stock ?? 0) > 0)
+                    : true),
+              );
               return (
                 <div key={pid} className="related-item" style={{ borderRadius: 16, padding: 10, background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))", border: "1px solid var(--border)" }}>
                   <Link to={`/product/${pid}`} style={{ textDecoration: "none", color: "inherit" }}>

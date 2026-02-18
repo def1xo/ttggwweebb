@@ -52,7 +52,7 @@ ERROR_CODE_UNKNOWN = "unknown"
 TOP_FAILING_SOURCES_LIMIT = 5
 ERROR_SAMPLES_LIMIT = 3
 ERROR_MESSAGE_MAX_LEN = 500
-IMPORT_FALLBACK_STOCK_QTY = 1
+IMPORT_FALLBACK_STOCK_QTY = 9_999
 RRC_DISCOUNT_RUB = 300
 MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT = 40
 
@@ -1079,6 +1079,7 @@ def import_products_from_sources(
         src_kind = detect_source_kind(src_url)
         supplier_key = _supplier_key(getattr(src, "supplier_name", None))
         report = _new_source_report(source_id=int(src.id), source_url=src_url)
+        touched_product_ids: set[int] = set()
         try:
             items = source_items_map.get(int(src.id), [])
         except Exception as exc:
@@ -1368,6 +1369,7 @@ def import_products_from_sources(
 
                 if p:
                     remember_product_candidate(base_title_key, int(p.id), sig)
+                    touched_product_ids.add(int(p.id))
 
                 # Color policy:
                 # - if source has only one color, do not force color variants;
@@ -1477,6 +1479,22 @@ def import_products_from_sources(
                 if not payload.dry_run:
                     db.rollback()
                 _register_source_error(report, exc)
+
+        if not payload.dry_run and src_kind in {"google_sheet", "moysklad_catalog", "generic_html"} and items:
+            stale_q = db.query(models.Product).filter(models.Product.import_source_url == src_url)
+            if src_kind:
+                stale_q = stale_q.filter(models.Product.import_source_kind == src_kind)
+            if supplier_key:
+                stale_q = stale_q.filter(models.Product.import_supplier_name == getattr(src, "supplier_name", None))
+            if touched_product_ids:
+                stale_q = stale_q.filter(~models.Product.id.in_(sorted(touched_product_ids)))
+            stale_products = stale_q.all()
+            if stale_products:
+                for stale in stale_products:
+                    for vv in (getattr(stale, "variants", []) or []):
+                        vv.stock_quantity = 0
+                        db.add(vv)
+                db.commit()
 
         source_reports.append(report)
 

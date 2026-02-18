@@ -422,6 +422,24 @@ def _parse_size_header_token(raw_header: Any) -> str | None:
     return token
 
 
+
+
+def _explicit_out_of_stock(raw: Any) -> bool:
+    txt = _norm(raw).lower()
+    if not txt:
+        return False
+    markers = (
+        "нет в наличии",
+        "нету",
+        "sold out",
+        "out of stock",
+        "распродан",
+        "законч",
+        "0 шт",
+        "нет",
+    )
+    return any(m in txt for m in markers)
+
 def _extract_size_stock_map(raw: Any) -> dict[str, int]:
     txt = _norm(raw).upper()
     if not txt:
@@ -882,6 +900,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             size = _extract_size_from_row_text(row) or ""
         stock_raw = _norm(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else ""
         stock_map = _extract_size_stock_map(stock_raw)
+        explicit_out_of_stock = _explicit_out_of_stock(stock_raw)
 
         size_header_stock_map: dict[str, int] = {}
         for col_idx, size_name in size_header_cols:
@@ -906,6 +925,8 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         stock = _to_int(stock_raw) if stock_raw else None
         if stock_map:
             stock = int(sum(max(0, int(v)) for v in stock_map.values()))
+        elif explicit_out_of_stock:
+            stock = 0
 
         image_urls: list[str] = []
         for i in idx_image_cols:
