@@ -41,6 +41,28 @@ def test_extract_catalog_items_by_header():
     assert items[0]["dropship_price"] == 3990.0
 
 
+
+
+def test_extract_catalog_items_does_not_take_model_number_as_size_without_marker():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Yeezy Boost 350 v2", "12990"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] is None
+
+
+def test_extract_catalog_items_reads_numeric_size_with_explicit_marker():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Yeezy Boost size 43", "12990"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "43"
+
+
 def test_extract_catalog_items_splits_multiple_image_urls():
     rows = [
         ["Товар", "Дроп цена", "Фото"],
@@ -229,6 +251,52 @@ def test_download_image_bytes_rejects_non_image_content(monkeypatch):
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "not an image" in str(exc)
+
+
+
+
+def test_split_color_tokens_accepts_multiple_delimiters():
+    got = asi._split_color_tokens("black/white, red | navy")
+    assert got == ["black", "white", "red", "navy"]
+
+
+def test_prefer_local_image_url_falls_back_to_remote_on_failure(monkeypatch):
+    monkeypatch.setattr(asi.media_store, "save_remote_image_to_local", lambda *a, **k: (_ for _ in ()).throw(ValueError("boom")))
+    src = "https://cdn.example.com/a.jpg"
+    assert asi._prefer_local_image_url(src) == src
+
+
+def test_prefer_local_image_url_uses_localized_url(monkeypatch):
+    monkeypatch.setattr(asi.media_store, "save_remote_image_to_local", lambda *a, **k: "/uploads/products/a.jpg")
+    assert asi._prefer_local_image_url("https://cdn.example.com/a.jpg") == "/uploads/products/a.jpg"
+
+
+def test_import_products_in_defaults_allow_large_supplier_batches(monkeypatch):
+    monkeypatch.delenv("SUPPLIER_IMPORT_MAX_ITEMS_PER_SOURCE", raising=False)
+    monkeypatch.delenv("SUPPLIER_IMPORT_FETCH_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("SUPPLIER_IMPORT_TG_FALLBACK_LIMIT", raising=False)
+    payload = asi.ImportProductsIn(source_ids=[1])
+    assert payload.max_items_per_source == 1_000_000
+    assert payload.fetch_timeout_sec == 180
+    assert payload.tg_fallback_limit == 1_000_000
+
+
+def test_import_products_in_rejects_too_large_batch_size():
+    try:
+        asi.ImportProductsIn(source_ids=[1], max_items_per_source=2_000_000)
+        assert False, "expected validation error"
+    except Exception as exc:
+        assert "max_items_per_source" in str(exc)
+
+
+def test_import_products_in_reads_env_overrides(monkeypatch):
+    monkeypatch.setenv("SUPPLIER_IMPORT_MAX_ITEMS_PER_SOURCE", "500000")
+    monkeypatch.setenv("SUPPLIER_IMPORT_FETCH_TIMEOUT_SEC", "240")
+    monkeypatch.setenv("SUPPLIER_IMPORT_TG_FALLBACK_LIMIT", "750000")
+    payload = asi.ImportProductsIn(source_ids=[1])
+    assert payload.max_items_per_source == 500000
+    assert payload.fetch_timeout_sec == 240
+    assert payload.tg_fallback_limit == 750000
 
 
 def test_classify_import_error_codes():
