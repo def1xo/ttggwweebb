@@ -116,6 +116,65 @@ function getVariantStock(v: any): number {
   return Number.isFinite(value) ? value : 0;
 }
 
+function splitImageCandidates(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.flatMap((item) => splitImageCandidates(item));
+  }
+  if (typeof raw === "object") {
+    const obj = raw as Record<string, unknown>;
+    return splitImageCandidates(obj.url || obj.src || obj.image || obj.image_url);
+  }
+  const value = String(raw).trim();
+  if (!value) return [];
+
+  const chunks = value
+    .replace(/[\n\r\t]+/g, " ")
+    .split(/[;,|]+/g)
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  if (chunks.length > 1) return chunks;
+
+  const byWhitespace = value
+    .split(/\s+/g)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .filter((x) => /\.(jpe?g|png|webp|gif|avif)(\?|#|$)/i.test(x) || /^(https?:\/\/|\/)/i.test(x));
+  return byWhitespace.length > 1 ? byWhitespace : [value];
+}
+
+function collectProductImages(p: any): string[] {
+  if (!p) return [];
+  const buckets = [
+    p.images,
+    p.image_urls,
+    p.imageUrls,
+    p.gallery,
+    p.photos,
+    p.default_image,
+    ...(Array.isArray(p.variants) ? p.variants.map((v: any) => v?.images) : []),
+    ...(Array.isArray(p.variants) ? p.variants.map((v: any) => v?.image_urls) : []),
+  ];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const bucket of buckets) {
+    for (const candidate of splitImageCandidates(bucket)) {
+      const normalized = normalizeMediaUrl(candidate);
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      out.push(normalized);
+    }
+  }
+  return out;
+}
+
+function getVariantStock(v: any): number {
+  const raw = v?.stock_quantity ?? v?.stock ?? v?.quantity ?? v?.qty ?? 0;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : 0;
+}
+
 function pickImage(p: any): string | null {
   const all = collectProductImages(p);
   return all[0] || normalizeMediaUrl(p?.image) || null;
