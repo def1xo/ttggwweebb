@@ -60,6 +60,33 @@ def _normalize_error_message(exc: Exception) -> str:
     return message
 
 
+def _split_color_tokens(raw: str | None) -> list[str]:
+    txt = str(raw or "").strip()
+    if not txt:
+        return []
+    out: list[str] = []
+    for part in re.split(r"[,;/|]+|\s{2,}|\s+-\s+", txt):
+        token = " ".join(part.strip().split())
+        if token and token not in out:
+            out.append(token)
+    return out
+
+
+def _prefer_local_image_url(url: str | None) -> str | None:
+    normalized_u = str(url or "").strip()
+    if not normalized_u:
+        return None
+    if not normalized_u.lower().startswith(("http://", "https://")):
+        return normalized_u
+    try:
+        local_candidate = media_store.save_remote_image_to_local(normalized_u, folder="products")
+        if local_candidate:
+            return local_candidate
+    except Exception:
+        pass
+    return normalized_u
+
+
 def _classify_import_error(exc: Exception) -> str:
     if isinstance(exc, IntegrityError):
         return ERROR_CODE_DB_CONFLICT
@@ -943,19 +970,8 @@ def import_products_from_sources(
                 # across devices and not affected by source-side hotlink limits.
                 localized_image_urls: list[str] = []
                 for img_u in image_urls:
-                    normalized_u = str(img_u or "").strip()
-                    if not normalized_u:
-                        continue
-                    local_u = normalized_u
-                    if normalized_u.lower().startswith(("http://", "https://")):
-                        try:
-                            local_candidate = media_store.save_remote_image_to_local(normalized_u, folder="products")
-                            if local_candidate:
-                                local_u = local_candidate
-                        except Exception:
-                            # Keep original URL if localization failed.
-                            pass
-                    if local_u not in localized_image_urls:
+                    local_u = _prefer_local_image_url(img_u)
+                    if local_u and local_u not in localized_image_urls:
                         localized_image_urls.append(local_u)
 
                 if localized_image_urls:
@@ -985,12 +1001,15 @@ def import_products_from_sources(
                         sim_items = find_similar_images(image_url, known_image_urls, max_hamming_distance=5, limit=8)
                         for sim in sim_items:
                             sim_url = str(sim.get("image_url") or "").strip()
-                            if not sim_url or sim_url in image_urls:
+                            if not sim_url:
                                 continue
                             matched_meta = known_item_by_image_url.get(sim_url) or {}
                             if _title_key(str(matched_meta.get("title") or "")) != _title_key(title):
                                 continue
-                            image_urls.append(sim_url)
+                            final_sim_url = _prefer_local_image_url(sim_url)
+                            if not final_sim_url or final_sim_url in image_urls:
+                                continue
+                            image_urls.append(final_sim_url)
                             if len(image_urls) >= 8:
                                 break
                     except Exception:
@@ -1073,11 +1092,16 @@ def import_products_from_sources(
 
                 detected_color = dominant_color_name_from_url(image_url) if image_url else None
                 src_color = it.get("color") or detected_color
+                color_tokens = _split_color_tokens(src_color)
+                if not color_tokens and detected_color:
+                    color_tokens = [detected_color]
+                if not color_tokens:
+                    color_tokens = [""]
 
                 size_tokens = split_size_tokens(it.get("size"))
                 if not size_tokens:
                     size_tokens = [""]
-                color = get_or_create_color(src_color)
+
                 raw_stock = it.get("stock") if isinstance(it, dict) else None
                 try:
                     stock_qty = int(raw_stock) if raw_stock is not None else IMPORT_FALLBACK_STOCK_QTY
@@ -1085,51 +1109,55 @@ def import_products_from_sources(
                     stock_qty = IMPORT_FALLBACK_STOCK_QTY
                 if stock_qty <= 0:
                     stock_qty = IMPORT_FALLBACK_STOCK_QTY
-                per_size_stock = stock_qty // len(size_tokens) if stock_qty > 0 and len(size_tokens) > 1 else stock_qty
+                combinations = max(1, len(size_tokens) * len(color_tokens))
+                per_variant_stock = stock_qty // combinations if stock_qty > 0 and combinations > 1 else stock_qty
 
-                for size_name in size_tokens:
-                    size = get_or_create_size(size_name) if size_name else None
-                    variant = (
-                        db.query(models.ProductVariant)
-                        .filter(models.ProductVariant.product_id == p.id)
-                        .filter(models.ProductVariant.size_id == (size.id if size else None))
-                        .filter(models.ProductVariant.color_id == (color.id if color else None))
-                        .one_or_none()
-                    )
-                    if variant is None:
-                        variant = models.ProductVariant(
-                            product_id=p.id,
-                            size_id=size.id if size else None,
-                            color_id=color.id if color else None,
-                            price=Decimal(str(sale_price)),
-                            stock_quantity=max(0, per_size_stock),
-                            images=image_urls or ([image_url] if image_url else None),
+                for color_name in color_tokens:
+                    color = get_or_create_color(color_name) if color_name else None
+                    for size_name in size_tokens:
+                        size = get_or_create_size(size_name) if size_name else None
+                        variant = (
+                            db.query(models.ProductVariant)
+                            .filter(models.ProductVariant.product_id == p.id)
+                            .filter(models.ProductVariant.size_id == (size.id if size else None))
+                            .filter(models.ProductVariant.color_id == (color.id if color else None))
+                            .one_or_none()
                         )
-                        try:
-                            with db.begin_nested():
-                                db.add(variant)
-                                db.flush()
-                            created_variants += 1
-                        except IntegrityError:
-                            variant = (
-                                db.query(models.ProductVariant)
-                                .filter(models.ProductVariant.product_id == p.id)
-                                .filter(models.ProductVariant.size_id == (size.id if size else None))
-                                .filter(models.ProductVariant.color_id == (color.id if color else None))
-                                .one_or_none()
+                        if variant is None:
+                            variant = models.ProductVariant(
+                                product_id=p.id,
+                                size_id=size.id if size else None,
+                                color_id=color.id if color else None,
+                                price=Decimal(str(sale_price)),
+                                stock_quantity=max(0, per_variant_stock),
+                                images=image_urls or ([image_url] if image_url else None),
                             )
-                            if variant is None:
-                                raise
-                    else:
-                        if float(variant.price or 0) <= 0 and sale_price > 0:
-                            variant.price = Decimal(str(sale_price))
-                        if per_size_stock > 0 and int(variant.stock_quantity or 0) <= 0:
-                            variant.stock_quantity = per_size_stock
-                        if image_urls and not variant.images:
-                            variant.images = image_urls
-                        elif image_url and not variant.images:
-                            variant.images = [image_url]
-                        db.add(variant)
+                            try:
+                                with db.begin_nested():
+                                    db.add(variant)
+                                    db.flush()
+                                created_variants += 1
+                            except IntegrityError:
+                                variant = (
+                                    db.query(models.ProductVariant)
+                                    .filter(models.ProductVariant.product_id == p.id)
+                                    .filter(models.ProductVariant.size_id == (size.id if size else None))
+                                    .filter(models.ProductVariant.color_id == (color.id if color else None))
+                                    .one_or_none()
+                                )
+                                if variant is None:
+                                    raise
+                        else:
+                            if float(variant.price or 0) <= 0 and sale_price > 0:
+                                variant.price = Decimal(str(sale_price))
+                            if per_variant_stock > 0 and int(variant.stock_quantity or 0) <= 0:
+                                variant.stock_quantity = per_variant_stock
+                            if image_urls and not variant.images:
+                                variant.images = image_urls
+                            elif image_url and not variant.images:
+                                variant.images = [image_url]
+                            db.add(variant)
+
 
                 report.imported += 1
             except Exception as exc:

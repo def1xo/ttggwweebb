@@ -253,6 +253,24 @@ def test_download_image_bytes_rejects_non_image_content(monkeypatch):
         assert "not an image" in str(exc)
 
 
+
+
+def test_split_color_tokens_accepts_multiple_delimiters():
+    got = asi._split_color_tokens("black/white, red | navy")
+    assert got == ["black", "white", "red", "navy"]
+
+
+def test_prefer_local_image_url_falls_back_to_remote_on_failure(monkeypatch):
+    monkeypatch.setattr(asi.media_store, "save_remote_image_to_local", lambda *a, **k: (_ for _ in ()).throw(ValueError("boom")))
+    src = "https://cdn.example.com/a.jpg"
+    assert asi._prefer_local_image_url(src) == src
+
+
+def test_prefer_local_image_url_uses_localized_url(monkeypatch):
+    monkeypatch.setattr(asi.media_store, "save_remote_image_to_local", lambda *a, **k: "/uploads/products/a.jpg")
+    assert asi._prefer_local_image_url("https://cdn.example.com/a.jpg") == "/uploads/products/a.jpg"
+
+
 def test_classify_import_error_codes():
     assert asi._classify_import_error(RuntimeError("request timeout on supplier")) == asi.ERROR_CODE_NETWORK_TIMEOUT
     assert asi._classify_import_error(RuntimeError("content is not an image")) == asi.ERROR_CODE_INVALID_IMAGE
