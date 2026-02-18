@@ -416,6 +416,32 @@ def test_import_products_in_reads_env_overrides(monkeypatch):
     assert payload.tg_fallback_limit == 750000
 
 
+def test_default_pre_scan_rows_cap_reads_env(monkeypatch):
+    monkeypatch.delenv("SUPPLIER_IMPORT_PRE_SCAN_ROWS_CAP", raising=False)
+    assert asi._default_pre_scan_rows_cap() == 5000
+
+    monkeypatch.setenv("SUPPLIER_IMPORT_PRE_SCAN_ROWS_CAP", "1234")
+    assert asi._default_pre_scan_rows_cap() == 1234
+
+
+def test_default_auto_import_limits_read_env(monkeypatch):
+    monkeypatch.delenv("SUPPLIER_AUTO_IMPORT_MAX_ITEMS_PER_SOURCE", raising=False)
+    monkeypatch.delenv("SUPPLIER_AUTO_IMPORT_FETCH_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("SUPPLIER_AUTO_IMPORT_TG_FALLBACK_LIMIT", raising=False)
+
+    assert asi._default_auto_import_max_items_per_source() == 10_000
+    assert asi._default_auto_import_fetch_timeout_sec() == 180
+    assert asi._default_auto_import_tg_fallback_limit() == 5_000
+
+    monkeypatch.setenv("SUPPLIER_AUTO_IMPORT_MAX_ITEMS_PER_SOURCE", "2222")
+    monkeypatch.setenv("SUPPLIER_AUTO_IMPORT_FETCH_TIMEOUT_SEC", "155")
+    monkeypatch.setenv("SUPPLIER_AUTO_IMPORT_TG_FALLBACK_LIMIT", "3333")
+
+    assert asi._default_auto_import_max_items_per_source() == 2222
+    assert asi._default_auto_import_fetch_timeout_sec() == 155
+    assert asi._default_auto_import_tg_fallback_limit() == 3333
+
+
 def test_classify_import_error_codes():
     assert asi._classify_import_error(RuntimeError("request timeout on supplier")) == asi.ERROR_CODE_NETWORK_TIMEOUT
     assert asi._classify_import_error(RuntimeError("content is not an image")) == asi.ERROR_CODE_INVALID_IMAGE

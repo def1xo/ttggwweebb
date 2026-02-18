@@ -149,6 +149,22 @@ def _default_tg_fallback_limit() -> int:
     return _env_int("SUPPLIER_IMPORT_TG_FALLBACK_LIMIT", 1_000_000)
 
 
+def _default_pre_scan_rows_cap() -> int:
+    return _env_int("SUPPLIER_IMPORT_PRE_SCAN_ROWS_CAP", 5_000)
+
+
+def _default_auto_import_max_items_per_source() -> int:
+    return _env_int("SUPPLIER_AUTO_IMPORT_MAX_ITEMS_PER_SOURCE", 10_000)
+
+
+def _default_auto_import_fetch_timeout_sec() -> int:
+    return _env_int("SUPPLIER_AUTO_IMPORT_FETCH_TIMEOUT_SEC", 180)
+
+
+def _default_auto_import_tg_fallback_limit() -> int:
+    return _env_int("SUPPLIER_AUTO_IMPORT_TG_FALLBACK_LIMIT", 5_000)
+
+
 def _classify_import_error(exc: Exception) -> str:
     if isinstance(exc, IntegrityError):
         return ERROR_CODE_DB_CONFLICT
@@ -198,7 +214,7 @@ class SupplierSourceBulkEntryIn(BaseModel):
 
 
 class SupplierSourceBulkUpsertIn(BaseModel):
-    entries: list[SupplierSourceBulkEntryIn] = Field(default_factory=list, min_items=1, max_items=200)
+    entries: list[SupplierSourceBulkEntryIn] = Field(default_factory=list, min_length=1, max_length=200)
 
 
 class SupplierSourceBulkUpsertOut(BaseModel):
@@ -209,11 +225,11 @@ class SupplierSourceBulkUpsertOut(BaseModel):
 
 
 class AnalyzeLinksIn(BaseModel):
-    links: list[str] = Field(default_factory=list, min_items=1, max_items=30)
+    links: list[str] = Field(default_factory=list, min_length=1, max_length=30)
 
 
 class AnalyzeStoredSourcesIn(BaseModel):
-    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=50)
+    source_ids: list[int] = Field(default_factory=list, min_length=1, max_length=50)
 
 
 class AnalyzeLinksOut(BaseModel):
@@ -472,7 +488,7 @@ def analyze_stored_sources(payload: AnalyzeStoredSourcesIn, _admin=Depends(get_c
 
 
 class ImportProductsIn(BaseModel):
-    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=1_000_000)
+    source_ids: list[int] = Field(default_factory=list, min_length=1, max_length=1_000_000)
     max_items_per_source: int = Field(default_factory=_default_max_items_per_source, ge=1, le=1_000_000)
     fetch_timeout_sec: int = Field(default_factory=_default_fetch_timeout_sec, ge=10, le=3600)
     tg_fallback_limit: int = Field(default_factory=_default_tg_fallback_limit, ge=1, le=1_000_000)
@@ -555,7 +571,7 @@ class AvitoMarketScanOut(BaseModel):
 
 
 class TelegramMediaPreviewIn(BaseModel):
-    urls: list[str] = Field(default_factory=list, min_items=1, max_items=50)
+    urls: list[str] = Field(default_factory=list, min_length=1, max_length=50)
 
 
 class TelegramMediaPreviewOut(BaseModel):
@@ -565,7 +581,7 @@ class TelegramMediaPreviewOut(BaseModel):
 
 
 class ImageAnalysisIn(BaseModel):
-    image_urls: list[str] = Field(default_factory=list, min_items=1, max_items=50)
+    image_urls: list[str] = Field(default_factory=list, min_length=1, max_length=50)
 
 
 class ImageAnalysisOut(BaseModel):
@@ -576,7 +592,7 @@ class ImageAnalysisOut(BaseModel):
 
 class SimilarImagesIn(BaseModel):
     reference_image_url: str = Field(min_length=5, max_length=2000)
-    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=200)
+    source_ids: list[int] = Field(default_factory=list, min_length=1, max_length=200)
     per_source_limit: int = Field(default=15, ge=1, le=60)
     max_hamming_distance: int = Field(default=8, ge=1, le=20)
     max_results: int = Field(default=20, ge=1, le=100)
@@ -690,7 +706,7 @@ class OfferIn(BaseModel):
 class BestOfferIn(BaseModel):
     desired_color: str | None = None
     desired_size: str | None = None
-    offers: list[OfferIn] = Field(default_factory=list, min_items=1, max_items=100)
+    offers: list[OfferIn] = Field(default_factory=list, min_length=1, max_length=100)
 
 
 class BestOfferOut(BaseModel):
@@ -761,6 +777,7 @@ def import_products_from_sources(
     known_item_by_image_url: dict[str, dict[str, object]] = {}
     telegram_media_cache: dict[str, list[str]] = {}
     telegram_media_expand_count = 0
+    pre_scan_error_messages: dict[int, str] = {}
 
     def _title_key(raw_title: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
@@ -912,7 +929,7 @@ def import_products_from_sources(
             preview = fetch_tabular_preview(
                 src_url,
                 timeout_sec=payload.fetch_timeout_sec,
-                max_rows=max(5, payload.max_items_per_source + 1),
+                max_rows=max(5, min(payload.max_items_per_source + 1, _default_pre_scan_rows_cap())),
             )
             rows = preview.get("rows_preview") or []
             items = extract_catalog_items(rows, max_items=payload.max_items_per_source)
@@ -947,8 +964,11 @@ def import_products_from_sources(
                         if uu not in known_item_by_image_url:
                             known_item_by_image_url[uu] = dict(it)
                             known_image_urls.append(uu)
-        except Exception:
-            source_items_map[int(src.id)] = []
+        except Exception as exc:
+            src_id = int(src.id)
+            source_items_map[src_id] = []
+            pre_scan_error_messages[src_id] = _normalize_error_message(exc)
+            logger.exception("Supplier pre-scan failed for source_id=%s url=%s", src_id, src_url)
 
     for src in sources:
         src_url = (src.source_url or "").strip()
@@ -961,6 +981,10 @@ def import_products_from_sources(
             _register_source_error(report, exc)
             source_reports.append(report)
             continue
+
+        pre_scan_error = pre_scan_error_messages.get(int(src.id))
+        if pre_scan_error and not items:
+            _register_source_error(report, RuntimeError(f"pre-scan failed: {pre_scan_error}"))
 
         for it in items:
             try:
@@ -1334,9 +1358,9 @@ def run_auto_import_now(
             "ai_description_enabled": True,
             "use_avito_pricing": False,
             "avito_max_pages": 1,
-            "max_items_per_source": 1_000_000,
-            "fetch_timeout_sec": 180,
-            "tg_fallback_limit": 1_000_000,
+            "max_items_per_source": _default_auto_import_max_items_per_source(),
+            "fetch_timeout_sec": _default_auto_import_fetch_timeout_sec(),
+            "tg_fallback_limit": _default_auto_import_tg_fallback_limit(),
         }
     })
 
@@ -1367,7 +1391,7 @@ def get_supplier_import_task_status(
 
 
 class MarketPriceIn(BaseModel):
-    prices: list[float] = Field(default_factory=list, min_items=1, max_items=300)
+    prices: list[float] = Field(default_factory=list, min_length=1, max_length=300)
 
 
 class MarketPriceOut(BaseModel):
