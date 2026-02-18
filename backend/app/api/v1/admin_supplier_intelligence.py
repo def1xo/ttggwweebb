@@ -165,6 +165,21 @@ def _default_auto_import_tg_fallback_limit() -> int:
     return _env_int("SUPPLIER_AUTO_IMPORT_TG_FALLBACK_LIMIT", 5_000)
 
 
+def _force_sync_auto_import() -> bool:
+    return str(os.getenv("SUPPLIER_AUTO_IMPORT_FORCE_SYNC") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _has_online_celery_workers() -> bool:
+    try:
+        insp = celery_app.control.inspect(timeout=1.0)
+        if not insp:
+            return False
+        ping = insp.ping() or {}
+        return bool(ping)
+    except Exception:
+        return False
+
+
 def _classify_import_error(exc: Exception) -> str:
     if isinstance(exc, IntegrityError):
         return ERROR_CODE_DB_CONFLICT
@@ -1349,20 +1364,38 @@ def run_auto_import_now(
     if not source_ids:
         raise HTTPException(status_code=400, detail="Нет активных источников")
 
-    task = celery_app.send_task("tasks.supplier_import_from_sources", kwargs={
-        "payload": {
-            "source_ids": source_ids,
-            "dry_run": False,
-            "publish_visible": True,
-            "ai_style_description": True,
-            "ai_description_enabled": True,
-            "use_avito_pricing": False,
-            "avito_max_pages": 1,
-            "max_items_per_source": _default_auto_import_max_items_per_source(),
-            "fetch_timeout_sec": _default_auto_import_fetch_timeout_sec(),
-            "tg_fallback_limit": _default_auto_import_tg_fallback_limit(),
-        }
-    })
+    payload = {
+        "source_ids": source_ids,
+        "dry_run": False,
+        "publish_visible": True,
+        "ai_style_description": True,
+        "ai_description_enabled": True,
+        "use_avito_pricing": False,
+        "avito_max_pages": 1,
+        "max_items_per_source": _default_auto_import_max_items_per_source(),
+        "fetch_timeout_sec": _default_auto_import_fetch_timeout_sec(),
+        "tg_fallback_limit": _default_auto_import_tg_fallback_limit(),
+    }
+
+    if _force_sync_auto_import() or not _has_online_celery_workers():
+        result = import_products_from_sources(
+            payload=ImportProductsIn(**payload),
+            _admin=True,
+            db=db,
+        )
+        return AutoImportNowOut(
+            queued=False,
+            source_count=len(source_ids),
+            task="tasks.supplier_import_from_sources",
+            status="SUCCESS",
+            created_categories=int(getattr(result, "created_categories", 0) or 0),
+            created_products=int(getattr(result, "created_products", 0) or 0),
+            updated_products=int(getattr(result, "updated_products", 0) or 0),
+            created_variants=int(getattr(result, "created_variants", 0) or 0),
+            source_reports=list(getattr(result, "source_reports", []) or []),
+        )
+
+    task = celery_app.send_task("tasks.supplier_import_from_sources", kwargs={"payload": payload})
 
     return AutoImportNowOut(
         queued=True,

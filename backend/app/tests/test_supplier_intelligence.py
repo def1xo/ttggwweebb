@@ -442,6 +442,45 @@ def test_default_auto_import_limits_read_env(monkeypatch):
     assert asi._default_auto_import_tg_fallback_limit() == 3333
 
 
+def test_force_sync_auto_import_reads_env(monkeypatch):
+    monkeypatch.delenv("SUPPLIER_AUTO_IMPORT_FORCE_SYNC", raising=False)
+    assert asi._force_sync_auto_import() is False
+
+    monkeypatch.setenv("SUPPLIER_AUTO_IMPORT_FORCE_SYNC", "1")
+    assert asi._force_sync_auto_import() is True
+
+
+def test_has_online_celery_workers(monkeypatch):
+    class DummyInspect:
+        def ping(self):
+            return {"worker@node": {"ok": "pong"}}
+
+    class DummyControl:
+        def inspect(self, timeout=1.0):
+            return DummyInspect()
+
+    class DummyApp:
+        control = DummyControl()
+
+    monkeypatch.setattr(asi, "celery_app", DummyApp())
+    assert asi._has_online_celery_workers() is True
+
+
+def test_has_online_celery_workers_handles_missing_workers(monkeypatch):
+    class DummyInspect:
+        def ping(self):
+            return None
+
+    class DummyControl:
+        def inspect(self, timeout=1.0):
+            return DummyInspect()
+
+    class DummyApp:
+        control = DummyControl()
+
+    monkeypatch.setattr(asi, "celery_app", DummyApp())
+    assert asi._has_online_celery_workers() is False
+
 def test_classify_import_error_codes():
     assert asi._classify_import_error(RuntimeError("request timeout on supplier")) == asi.ERROR_CODE_NETWORK_TIMEOUT
     assert asi._classify_import_error(RuntimeError("content is not an image")) == asi.ERROR_CODE_INVALID_IMAGE
