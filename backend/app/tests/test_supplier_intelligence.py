@@ -93,6 +93,29 @@ def test_extract_catalog_items_infers_trailing_footwear_size_from_title():
     assert items[0]["size"] == "42"
 
 
+def test_extract_catalog_items_skips_noise_status_titles():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["В наличии оба цвета-✅", "419"],
+        ["Футболка Acme", "1999"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["title"] == "Футболка Acme"
+
+
+def test_extract_catalog_items_skips_too_low_price_rows():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["2XL", "9"],
+        ["Худи Beta", "1299"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["title"] == "Худи Beta"
+    assert items[0]["dropship_price"] == 1299.0
+
+
 def test_extract_catalog_items_splits_multiple_image_urls():
     rows = [
         ["Товар", "Дроп цена", "Фото"],

@@ -24,14 +24,25 @@ function sortSizes(values: string[]) {
   });
 }
 
+
+function normalizeMediaUrl(raw: unknown): string | null {
+  if (!raw) return null;
+  const url = String(raw).trim();
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+  const base = String((import.meta as any).env?.VITE_BACKEND_URL || "").trim().replace(/\/+$/, "");
+  if (url.startsWith("/")) return base ? `${base}${url}` : url;
+  return base ? `${base}/${url}` : url;
+}
+
 function pickImage(p: any): string | null {
   const imgs = (p?.images || p?.image_urls || p?.imageUrls || []) as any[];
-  return (
+  const raw =
     (Array.isArray(imgs) && imgs.length ? (imgs[0]?.url || imgs[0]) : null) ||
     p?.default_image ||
     p?.image ||
-    null
-  );
+    null;
+  return normalizeMediaUrl(raw);
 }
 
 export default function ProductPage() {
@@ -91,8 +102,11 @@ export default function ProductPage() {
   const images: string[] = useMemo(() => {
     if (!product) return [];
     const imgs = (product.images || product.image_urls || []) as any[];
-    const list = imgs.map((x) => String(x?.url || x)).filter(Boolean);
-    if (product.default_image) list.unshift(String(product.default_image));
+    const list = imgs.map((x) => normalizeMediaUrl(x?.url || x)).filter(Boolean) as string[];
+    if (product.default_image) {
+      const d = normalizeMediaUrl(product.default_image);
+      if (d) list.unshift(d);
+    }
     const seen = new Set<string>();
     return list.filter((u) => {
       if (seen.has(u)) return false;
@@ -131,7 +145,7 @@ export default function ProductPage() {
     return vPrice || base;
   }, [product, selectedVariant]);
 
-  const activeImage = images[activeIndex] || product?.default_image || "/demo/kofta1.jpg";
+  const activeImage = images[activeIndex] || normalizeMediaUrl(product?.default_image) || "/logo_black.png";
 
   const onTouchStart = (e: React.TouchEvent) => {
     touchX.current = e.touches?.[0]?.clientX ?? null;

@@ -522,6 +522,48 @@ _COLOR_CANONICAL_MAP: tuple[tuple[str, str], ...] = (
 )
 
 
+
+
+MIN_REASONABLE_DROPSHIP_PRICE = 300
+
+
+def _is_size_only_title(text: str) -> bool:
+    t = str(text or "").strip().upper()
+    if not t:
+        return False
+    compact = re.sub(r"[\s\-/]+", "", t)
+    if re.fullmatch(r"\d{2,3}", compact):
+        return True
+    if re.fullmatch(r"(?:XXS|XS|S|M|L|XL|XXL|XXXL|\dXL|\dXl|\dxl)+", compact):
+        return True
+    if re.fullmatch(r"(?:XXS|XS|S|M|L|XL|XXL|XXXL|\dXL)(?:[,;/|](?:XXS|XS|S|M|L|XL|XXL|XXXL|\dXL))*", t):
+        return True
+    return False
+
+
+def _is_noise_title(text: str) -> bool:
+    t = str(text or "").strip().lower()
+    if not t:
+        return True
+    noise_tokens = (
+        "в наличии",
+        "наличие",
+        "дроп цена",
+        "drop price",
+        "оба цвета",
+        "1 цвет",
+        "2 цвет",
+        "3 цвет",
+        "4 цвет",
+        "цена:",
+        "цена ",
+    )
+    if any(tok in t for tok in noise_tokens):
+        return True
+    if _is_size_only_title(t):
+        return True
+    return False
+
 def _looks_like_title(text: str) -> bool:
     t = str(text or "").strip()
     if len(t) < 3:
@@ -529,6 +571,8 @@ def _looks_like_title(text: str) -> bool:
     if re.match(r"^https?://", t, flags=re.I):
         return False
     if re.fullmatch(r"[\d\s.,:/-]+", t):
+        return False
+    if _is_noise_title(t):
         return False
     return bool(re.search(r"[A-Za-zА-Яа-яЁё]", t))
 
@@ -647,7 +691,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         raw_price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
         excluded = {x for x in [idx_title, idx_size, idx_stock] if x is not None}
         price = _coerce_row_price(raw_price, row, exclude_indices=excluded)
-        if price is None or price <= 0:
+        if price is None or price < MIN_REASONABLE_DROPSHIP_PRICE:
             continue
 
         # Guard against accidentally selected retail-like column.

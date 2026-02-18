@@ -27,6 +27,21 @@ function sortSizes(values: string[]) {
   });
 }
 
+function normalizeMediaUrl(raw: unknown): string | null {
+  if (!raw) return null;
+  const url = String(raw).trim();
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+
+  const base = String((import.meta as any).env?.VITE_BACKEND_URL || "").trim().replace(/\/+$/, "");
+  if (url.startsWith("/")) {
+    return base ? `${base}${url}` : url;
+  }
+  return base ? `${base}/${url}` : url;
+}
+
+const FALLBACK_IMAGE = "/logo_black.png";
+
 export default function ProductCard({ product }: Props) {
   const { isFavorite, toggle } = useFavorites();
 
@@ -36,7 +51,7 @@ export default function ProductCard({ product }: Props) {
     (Array.isArray(imgs) && imgs.length ? (imgs[0]?.url || imgs[0]) : null) ||
     product?.default_image ||
     null;
-  const validImage = typeof rawImage === "string" && /^https?:\/\//i.test(rawImage) ? rawImage : "/demo/kofta1.jpg";
+  const validImage = normalizeMediaUrl(rawImage) || FALLBACK_IMAGE;
   const [cardImage, setCardImage] = useState<string>(validImage);
 
   const variantList = (product?.variants || []) as any[];
@@ -88,7 +103,7 @@ export default function ProductCard({ product }: Props) {
     <Link to={`/product/${product?.id}`} className="card" style={{ textDecoration: "none", color: "inherit" }}>
       <div className="product-card">
         <div className="product-thumb">
-          <img src={cardImage} alt={title} onError={() => setCardImage("/demo/kofta1.jpg")} style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 12 }} />
+          <img src={cardImage} alt={title} onError={() => setCardImage(FALLBACK_IMAGE)} style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 12 }} />
           {meta.isNew ? <div className="badge">NEW</div> : null}
           <button
             type="button"
