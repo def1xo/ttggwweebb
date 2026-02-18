@@ -11,6 +11,14 @@ function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
 }
 
+function isReasonableSize(v: string): boolean {
+  const t = String(v || "").trim();
+  if (!t) return false;
+  const n = Number(t.replace(",", "."));
+  if (Number.isFinite(n)) return n >= 20 && n <= 60;
+  return true;
+}
+
 function sortSizes(values: string[]) {
   return values.slice().sort((a, b) => {
     const na = Number(String(a).replace(",", "."));
@@ -24,14 +32,25 @@ function sortSizes(values: string[]) {
   });
 }
 
+
+function normalizeMediaUrl(raw: unknown): string | null {
+  if (!raw) return null;
+  const url = String(raw).trim();
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+  const base = String((import.meta as any).env?.VITE_BACKEND_URL || (import.meta as any).env?.VITE_API_URL || "").trim().replace(/\/+$/, "").replace(/\/api$/, "");
+  if (url.startsWith("/")) return base ? `${base}${url}` : url;
+  return base ? `${base}/${url}` : url;
+}
+
 function pickImage(p: any): string | null {
   const imgs = (p?.images || p?.image_urls || p?.imageUrls || []) as any[];
-  return (
+  const raw =
     (Array.isArray(imgs) && imgs.length ? (imgs[0]?.url || imgs[0]) : null) ||
     p?.default_image ||
     p?.image ||
-    null
-  );
+    null;
+  return normalizeMediaUrl(raw);
 }
 
 export default function ProductPage() {
@@ -91,8 +110,11 @@ export default function ProductPage() {
   const images: string[] = useMemo(() => {
     if (!product) return [];
     const imgs = (product.images || product.image_urls || []) as any[];
-    const list = imgs.map((x) => String(x?.url || x)).filter(Boolean);
-    if (product.default_image) list.unshift(String(product.default_image));
+    const list = imgs.map((x) => normalizeMediaUrl(x?.url || x)).filter(Boolean) as string[];
+    if (product.default_image) {
+      const d = normalizeMediaUrl(product.default_image);
+      if (d) list.unshift(d);
+    }
     const seen = new Set<string>();
     return list.filter((u) => {
       if (seen.has(u)) return false;
@@ -104,13 +126,16 @@ export default function ProductPage() {
   const variants: any[] = useMemo(() => (product?.variants || []) as any[], [product]);
 
   const sizes = useMemo(() => {
-    const s = uniq(variants.map((v) => String(v?.size?.name || v?.size || "")).filter(Boolean));
-    return sortSizes(s);
-  }, [variants]);
+    const fromVariants = variants.map((v) => String(v?.size?.name || v?.size || "")).filter(Boolean);
+    const fromProduct = Array.isArray(product?.sizes) ? product.sizes.map((x: any) => String(x || "")).filter(Boolean) : [];
+    return sortSizes(uniq([...fromVariants, ...fromProduct]).filter(isReasonableSize));
+  }, [variants, product?.sizes]);
 
   const colors = useMemo(() => {
-    return uniq(variants.map((v) => String(v?.color?.name || v?.color || "")).filter(Boolean));
-  }, [variants]);
+    const fromVariants = variants.map((v) => String(v?.color?.name || v?.color || "")).filter(Boolean);
+    const fromProduct = Array.isArray(product?.colors) ? product.colors.map((x: any) => String(x || "")).filter(Boolean) : [];
+    return uniq([...fromVariants, ...fromProduct]);
+  }, [variants, product?.colors]);
 
   const hasAnyStock = useMemo(() => variants.some((v) => Number(v?.stock ?? 0) > 0), [variants]);
 
@@ -131,7 +156,7 @@ export default function ProductPage() {
     return vPrice || base;
   }, [product, selectedVariant]);
 
-  const activeImage = images[activeIndex] || product?.default_image || "/demo/kofta1.jpg";
+  const activeImage = images[activeIndex] || normalizeMediaUrl(product?.default_image) || "/logo_black.png";
 
   const onTouchStart = (e: React.TouchEvent) => {
     touchX.current = e.touches?.[0]?.clientX ?? null;
