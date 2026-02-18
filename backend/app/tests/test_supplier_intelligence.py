@@ -41,6 +41,91 @@ def test_extract_catalog_items_by_header():
     assert items[0]["dropship_price"] == 3990.0
 
 
+
+
+def test_extract_catalog_items_does_not_take_model_number_as_size_without_marker():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Yeezy Boost 350 v2", "12990"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] is None
+
+
+def test_extract_catalog_items_reads_numeric_size_with_explicit_marker():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Yeezy Boost size 43", "12990"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "43"
+
+
+def test_extract_catalog_items_parses_thousands_separators_as_full_price():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Кроссовки Alpha", "1,399"],
+        ["Кроссовки Beta", "3.099"],
+    ]
+    items = extract_catalog_items(rows)
+    assert [it["dropship_price"] for it in items] == [1399.0, 3099.0]
+
+
+def test_extract_catalog_items_prefers_lower_purchase_candidate_when_selected_price_looks_retail():
+    rows = [
+        ["Товар", "Цена", "Опт"],
+        ["Кроссовки Alpha", "22999", "5590"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 5590.0
+
+
+def test_extract_catalog_items_does_not_infer_footwear_model_number_as_size():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["NIKE AIR ZOOM VOMERO 18", "3899"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] is None
+
+
+def test_extract_catalog_items_infers_trailing_footwear_size_from_title():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Nike Air Max black 42", "5290"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "42"
+
+
+def test_extract_catalog_items_skips_noise_status_titles():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["В наличии оба цвета-✅", "419"],
+        ["Футболка Acme", "1999"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["title"] == "Футболка Acme"
+
+
+def test_extract_catalog_items_skips_too_low_price_rows():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["2XL", "9"],
+        ["Худи Beta", "1299"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["title"] == "Худи Beta"
+    assert items[0]["dropship_price"] == 1299.0
+
+
 def test_extract_catalog_items_splits_multiple_image_urls():
     rows = [
         ["Товар", "Дроп цена", "Фото"],
@@ -229,6 +314,68 @@ def test_download_image_bytes_rejects_non_image_content(monkeypatch):
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "not an image" in str(exc)
+
+
+
+
+def test_split_color_tokens_accepts_multiple_delimiters():
+    got = asi._split_color_tokens("black/white, red | navy")
+    assert got == ["black", "white", "red", "navy"]
+
+
+def test_prefer_local_image_url_falls_back_to_remote_on_failure(monkeypatch):
+    monkeypatch.setattr(asi.media_store, "save_remote_image_to_local", lambda *a, **k: (_ for _ in ()).throw(ValueError("boom")))
+    src = "https://cdn.example.com/a.jpg"
+    assert asi._prefer_local_image_url(src) == src
+
+
+def test_prefer_local_image_url_uses_localized_url(monkeypatch):
+    monkeypatch.setattr(asi.media_store, "save_remote_image_to_local", lambda *a, **k: "/uploads/products/photos/a.jpg")
+    assert asi._prefer_local_image_url("https://cdn.example.com/a.jpg") == "/uploads/products/photos/a.jpg"
+
+
+def test_prefer_local_image_url_passes_photos_folder_and_title_hint(monkeypatch):
+    captured = {}
+
+    def _fake(url, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return "/uploads/products/photos/model.jpg"
+
+    monkeypatch.setattr(asi.media_store, "save_remote_image_to_local", _fake)
+    out = asi._prefer_local_image_url("https://cdn.example.com/a.jpg", title_hint="Nike V2K")
+
+    assert out == "/uploads/products/photos/model.jpg"
+    assert captured["folder"] == "products/photos"
+    assert captured["filename_hint"] == "Nike V2K"
+
+
+def test_import_products_in_defaults_allow_large_supplier_batches(monkeypatch):
+    monkeypatch.delenv("SUPPLIER_IMPORT_MAX_ITEMS_PER_SOURCE", raising=False)
+    monkeypatch.delenv("SUPPLIER_IMPORT_FETCH_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("SUPPLIER_IMPORT_TG_FALLBACK_LIMIT", raising=False)
+    payload = asi.ImportProductsIn(source_ids=[1])
+    assert payload.max_items_per_source == 1_000_000
+    assert payload.fetch_timeout_sec == 180
+    assert payload.tg_fallback_limit == 1_000_000
+
+
+def test_import_products_in_rejects_too_large_batch_size():
+    try:
+        asi.ImportProductsIn(source_ids=[1], max_items_per_source=2_000_000)
+        assert False, "expected validation error"
+    except Exception as exc:
+        assert "max_items_per_source" in str(exc)
+
+
+def test_import_products_in_reads_env_overrides(monkeypatch):
+    monkeypatch.setenv("SUPPLIER_IMPORT_MAX_ITEMS_PER_SOURCE", "500000")
+    monkeypatch.setenv("SUPPLIER_IMPORT_FETCH_TIMEOUT_SEC", "240")
+    monkeypatch.setenv("SUPPLIER_IMPORT_TG_FALLBACK_LIMIT", "750000")
+    payload = asi.ImportProductsIn(source_ids=[1])
+    assert payload.max_items_per_source == 500000
+    assert payload.fetch_timeout_sec == 240
+    assert payload.tg_fallback_limit == 750000
 
 
 def test_classify_import_error_codes():
