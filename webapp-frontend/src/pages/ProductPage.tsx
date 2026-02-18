@@ -144,12 +144,7 @@ export default function ProductPage() {
     return uniq([...fromVariants, ...fromProduct]);
   }, [variants, product?.colors]);
 
-  const isFootwear = useMemo(() => isFootwearProduct(String(product?.title || ""), String((product as any)?.category_name || "")), [product?.title, (product as any)?.category_name]);
-
-  const sizeOptions = useMemo(() => {
-    if (isFootwear && sizes.length <= 1) return DEFAULT_SHOE_SIZE_RANGE;
-    return sizes;
-  }, [isFootwear, sizes]);
+  const sizeOptions = sizes;
 
   const sizeAvailability = useMemo(() => {
     const out: Record<string, boolean> = {};

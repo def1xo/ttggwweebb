@@ -1385,15 +1385,39 @@ def import_products_from_sources(
                     stock_qty = int(raw_stock) if raw_stock is not None else IMPORT_FALLBACK_STOCK_QTY
                 except Exception:
                     stock_qty = IMPORT_FALLBACK_STOCK_QTY
-                if stock_qty <= 0:
-                    stock_qty = IMPORT_FALLBACK_STOCK_QTY
+                if stock_qty < 0:
+                    stock_qty = 0
+
+                stock_map_raw = (it.get("stock_map") if isinstance(it, dict) else None) or {}
+                stock_map: dict[str, int] = {}
+                if isinstance(stock_map_raw, dict):
+                    for k, v in stock_map_raw.items():
+                        kk = str(k or "").strip()
+                        try:
+                            vv = int(v)
+                        except Exception:
+                            continue
+                        if kk and vv >= 0:
+                            stock_map[kk] = vv
+
                 combinations = max(1, len(size_tokens) * len(color_tokens))
-                per_variant_stock = stock_qty // combinations if stock_qty > 0 and combinations > 1 else stock_qty
+                has_stock_map = bool(stock_map)
+                base_stock = stock_qty // combinations if stock_qty > 0 and combinations > 1 else stock_qty
+                remainder_stock = stock_qty % combinations if stock_qty > 0 and combinations > 1 else 0
 
                 for color_name in color_tokens:
                     color = get_or_create_color(color_name) if color_name else None
                     for size_name in size_tokens:
                         size = get_or_create_size(size_name) if size_name else None
+                        size_key = str(size_name or "").strip()
+                        if has_stock_map:
+                            per_variant_stock = int(stock_map.get(size_key, 0) or 0)
+                        else:
+                            per_variant_stock = int(base_stock)
+                            if remainder_stock > 0:
+                                per_variant_stock += 1
+                                remainder_stock -= 1
+
                         variant = (
                             db.query(models.ProductVariant)
                             .filter(models.ProductVariant.product_id == p.id)

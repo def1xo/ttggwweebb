@@ -773,3 +773,13 @@ def test_extract_image_urls_from_html_page_strips_single_query_and_reads_full_tg
         "https://cdn4.telesco.pe/file/a.jpg",
         "https://cdn4.telesco.pe/file/b.jpg",
     ]
+
+def test_extract_catalog_items_reads_stock_map_from_stock_column():
+    rows = [
+        ["Товар", "Дроп цена", "Размер", "Наличие"],
+        ["NB 574", "2999", "41-45", "42(1шт) 43(2шт)"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["stock"] == 3
+    assert items[0]["stock_map"] == {"42": 1, "43": 2}

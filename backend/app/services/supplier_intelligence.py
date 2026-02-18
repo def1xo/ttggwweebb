@@ -390,6 +390,32 @@ def _to_int(raw: Any) -> int | None:
         return None
 
 
+def _extract_size_stock_map(raw: Any) -> dict[str, int]:
+    txt = _norm(raw).upper()
+    if not txt:
+        return {}
+    txt = txt.replace("–", "-").replace("—", "-").replace("−", "-")
+    out: dict[str, int] = {}
+
+    # Patterns like: 42(1), 43-2, 44: 3шт
+    for sz, qty in re.findall(r"\b(\d{2,3})\s*(?:\(|:|-)?\s*(\d{1,3})\s*(?:ШТ|PCS|X)?\)?", txt):
+        try:
+            q = int(qty)
+        except Exception:
+            continue
+        if q < 0:
+            continue
+        # ignore very small/large non-size ids
+        try:
+            szi = int(sz)
+        except Exception:
+            continue
+        if szi < 20 or szi > 60:
+            continue
+        out[str(szi)] = max(out.get(str(szi), 0), q)
+    return out
+
+
 def _normalize_image_candidate(url: str) -> str | None:
     u = str(url or "").strip().strip("\"'()[]{}<>")
     if not u:
@@ -791,7 +817,11 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             size = _extract_size_from_title(title) or ""
         if not size:
             size = _extract_size_from_row_text(row) or ""
-        stock = _to_int(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else None
+        stock_raw = _norm(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else ""
+        stock_map = _extract_size_stock_map(stock_raw)
+        stock = _to_int(stock_raw) if stock_raw else None
+        if stock_map:
+            stock = int(sum(max(0, int(v)) for v in stock_map.values()))
         raw_image = _norm(row[idx_image]) if idx_image is not None and idx_image < len(row) else ""
         image_urls = _split_image_urls(raw_image)
         if not image_urls:
@@ -806,6 +836,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             "rrc_price": float(rrc_price) if rrc_price and rrc_price > 0 else None,
             "size": size or None,
             "stock": stock,
+            "stock_map": stock_map or None,
             "image_url": image_url,
             "image_urls": image_urls,
             "description": description or None,
@@ -1106,7 +1137,7 @@ def search_image_urls_by_title(query: str, limit: int = 3, timeout_sec: int = 20
     out: list[str] = []
     # bing embeds source image in murl JSON snippets
     for m in re.findall(r'murl&quot;:&quot;(https?://[^&]+?)&quot;', txt, flags=re.I):
-        u = m.replace('\/', '/')
+        u = m.replace("\\/", "/")
         if u not in out:
             out.append(u)
         if len(out) >= max(1, int(limit)):
