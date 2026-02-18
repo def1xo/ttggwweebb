@@ -155,6 +155,23 @@ def ensure_columns(engine) -> None:
 
 
 
+
+    # ---------- products ----------
+    if "products" in tables:
+        cols = {c["name"] for c in insp.get_columns("products")}
+        with engine.begin() as conn:
+            def add_prod_col(col: str, ddl_pg: str, ddl_other: str | None = None):
+                if col in cols:
+                    return
+                if _is_postgres(engine):
+                    _add_column_pg(conn, "products", col, ddl_pg)
+                else:
+                    conn.execute(text(f"ALTER TABLE products ADD COLUMN {col} {ddl_other or ddl_pg}"))
+
+            add_prod_col("import_source_url", "VARCHAR(2000)", "VARCHAR(2000)")
+            add_prod_col("import_source_kind", "VARCHAR(64)", "VARCHAR(64)")
+            add_prod_col("import_supplier_name", "VARCHAR(255)", "VARCHAR(255)")
+
     # ---------- supplier_sources ----------
     if "supplier_sources" in tables:
         cols = {c["name"] for c in insp.get_columns("supplier_sources")}
