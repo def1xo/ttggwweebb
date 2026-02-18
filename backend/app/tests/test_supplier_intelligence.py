@@ -793,3 +793,28 @@ def test_extract_catalog_items_stock_map_does_not_read_size_ranges_as_qty():
     items = extract_catalog_items(rows)
     assert len(items) == 1
     assert items[0]["stock_map"] == {"42": 2}
+
+
+def test_split_size_tokens_supports_half_sizes():
+    assert si.split_size_tokens("41,5 42 42.5") == ["41.5", "42", "42.5"]
+
+
+def test_extract_catalog_items_collects_images_from_multiple_image_columns():
+    rows = [
+        ["Товар", "Дроп цена", "Фото 1", "Фото 2", "Фото 3"],
+        ["Nike Dunk", "2999", "https://cdn/a.jpg", "https://cdn/b.jpg", "https://cdn/c.jpg"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["image_urls"] == ["https://cdn/a.jpg", "https://cdn/b.jpg", "https://cdn/c.jpg"]
+
+
+def test_extract_catalog_items_derives_sizes_from_stock_map_when_size_missing():
+    rows = [
+        ["Товар", "Дроп цена", "Наличие"],
+        ["NB 574", "2999", "42(1шт) 43(2шт)"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "42 43"
+    assert items[0]["stock_map"] == {"42": 1, "43": 2}

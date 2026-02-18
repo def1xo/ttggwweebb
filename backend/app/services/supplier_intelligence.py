@@ -395,6 +395,7 @@ def _extract_size_stock_map(raw: Any) -> dict[str, int]:
     if not txt:
         return {}
     txt = txt.replace("–", "-").replace("—", "-").replace("−", "-")
+    txt = re.sub(r"(?<=\d),(?=\d)", ".", txt)
     out: dict[str, int] = {}
 
     def _push(sz: str, qty: str) -> None:
@@ -528,11 +529,25 @@ def split_size_tokens(raw: Any) -> list[str]:
         return []
     txt = re.sub(r"(?i)\b(?:РАЗМЕРЫ?|SIZE|SIZES?)\b", " ", txt)
     txt = txt.replace("–", "-").replace("—", "-").replace("−", "-")
+    txt = re.sub(r"(?<=\d),(?=\d)", ".", txt)
     out: list[str] = []
 
+    def _canon_num(token: str) -> str:
+        t = str(token or "").strip().replace(",", ".")
+        if re.fullmatch(r"\d{2,3}(?:\.0)?", t):
+            return str(int(float(t)))
+        if re.fullmatch(r"\d{2,3}\.5", t):
+            return t
+        return ""
+
     def _push(token: str) -> None:
-        if token and token not in out:
-            out.append(token)
+        t = str(token or "").strip()
+        if not t:
+            return
+        num = _canon_num(t)
+        final = num or t
+        if final and final not in out:
+            out.append(final)
 
     # numeric ranges in any textual form, e.g. "41-45", "41–45"
     for a, b in re.findall(r"\b(\d{2,3})\s*-\s*(\d{2,3})\b", txt):
@@ -553,21 +568,21 @@ def split_size_tokens(raw: Any) -> list[str]:
         if "-" in token and re.match(r"^[0-9]{2,3}-[0-9]{2,3}$", token):
             continue
 
-        cleaned = re.sub(r"[^A-Z0-9+-]", "", token)
+        cleaned = re.sub(r"[^A-Z0-9+.,-]", "", token)
         if not cleaned:
             continue
-        if re.match(r"^(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3})$", cleaned):
+        if re.match(r"^(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3}(?:[\.,]5)?)$", cleaned):
             _push(cleaned)
 
     # fallback parser for formats like "46(S)-✅ 48(M)-✅ 50(L)-✅"
-    for token in re.findall(r"\b(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3})\b", txt):
+    for token in re.findall(r"(?<![\d.,])(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3}(?:[\.,]5)?)(?![\d.,])", txt):
         _push(token)
 
     # If supplier row contains paired numeric + letter labels (e.g. 46(S)),
     # keep numeric sizes to avoid duplicate variants like 46 and S.
-    numeric_count = sum(1 for x in out if re.fullmatch(r"\d{2,3}", x))
+    numeric_count = sum(1 for x in out if re.fullmatch(r"\d{2,3}(?:\.5)?", x))
     if numeric_count >= 2:
-        out = [x for x in out if re.fullmatch(r"\d{2,3}", x)]
+        out = [x for x in out if re.fullmatch(r"\d{2,3}(?:\.5)?", x)]
 
     return out
 
@@ -689,6 +704,13 @@ def _find_col(headers: list[str], candidates: tuple[str, ...]) -> int | None:
     return None
 
 
+def _find_cols(headers: list[str], candidates: tuple[str, ...]) -> list[int]:
+    h = [x.strip().lower() for x in headers]
+    out: list[int] = []
+    for i, col in enumerate(h):
+        if any(c in col for c in candidates):
+            out.append(i)
+    return out
 
 
 def _find_col_priority(headers: list[str], groups: tuple[tuple[str, ...], ...]) -> int | None:
@@ -742,7 +764,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
     idx_color = _find_col(headers, ("цвет", "color"))
     idx_size = _find_col(headers, ("размер", "size"))
     idx_stock = _find_col(headers, ("остат", "налич", "stock", "qty", "кол-во"))
-    idx_image = _find_col(headers, ("фото", "image", "img", "картин"))
+    idx_image_cols = _find_cols(headers, ("фото", "image", "img", "картин", "photo", "pic", "ссыл", "url"))
     idx_desc = _find_col(headers, ("опис", "desc", "description"))
 
     # if header row is not real header, fallback to positional guess
@@ -823,13 +845,21 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             size = _extract_size_from_row_text(row) or ""
         stock_raw = _norm(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else ""
         stock_map = _extract_size_stock_map(stock_raw)
+        if not size and stock_map:
+            size = " ".join(sorted(stock_map.keys(), key=lambda x: float(str(x).replace(",", "."))))
         stock = _to_int(stock_raw) if stock_raw else None
         if stock_map:
             stock = int(sum(max(0, int(v)) for v in stock_map.values()))
-        raw_image = _norm(row[idx_image]) if idx_image is not None and idx_image < len(row) else ""
-        image_urls = _split_image_urls(raw_image)
-        if not image_urls:
-            image_urls = _row_fallback_images(row)
+
+        image_urls: list[str] = []
+        for i in idx_image_cols:
+            if i < len(row):
+                for u in _split_image_urls(row[i]):
+                    if u not in image_urls:
+                        image_urls.append(u)
+        for u in _row_fallback_images(row):
+            if u not in image_urls:
+                image_urls.append(u)
         image_url = image_urls[0] if image_urls else None
         description = _norm(row[idx_desc]) if idx_desc is not None and idx_desc < len(row) else ""
 
