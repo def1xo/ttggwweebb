@@ -1285,6 +1285,9 @@ def import_products_from_sources(
                         currency="RUB",
                         category_id=category.id,
                         default_image=image_url,
+                        import_source_url=src_url,
+                        import_source_kind=src_kind,
+                        import_supplier_name=getattr(src, "supplier_name", None),
                         visible=bool(payload.publish_visible),
                     )
                     db.add(p)
@@ -1310,6 +1313,15 @@ def import_products_from_sources(
                         changed = True
                     if image_url and not p.default_image:
                         p.default_image = image_url
+                        changed = True
+                    if not getattr(p, "import_source_url", None):
+                        p.import_source_url = src_url
+                        changed = True
+                    if not getattr(p, "import_source_kind", None):
+                        p.import_source_kind = src_kind
+                        changed = True
+                    if not getattr(p, "import_supplier_name", None) and getattr(src, "supplier_name", None):
+                        p.import_supplier_name = getattr(src, "supplier_name", None)
                         changed = True
                     if image_urls:
                         existing_urls = {

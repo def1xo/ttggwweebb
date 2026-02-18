@@ -12,6 +12,10 @@ type Product = {
   default_image?: string | null;
   sizes?: string[];
   colors?: string[];
+  import_source_url?: string | null;
+  import_source_kind?: string | null;
+  import_supplier_name?: string | null;
+  image_count?: number;
 };
 
 export default function AdminProductManager() {
@@ -103,14 +107,19 @@ export default function AdminProductManager() {
                   </div>
 
                   <div className="small-muted">
-                    Цена: {(p as any).price ?? (p as any).base_price ?? "—"} ₽ • Остаток: {(p as any).stock_quantity ?? (Array.isArray((p as any).variants) && (p as any).variants.length ? (p as any).variants[0]?.stock_quantity : "—")} • Категория: {p.category_id ?? "—"}
-                    {Array.isArray(p.sizes) && p.sizes.length > 0 && (
+                    Цена: {(p as any).price ?? (p as any).base_price ?? "—"} ₽ • Остаток: {(p as any).stock_quantity ?? (Array.isArray((p as any).variants) && (p as any).variants.length ? (p as any).variants[0]?.stock_quantity : "—")} • Категория: {p.category_id ?? "—"} • Фото: {(p as any).image_count ?? 0}
+                    {Array.isArray(p.sizes) && p.sizes.length > 0 ? (
                       <>
                         {" "}
                         • Размеры:{" "}
                         {p.sizes.length > 4 ? `${p.sizes[0]}–${p.sizes[p.sizes.length - 1]}` : p.sizes.join(", ")}
                       </>
+                    ) : (
+                      <> • Размеры: —</>
                     )}
+                  </div>
+                  <div className="small-muted" style={{ marginTop: 4, wordBreak: "break-all" }}>
+                    Импорт: {(p as any).import_supplier_name || "—"} • {(p as any).import_source_kind || "—"} • {(p as any).import_source_url || "—"}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
