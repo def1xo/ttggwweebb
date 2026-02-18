@@ -549,6 +549,23 @@ def _extract_size_from_title(title: str) -> str | None:
     return None
 
 
+def _looks_like_size_expression(raw: Any) -> bool:
+    txt = _norm(raw).upper().replace("–", "-").replace("—", "-")
+    if not txt:
+        return False
+    # reject obvious non-size cells
+    if re.search(r"(?i)(руб|ррц|rrc|мрц|mrc|price|цена|артик|код|sku|http|www)", txt):
+        return False
+    tokens = split_size_tokens(txt)
+    if not tokens:
+        return False
+    # avoid treating single short token as size unless explicit marker exists
+    if len(tokens) == 1 and not re.search(r"(?i)(размер|size|eu|us|ru)", txt):
+        # allow footwear trailing explicit range-like or pair-like token
+        return bool(re.search(r"\b\d{2,3}\s*-\s*\d{2,3}\b", txt))
+    return True
+
+
 def _extract_size_from_row_text(row: list[str]) -> str | None:
     text = " ".join([_norm(x) for x in (row or []) if _norm(x)])
     if not text:
@@ -898,6 +915,15 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             size = _extract_size_from_title(title) or ""
         if not size:
             size = _extract_size_from_row_text(row) or ""
+        if not size:
+            for ci, cell in enumerate(row):
+                if ci in {x for x in [idx_title, idx_price, idx_rrc, idx_stock] if x is not None}:
+                    continue
+                if _looks_like_size_expression(cell):
+                    inferred = split_size_tokens(cell)
+                    if inferred:
+                        size = " ".join(inferred)
+                        break
         stock_raw = _norm(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else ""
         stock_map = _extract_size_stock_map(stock_raw)
         explicit_out_of_stock = _explicit_out_of_stock(stock_raw)

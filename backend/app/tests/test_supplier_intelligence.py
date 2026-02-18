@@ -840,3 +840,14 @@ def test_extract_catalog_items_marks_explicit_no_stock_as_zero():
     items = extract_catalog_items(rows)
     assert len(items) == 1
     assert items[0]["stock"] == 0
+
+
+def test_extract_catalog_items_reads_size_range_without_size_keyword_from_dedicated_cell():
+    rows = [
+        ["Товар", "Дроп цена", "Линейка", "Наличие"],
+        ["Nike SB Dunk", "2999", "41-45", "42(1шт) 43(2шт)"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "41 42 43 44 45"
+    assert items[0]["stock_map"] == {"42": 1, "43": 2}
