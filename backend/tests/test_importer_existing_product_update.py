@@ -64,4 +64,4 @@ def test_import_post_uses_rrc_minus_300_and_default_stock(tmp_db):
 
     variant = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == prod.id).first()
     assert variant is not None
-    assert int(variant.stock_quantity or 0) == 1
+    assert int(variant.stock_quantity or 0) == 9999

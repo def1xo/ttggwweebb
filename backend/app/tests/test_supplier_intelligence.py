@@ -818,3 +818,72 @@ def test_extract_catalog_items_derives_sizes_from_stock_map_when_size_missing():
     assert len(items) == 1
     assert items[0]["size"] == "42 43"
     assert items[0]["stock_map"] == {"42": 1, "43": 2}
+
+
+def test_extract_catalog_items_reads_size_headers_as_stock_columns():
+    rows = [
+        ["Товар", "Дроп цена", "41", "42", "43", "44", "45"],
+        ["NB 2002R", "3199", "0", "1", "0", "0", "0"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "41 42 43 44 45"
+    assert items[0]["stock_map"] == {"41": 0, "42": 1, "43": 0, "44": 0, "45": 0}
+    assert items[0]["stock"] == 1
+
+
+def test_extract_catalog_items_marks_explicit_no_stock_as_zero():
+    rows = [
+        ["Товар", "Дроп цена", "Наличие"],
+        ["NB 574", "2999", "нет в наличии"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["stock"] == 0
+
+
+def test_extract_catalog_items_reads_size_range_without_size_keyword_from_dedicated_cell():
+    rows = [
+        ["Товар", "Дроп цена", "Линейка", "Наличие"],
+        ["Nike SB Dunk", "2999", "41-45", "42(1шт) 43(2шт)"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "41 42 43 44 45"
+    assert items[0]["stock_map"] == {"42": 1, "43": 2}
+
+
+def test_extract_catalog_items_handles_repeated_inline_size_headers():
+    rows = [
+        ["Дроп наличие"],
+        ["", "", "название", "ЦЕНА ДРОП", "МРЦ", "38", "39", "40", "41"],
+        ["", "", "Rick Owens Geobasket", "6500", "7990", "✅", "✅", "✅", "✅"],
+        ["", "", "название", "ЦЕНА ДРОП", "МРЦ", "38", "39", "40", "41"],
+        ["", "", "Rick Owens Geobasket Jumbo", "6000", "7490", "❌", "❌", "❌", "✅"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 2
+    assert items[0]["size"] == "38 39 40 41"
+    assert items[0]["stock_map"] == {"38": 1, "39": 1, "40": 1, "41": 1}
+    assert items[1]["stock_map"] == {"38": 0, "39": 0, "40": 0, "41": 1}
+
+
+def test_extract_catalog_items_appends_sidecar_photo_link_rows_to_previous_item():
+    rows = [
+        ["Дроп наличие"],
+        ["название", "цена дроп", "38", "39"],
+        ["Rick Owens Geobasket", "6500", "✅", "✅"],
+        ["Ссылка на фото", "https://t.me/venomdrop12/41/10151"],
+        ["Замеры", "https://t.me/venomdrop12/599/672"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["title"] == "Rick Owens Geobasket"
+    assert items[0]["image_urls"][:2] == [
+        "https://t.me/venomdrop12/41/10151",
+        "https://t.me/venomdrop12/599/672",
+    ]
