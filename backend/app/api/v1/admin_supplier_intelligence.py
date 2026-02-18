@@ -5,6 +5,9 @@ from decimal import Decimal
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
+from celery.result import AsyncResult
+
+from app.tasks.celery_app import celery_app
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -12,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_admin_user, get_db
 from app.db import models
 from app.services.importer_notifications import slugify
+from app.services import media_store
 from app.services.supplier_intelligence import (
     SupplierOffer,
     ensure_min_markup_price,
@@ -30,6 +34,8 @@ from app.services.supplier_intelligence import (
     print_signature_hamming,
     split_size_tokens,
     suggest_sale_price,
+    normalize_retail_price,
+    search_image_urls_by_title,
 )
 
 router = APIRouter(tags=["admin_supplier_intelligence"])
@@ -43,6 +49,8 @@ ERROR_CODE_UNKNOWN = "unknown"
 TOP_FAILING_SOURCES_LIMIT = 5
 ERROR_SAMPLES_LIMIT = 3
 ERROR_MESSAGE_MAX_LEN = 500
+IMPORT_FALLBACK_STOCK_QTY = 1
+RRC_DISCOUNT_RUB = 300
 
 
 def _normalize_error_message(exc: Exception) -> str:
@@ -408,11 +416,22 @@ class AutoImportNowOut(BaseModel):
     queued: bool
     source_count: int = 0
     task: str = ""
+    task_id: str | None = None
+    status: str | None = None
     created_products: int = 0
     updated_products: int = 0
     created_variants: int = 0
     created_categories: int = 0
     source_reports: list[ImportSourceReport] = Field(default_factory=list)
+
+
+class SupplierImportTaskStatusOut(BaseModel):
+    task_id: str
+    status: str
+    ready: bool
+    successful: bool
+    failed: bool
+    result: dict | None = None
 
 
 def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
@@ -665,11 +684,21 @@ def import_products_from_sources(
             c = db.query(models.Category).filter(models.Category.name == n).one_or_none()
         if c:
             return c
+
         c = models.Category(name=n, slug=slug)
-        db.add(c)
-        db.flush()
-        created_categories += 1
-        return c
+        try:
+            with db.begin_nested():
+                db.add(c)
+                db.flush()
+            created_categories += 1
+            return c
+        except IntegrityError:
+            c2 = db.query(models.Category).filter(models.Category.slug == slug).one_or_none()
+            if not c2:
+                c2 = db.query(models.Category).filter(models.Category.name == n).one_or_none()
+            if c2:
+                return c2
+            raise
 
     def get_or_create_color(name: str | None) -> models.Color | None:
         nm = (name or "").strip()
@@ -747,10 +776,25 @@ def import_products_from_sources(
         if len(bucket) > 25:
             del bucket[:-25]
 
-    def pick_sale_price(title: str, dropship_price: float, min_dropship_price: float | None = None) -> float:
+    def pick_sale_price(
+        title: str,
+        dropship_price: float,
+        min_dropship_price: float | None = None,
+        rrc_price: float | None = None,
+    ) -> float:
         base = float(min_dropship_price or 0) if float(min_dropship_price or 0) > 0 else float(dropship_price or 0)
         if base <= 0:
             base = float(dropship_price or 0)
+
+        # Top priority: supplier RRC/RRP minus fixed discount.
+        if rrc_price is not None:
+            try:
+                rrc_val = float(rrc_price)
+                if rrc_val > 0:
+                    return normalize_retail_price(max(1.0, round(rrc_val - RRC_DISCOUNT_RUB, 0)))
+            except Exception:
+                pass
+
         if payload.use_avito_pricing:
             key = (title or "").strip().lower()
             if key not in avito_price_cache:
@@ -762,8 +806,8 @@ def import_products_from_sources(
                     avito_price_cache[key] = None
             suggested = avito_price_cache.get(key)
             if suggested and suggested > 0:
-                return ensure_min_markup_price(float(suggested), base)
-        return ensure_min_markup_price(round(base * 1.4, 0), base)
+                return normalize_retail_price(ensure_min_markup_price(float(suggested), base))
+        return normalize_retail_price(ensure_min_markup_price(round(base * 1.4, 0), base))
 
     # pre-scan all selected sources to get minimal закупка per title and known image pool
     for src in sources:
@@ -875,7 +919,7 @@ def import_products_from_sources(
                         desc = generate_ai_product_description(title, cat_name, it.get("color"))
                     else:
                         desc = generate_youth_description(title, cat_name, it.get("color"))
-                sale_price = pick_sale_price(title, ds_price, min_dropship_price=min_dropship)
+                sale_price = pick_sale_price(title, ds_price, min_dropship_price=min_dropship, rrc_price=(it.get("rrc_price") if isinstance(it, dict) else None))
                 row_image_urls = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
                 image_url = str(it.get("image_url") or "").strip() or None
                 if not image_url and row_image_urls:
@@ -894,6 +938,23 @@ def import_products_from_sources(
                     uu = str(u or "").strip()
                     if uu and uu not in image_urls:
                         image_urls.append(uu)
+
+                # Last-resort quality step: if supplier didn't provide any image,
+                # search by title and download a few images to local storage.
+                if not image_urls:
+                    try:
+                        searched = search_image_urls_by_title(title, limit=3)
+                    except Exception:
+                        searched = []
+                    for remote_u in searched:
+                        try:
+                            local_u = media_store.save_remote_image_to_local(remote_u, folder="products")
+                        except Exception:
+                            continue
+                        if local_u and local_u not in image_urls:
+                            image_urls.append(local_u)
+                    if image_urls:
+                        image_url = image_urls[0]
 
                 # auto-enrich item gallery with similar photos from known supplier pool
                 if image_url and known_image_urls:
@@ -994,7 +1055,13 @@ def import_products_from_sources(
                 if not size_tokens:
                     size_tokens = [""]
                 color = get_or_create_color(src_color)
-                stock_qty = int(it.get("stock") or 0)
+                raw_stock = it.get("stock") if isinstance(it, dict) else None
+                try:
+                    stock_qty = int(raw_stock) if raw_stock is not None else IMPORT_FALLBACK_STOCK_QTY
+                except Exception:
+                    stock_qty = IMPORT_FALLBACK_STOCK_QTY
+                if stock_qty <= 0:
+                    stock_qty = IMPORT_FALLBACK_STOCK_QTY
                 per_size_stock = stock_qty // len(size_tokens) if stock_qty > 0 and len(size_tokens) > 1 else stock_qty
 
                 for size_name in size_tokens:
@@ -1090,26 +1157,42 @@ def run_auto_import_now(
     if not source_ids:
         raise HTTPException(status_code=400, detail="Нет активных источников")
 
-    payload = ImportProductsIn(
-        source_ids=source_ids,
-        dry_run=False,
-        publish_visible=True,
-        ai_style_description=True,
-        ai_description_enabled=True,
-        use_avito_pricing=True,
-        avito_max_pages=1,
-        max_items_per_source=40,
-    )
-    res = import_products_from_sources(payload=payload, _admin=_admin, db=db)
+    task = celery_app.send_task("tasks.supplier_import_from_sources", kwargs={
+        "payload": {
+            "source_ids": source_ids,
+            "dry_run": False,
+            "publish_visible": True,
+            "ai_style_description": True,
+            "ai_description_enabled": True,
+            "use_avito_pricing": True,
+            "avito_max_pages": 1,
+            "max_items_per_source": 40,
+        }
+    })
+
     return AutoImportNowOut(
-        queued=False,
+        queued=True,
         source_count=len(source_ids),
-        task="inline",
-        created_products=int(getattr(res, "created_products", 0) or 0),
-        updated_products=int(getattr(res, "updated_products", 0) or 0),
-        created_variants=int(getattr(res, "created_variants", 0) or 0),
-        created_categories=int(getattr(res, "created_categories", 0) or 0),
-        source_reports=getattr(res, "source_reports", []) or [],
+        task="tasks.supplier_import_from_sources",
+        task_id=str(task.id),
+        status="PENDING",
+    )
+
+
+@router.get("/supplier-intelligence/tasks/{task_id}", response_model=SupplierImportTaskStatusOut)
+def get_supplier_import_task_status(
+    task_id: str,
+    _admin=Depends(get_current_admin_user),
+):
+    result = AsyncResult(task_id, app=celery_app)
+    payload = result.result if isinstance(result.result, dict) else None
+    return SupplierImportTaskStatusOut(
+        task_id=task_id,
+        status=str(result.status),
+        ready=bool(result.ready()),
+        successful=bool(result.successful()),
+        failed=bool(result.failed()),
+        result=payload,
     )
 
 

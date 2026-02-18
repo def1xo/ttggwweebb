@@ -62,14 +62,18 @@ def _download_image_bytes(url: str, timeout_sec: int = 20, max_bytes: int = 6_00
 CATEGORY_RULES: dict[str, tuple[str, ...]] = {
     "Кофты": ("худи", "zip", "зип", "толстов", "свитшот", "hoodie"),
     "Футболки": ("футбол", "tee", "t-shirt", "майка"),
-    "Куртки": ("курт", "бомбер", "ветров", "пухов"),
+    "Куртки": ("курт", "бомбер", "ветров", "пухов", "жилет", "vest"),
     "Брюки": ("штаны", "брюк", "джинс", "карго", "sweatpants"),
     "Шорты": ("шорт", "shorts"),
     "Рубашки": ("рубаш", "shirt"),
     "Лонгсливы": ("лонгслив", "longsleeve", "long sleeve"),
-    "Свитера": ("свитер", "джемпер", "pullover"),
-    "Обувь": ("кросс", "sneaker", "кеды", "обув", "ботин", "лофер", "сланц"),
-    "Аксессуары": ("кепк", "шапк", "сумк", "ремень", "аксесс"),
+    "Свитера": ("свитер", "джемпер", "pullover", "костюм", "suit", "set"),
+    "Обувь": (
+        "кросс", "sneaker", "кеды", "обув", "ботин", "лофер", "сланц",
+        "new balance", "nb ", "nike", "adidas", "asics", "puma", "reebok", "jordan", "yeezy",
+        "air force", "air max", "vomero", "retropy", "samba", "gazelle", "campus",
+    ),
+    "Аксессуары": ("кепк", "шапк", "сумк", "ремень", "аксесс", "рюкзак", "кошелек", "wallet", "bag"),
 }
 
 
@@ -313,6 +317,39 @@ def _to_float(raw: Any) -> float | None:
         return None
 
 
+
+
+def _price_candidates_from_row(row: list[Any], exclude_indices: set[int] | None = None) -> list[float]:
+    ex = exclude_indices or set()
+    out: list[float] = []
+    for idx, cell in enumerate(row):
+        if idx in ex:
+            continue
+        val = _to_float(cell)
+        if val is None:
+            continue
+        if val <= 0 or val >= 500_000:
+            continue
+        out.append(float(val))
+    return out
+
+
+def _coerce_row_price(primary_price: float | None, row: list[Any], *, exclude_indices: set[int] | None = None) -> float | None:
+    if primary_price is None:
+        candidates = _price_candidates_from_row(row, exclude_indices=exclude_indices)
+        if not candidates:
+            return None
+        primary_price = max(candidates)
+
+    if primary_price >= 300:
+        return float(primary_price)
+
+    candidates = _price_candidates_from_row(row, exclude_indices=exclude_indices)
+    large = [x for x in candidates if x >= 500]
+    if large:
+        return float(max(large))
+    return float(primary_price)
+
 def _to_int(raw: Any) -> int | None:
     f = _to_float(raw)
     if f is None:
@@ -323,20 +360,60 @@ def _to_int(raw: Any) -> int | None:
         return None
 
 
+def _normalize_image_candidate(url: str) -> str | None:
+    u = str(url or "").strip().strip("\"'()[]{}<>")
+    if not u:
+        return None
+    if u.startswith("//"):
+        u = "https:" + u
+    elif u.lower().startswith("www."):
+        u = "https://" + u
+    if not re.match(r"^https?://", u, flags=re.I):
+        return None
+    return u
+
+
 def _split_image_urls(raw: Any) -> list[str]:
     txt = _norm(raw)
     if not txt:
         return []
+
     out: list[str] = []
-    for chunk in re.split(r"[\s,;|]+", txt):
-        u = (chunk or "").strip()
-        if not u:
-            continue
-        if not re.match(r"^https?://", u, flags=re.I):
-            continue
-        if u not in out:
+
+    # collect explicit urls first (handles markdown/text with punctuation)
+    for m in re.findall(r'((?:https?:)?//[^\s,;|)\]>\'"]+)', txt, flags=re.I):
+        u = _normalize_image_candidate(m)
+        if u and u not in out:
             out.append(u)
+
+    # fallback tokenization for plain cells
+    for chunk in re.split(r"[\s,;|]+", txt):
+        u = _normalize_image_candidate(chunk)
+        if u and u not in out:
+            out.append(u)
+
     return out
+
+
+def _row_fallback_images(row: list[str]) -> list[str]:
+    out: list[str] = []
+    for cell in row:
+        for u in _split_image_urls(cell):
+            if u not in out:
+                out.append(u)
+    return out
+
+
+def _extract_size_from_title(title: str) -> str | None:
+    t = str(title or "")
+    if not t:
+        return None
+    # examples: "NB 9060 42", "hoodie XL", "size M"
+    m = re.search(r"(?i)\b(?:size\s*)?(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3})\b", t)
+    if not m:
+        return None
+    return str(m.group(1)).upper()
+
 
 
 def split_size_tokens(raw: Any) -> list[str]:
@@ -370,6 +447,70 @@ def split_size_tokens(raw: Any) -> list[str]:
                 out.append(cleaned)
     return out
 
+
+_COLOR_CANONICAL_MAP: tuple[tuple[str, str], ...] = (
+    ("крас", "красный"),
+    ("red", "красный"),
+    ("син", "синий"),
+    ("blue", "синий"),
+    ("голуб", "голубой"),
+    ("green", "зеленый"),
+    ("зелен", "зеленый"),
+    ("black", "черный"),
+    ("черн", "черный"),
+    ("white", "белый"),
+    ("бел", "белый"),
+    ("gray", "серый"),
+    ("grey", "серый"),
+    ("сер", "серый"),
+    ("pink", "розовый"),
+    ("роз", "розовый"),
+    ("beige", "бежевый"),
+    ("беж", "бежевый"),
+)
+
+
+def _looks_like_title(text: str) -> bool:
+    t = str(text or "").strip()
+    if len(t) < 3:
+        return False
+    if re.match(r"^https?://", t, flags=re.I):
+        return False
+    if re.fullmatch(r"[\d\s.,:/-]+", t):
+        return False
+    return bool(re.search(r"[A-Za-zА-Яа-яЁё]", t))
+
+
+def _row_fallback_title(row: list[str]) -> str:
+    for cell in row:
+        c = _norm(cell)
+        if _looks_like_title(c):
+            return c
+    return ""
+
+
+def _extract_color_from_title(title: str) -> tuple[str, str | None]:
+    raw = str(title or "").strip()
+    if not raw:
+        return "", None
+
+    tokens = [t for t in re.split(r"[\s/|,;()\[\]-]+", raw) if t]
+    if not tokens:
+        return raw, None
+
+    last = tokens[-1].lower()
+    color: str | None = None
+    for needle, canonical in _COLOR_CANONICAL_MAP:
+        if last.startswith(needle):
+            color = canonical
+            break
+
+    if not color:
+        return raw, None
+
+    cleaned = re.sub(r"[\s/|,;()\[\]-]+$", "", raw)
+    cleaned = re.sub(rf"(?i)(?:[\s/|,;()\[\]-]+){re.escape(tokens[-1])}$", "", cleaned).strip()
+    return (cleaned or raw), color
 
 def _find_col(headers: list[str], candidates: tuple[str, ...]) -> int | None:
     h = [x.strip().lower() for x in headers]
@@ -426,8 +567,9 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
     headers = [str(x or "").strip() for x in rows[0]]
     body = rows[1:] if len(rows) > 1 else []
 
-    idx_title = _find_col(headers, ("товар", "назв", "title", "item", "модель"))
+    idx_title = _find_col(headers, ("товар", "назв", "title", "item", "модель", "наимен", "product", "позиц"))
     idx_price = _pick_price_column(headers)
+    idx_rrc = _find_col(headers, ("ррц", "rrc", "мрц", "mrc", "розниц", "retail"))
     idx_color = _find_col(headers, ("цвет", "color"))
     idx_size = _find_col(headers, ("размер", "size"))
     idx_stock = _find_col(headers, ("остат", "налич", "stock", "qty", "кол-во"))
@@ -445,25 +587,43 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         if len(out) >= max_items:
             break
         title = _norm(row[idx_title]) if idx_title is not None and idx_title < len(row) else ""
-        if not title:
+        if not _looks_like_title(title):
+            title = _row_fallback_title(row)
+        if not _looks_like_title(title):
             continue
-        price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
+
+        raw_price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
+        price = _coerce_row_price(raw_price, row, exclude_indices={x for x in [idx_title, idx_size, idx_stock] if x is not None})
         if price is None or price <= 0:
             continue
+
+        rrc_price = _to_float(row[idx_rrc]) if idx_rrc is not None and idx_rrc < len(row) else None
         color = _norm(row[idx_color]) if idx_color is not None and idx_color < len(row) else ""
+        normalized_title, inferred_color = _extract_color_from_title(title)
+        if _looks_like_title(normalized_title):
+            title = normalized_title
+        if not color and inferred_color:
+            color = inferred_color
+
         size = _norm(row[idx_size]) if idx_size is not None and idx_size < len(row) else ""
+        if not size:
+            size = _extract_size_from_title(title) or ""
         stock = _to_int(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else None
-        image_url = _norm(row[idx_image]) if idx_image is not None and idx_image < len(row) else ""
-        image_urls = _split_image_urls(image_url)
+        raw_image = _norm(row[idx_image]) if idx_image is not None and idx_image < len(row) else ""
+        image_urls = _split_image_urls(raw_image)
+        if not image_urls:
+            image_urls = _row_fallback_images(row)
+        image_url = image_urls[0] if image_urls else None
         description = _norm(row[idx_desc]) if idx_desc is not None and idx_desc < len(row) else ""
 
         out.append({
             "title": title,
             "dropship_price": float(price),
             "color": color or None,
+            "rrc_price": float(rrc_price) if rrc_price and rrc_price > 0 else None,
             "size": size or None,
             "stock": stock,
-            "image_url": image_url or None,
+            "image_url": image_url,
             "image_urls": image_urls,
             "description": description or None,
         })
@@ -559,6 +719,15 @@ def generate_ai_product_description(
 
 MIN_MARKUP_RATIO = 1.40
 DEFAULT_MARKUP_RATIO = 1.55
+
+
+def normalize_retail_price(price: float | None) -> float:
+    p = max(0.0, float(price or 0.0))
+    if p <= 0:
+        return 0.0
+    if p >= 1000:
+        return float(max(99, int(round(p / 100.0) * 100 - 1)))
+    return float(max(9, int(round(p / 10.0) * 10 - 1)))
 
 
 def ensure_min_markup_price(candidate_price: float | None, dropship_price: float, min_markup_ratio: float = MIN_MARKUP_RATIO) -> float:
@@ -689,6 +858,33 @@ def _extract_prices_from_text(text: str) -> list[float]:
             continue
     return out
 
+
+
+
+def search_image_urls_by_title(query: str, limit: int = 3, timeout_sec: int = 20) -> list[str]:
+    q = (query or "").strip()
+    if not q:
+        return []
+    url = f"https://www.bing.com/images/search?q={requests.utils.quote(q)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Mobile Safari/537.36",
+        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+    }
+    try:
+        r = _http_get_with_retries(url, timeout_sec=timeout_sec, headers=headers, max_attempts=2)
+        txt = r.text or ""
+    except Exception:
+        return []
+
+    out: list[str] = []
+    # bing embeds source image in murl JSON snippets
+    for m in re.findall(r'murl&quot;:&quot;(https?://[^&]+?)&quot;', txt, flags=re.I):
+        u = m.replace('\/', '/')
+        if u not in out:
+            out.append(u)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
 
 def avito_market_scan(query: str, max_pages: int = 1, timeout_sec: int = 20, only_new: bool = True) -> dict[str, Any]:
     """Best-effort scan of Avito search pages (can fail due to anti-bot)."""

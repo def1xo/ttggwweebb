@@ -320,3 +320,102 @@ def test_avito_market_scan_appends_new_keyword(monkeypatch):
 
     assert result["prices"]
     assert "%D0%BD%D0%BE%D0%B2%D1%8B%D0%B9" in captured["urls"][0]
+
+
+def test_extract_catalog_items_strips_trailing_color_and_sets_variant_color():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Зип Balenciaga красная", "2520"],
+        ["Зип Balenciaga синяя", "2520"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 2
+    assert items[0]["title"] == "Зип Balenciaga"
+    assert items[0]["color"] == "красный"
+    assert items[1]["title"] == "Зип Balenciaga"
+    assert items[1]["color"] == "синий"
+
+
+def test_extract_catalog_items_ignores_invalid_image_cell_values():
+    rows = [
+        ["Товар", "Дроп цена", "Фото"],
+        ["Кепка Alpha", "990", "63"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["image_url"] is None
+    assert items[0]["image_urls"] == []
+
+
+def test_extract_catalog_items_fallbacks_from_numeric_title_cell():
+    rows = [
+        ["ID", "Name", "Опт цена"],
+        ["63", "Сумка Alpha", "133"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["title"] == "Сумка Alpha"
+
+
+def test_extract_catalog_items_reads_rrc_price_column():
+    rows = [
+        ["Товар", "Цена дроп", "РРЦ"],
+        ["Худи Alpha", "2100", "4990"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["rrc_price"] == 4990.0
+
+
+def test_map_category_detects_sneakers_by_brand_model():
+    assert map_category("NEW BALANCE 9060") == "Обувь"
+    assert map_category("Adidas Retropy e5") == "Обувь"
+
+
+def test_normalize_retail_price_rounds_to_x99():
+    got = si.normalize_retail_price(12684)
+    assert got == 12699.0
+
+
+def test_extract_catalog_items_fallbacks_image_from_any_row_cell():
+    rows = [
+        ["Наименование", "Цена", "Колонка без фото"],
+        ["Жилетка Canada Goose", "3899", "смотри https://cdn.site/img1.jpg"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["image_url"] == "https://cdn.site/img1.jpg"
+
+
+def test_extract_catalog_items_infers_size_from_title():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["NIKE AIR FORCE 1 low SP clonex 42", "2803"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "42"
+
+
+def test_split_image_urls_supports_protocol_relative():
+    got = si._split_image_urls("//cdn.site/pic.jpg")
+    assert got == ["https://cdn.site/pic.jpg"]
+
+
+def test_map_category_detects_vest_not_accessory():
+    assert map_category("Жилетка Canada Goose") == "Куртки"
+
+
+def test_extract_catalog_items_replaces_unrealistic_low_price_from_row_candidates():
+    rows = [
+        ["Товар", "Цена", "Дроп", "Фото"],
+        ["NEW BALANCE 2002 R 42", "1", "9379", "https://cdn.site/nb.jpg"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 9379.0
+
+
+def test_split_image_urls_supports_www_prefix():
+    got = si._split_image_urls("www.example.com/pic.jpg")
+    assert got == ["https://www.example.com/pic.jpg"]

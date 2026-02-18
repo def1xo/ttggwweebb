@@ -3,6 +3,8 @@ from uuid import uuid4
 from pathlib import Path
 from typing import Optional, Set, Tuple
 
+import requests
+
 from fastapi import UploadFile
 
 UPLOAD_BASE = Path(os.getenv("UPLOADS_DIR", "uploads"))
@@ -93,3 +95,40 @@ def upload_uploadfile_to_s3(upload_file: UploadFile, folder: str = "products") -
 
 def generate_presigned_put_stub(key: str, content_type: str, expires_in: int = 900) -> dict:
     return {"put_url": "", "object_url": f"/{UPLOAD_BASE}/{key}"}
+
+
+def save_remote_image_to_local(url: str, folder: str = "products", timeout_sec: int = 20) -> str:
+    """Download an image from URL and save to local uploads, return public URL."""
+    u = (url or "").strip()
+    if not u.lower().startswith(("http://", "https://")):
+        raise ValueError("unsupported remote image url")
+
+    try:
+        resp = requests.get(u, timeout=timeout_sec, headers={"User-Agent": "defshop-media-fetch/1.0"})
+        resp.raise_for_status()
+    except Exception as exc:
+        raise ValueError(f"failed to download image: {exc}")
+
+    ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if not ctype.startswith("image/"):
+        raise ValueError("remote url is not an image")
+
+    ext_map = {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+    }
+    ext = ext_map.get(ctype, ".jpg")
+
+    data = resp.content or b""
+    if len(data) == 0:
+        raise ValueError("empty image payload")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise ValueError("remote image too large")
+
+    dest_folder = _ensure_folder(folder)
+    dest_path = dest_folder / f"{uuid4().hex}{ext}"
+    with open(dest_path, "wb") as f:
+        f.write(data)
+    return public_url_from_path(dest_path)
