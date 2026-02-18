@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useFavorites } from "../contexts/FavoritesContext";
 import { hapticImpact } from "../utils/tg";
@@ -32,10 +32,12 @@ export default function ProductCard({ product }: Props) {
 
   const title = (product?.title || product?.name || "Товар") as string;
   const imgs = (product?.images || product?.image_urls || product?.imageUrls || []) as any[];
-  const image =
+  const rawImage =
     (Array.isArray(imgs) && imgs.length ? (imgs[0]?.url || imgs[0]) : null) ||
     product?.default_image ||
-    "/demo/kofta1.jpg";
+    null;
+  const validImage = typeof rawImage === "string" && /^https?:\/\//i.test(rawImage) ? rawImage : "/demo/kofta1.jpg";
+  const [cardImage, setCardImage] = useState<string>(validImage);
 
   const variantList = (product?.variants || []) as any[];
   const defaultVariant = variantList?.[0] || null;
@@ -86,7 +88,7 @@ export default function ProductCard({ product }: Props) {
     <Link to={`/product/${product?.id}`} className="card" style={{ textDecoration: "none", color: "inherit" }}>
       <div className="product-card">
         <div className="product-thumb">
-          <img src={image} alt={title} style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 12 }} />
+          <img src={cardImage} alt={title} onError={() => setCardImage("/demo/kofta1.jpg")} style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 12 }} />
           {meta.isNew ? <div className="badge">NEW</div> : null}
           <button
             type="button"

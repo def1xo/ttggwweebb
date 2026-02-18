@@ -830,9 +830,9 @@ img, picture { max-width: 100%; height: auto; display: block; }
 
 /* Sticky search */
 .sticky-search {
-  position: sticky;
-  top: calc(var(--header-h) + 10px);
-  z-index: 40;
+  position: static;
+  top: auto;
+  z-index: 1;
   margin: 12px 0 14px;
   padding: 10px;
   border-radius: 16px;
@@ -1284,12 +1284,12 @@ img, picture { max-width: 100%; height: auto; display: block; }
 
 /* Route transitions */
 @keyframes routeIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 .route-view {
-  animation: routeIn 180ms ease both;
-  will-change: opacity, transform;
+  animation: routeIn 160ms ease both;
+  will-change: opacity;
 }
 
 /* Reduce motion */
@@ -1479,11 +1479,12 @@ img, picture { max-width: 100%; height: auto; display: block; }
 }
 
 .catalog-search-top {
-  position: sticky;
-  top: calc(var(--header-h) + 2px);
-  z-index: 48;
+  position: static;
+  top: auto;
+  z-index: auto;
   background: var(--bg);
   padding-top: 8px;
+  padding-bottom: 2px;
 }
 
 .sticky-search.sticky-search--fixed-top {

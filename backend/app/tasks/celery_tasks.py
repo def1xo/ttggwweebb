@@ -317,12 +317,42 @@ def import_post_task(payload: dict):
         db.close()
 
 
+def _run_supplier_import(db, payload_data: dict):
+    from app.api.v1.admin_supplier_intelligence import ImportProductsIn, import_products_from_sources
+
+    payload = ImportProductsIn(**payload_data)
+    source_ids = [int(x) for x in payload.source_ids]
+    if not source_ids:
+        return {"ok": False, "error": "empty source_ids"}
+
+    res = import_products_from_sources(payload=payload, _admin=True, db=db)
+    return {
+        "ok": True,
+        "source_count": len(source_ids),
+        "created_categories": int(getattr(res, "created_categories", 0) or 0),
+        "created_products": int(getattr(res, "created_products", 0) or 0),
+        "updated_products": int(getattr(res, "updated_products", 0) or 0),
+        "created_variants": int(getattr(res, "created_variants", 0) or 0),
+        "source_reports": [x.model_dump() if hasattr(x, "model_dump") else dict(x) for x in (getattr(res, "source_reports", []) or [])],
+    }
+
+
+@shared_task(name="tasks.supplier_import_from_sources")
+def supplier_import_from_sources_task(payload: dict):
+    db = SessionLocal()
+    try:
+        return _run_supplier_import(db, payload or {})
+    except Exception as exc:
+        logger.exception("supplier_import_from_sources_task failed: %s", exc)
+        return {"ok": False, "error": str(exc)}
+    finally:
+        db.close()
+
+
 @shared_task(name="tasks.supplier_auto_import_24h")
 def supplier_auto_import_24h_task():
     db = SessionLocal()
     try:
-        from app.api.v1.admin_supplier_intelligence import ImportProductsIn, import_products_from_sources
-
         source_ids = [
             int(x.id)
             for x in db.query(models.SupplierSource)
@@ -333,23 +363,17 @@ def supplier_auto_import_24h_task():
         if not source_ids:
             return {"ok": True, "source_count": 0, "message": "no active supplier sources"}
 
-        payload = ImportProductsIn(
-            source_ids=source_ids,
-            dry_run=False,
-            publish_visible=True,
-            ai_style_description=True,
-            ai_description_enabled=True,
-            use_avito_pricing=True,
-            avito_max_pages=1,
-            max_items_per_source=40,
-        )
-        res = import_products_from_sources(payload=payload, _admin=True, db=db)
-        return {
-            "ok": True,
-            "source_count": len(source_ids),
-            "created_products": int(getattr(res, "created_products", 0) or 0),
-            "updated_products": int(getattr(res, "updated_products", 0) or 0),
+        payload = {
+            "source_ids": source_ids,
+            "dry_run": False,
+            "publish_visible": True,
+            "ai_style_description": True,
+            "ai_description_enabled": True,
+            "use_avito_pricing": True,
+            "avito_max_pages": 1,
+            "max_items_per_source": 40,
         }
+        return _run_supplier_import(db, payload)
     except Exception as exc:
         logger.exception("supplier_auto_import_24h_task failed: %s", exc)
         return {"ok": False, "error": str(exc)}

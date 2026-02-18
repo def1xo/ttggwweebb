@@ -25,7 +25,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else None
 
 PRICE_CURRENCY_RE = re.compile(
-    r'([0-9]{1,3}(?:[ \u00A0]?[0-9]{3})*(?:[.,][0-9]{1,2})?|\d+(?:[.,]\d+)?)\s*(?:₽|руб|rur|rub)?',
+    r'(\d+(?:[ \u00A0]\d{3})*(?:[.,]\d{1,2})?)\s*(?:₽|руб|rur|rub)?',
     flags=re.IGNORECASE,
 )
 PRICE_KEYWORDS_RE = re.compile(r'(?:цена|продажа|стоимость)[:\s\-]*([0-9\s,.\u00A0]+)', flags=re.IGNORECASE)
@@ -34,6 +34,10 @@ SIZE_RE = re.compile(r'размер(?:ы)?[:\s]*([0-9A-Za-zА-Яа-яЁё,;/\-\s
 COLOR_RE = re.compile(r'цвет(?:а|ов)?[:\s]*([A-Za-zА-Яа-яЁё0-9,#\s\-]+)', flags=re.IGNORECASE)
 HASHTAG_RE = re.compile(r'#([\w\-А-Яа-яёЁ]+)', flags=re.UNICODE)
 STOCK_RE = re.compile(r'(?:остаток|в\s*наличии|наличие|stock|склад|qty|кол-?во|количество)[:\s\-]*([0-9]{1,5})', flags=re.IGNORECASE)
+RRC_KEYWORDS_RE = re.compile(r'(?:ррц|rrc|мрц|mrc|розниц(?:а|ная)?\s*цена|retail)[:\s\-]*([0-9][0-9\s,.\u00A0]*)', flags=re.IGNORECASE)
+
+IMPORT_FALLBACK_STOCK_QTY = 1
+RRC_DISCOUNT_RUB = Decimal("300")
 
 
 def _send_telegram_message(chat_id: str, text: str) -> Optional[Dict[str, Any]]:
@@ -133,13 +137,27 @@ def _extract_sale_price(text: Optional[str]) -> Optional[Decimal]:
         p = _parse_money(m.group(1))
         if p is not None:
             return p
-    m2 = PRICE_CURRENCY_RE.search(text)
-    if m2:
+
+    best: Optional[Decimal] = None
+    for m2 in PRICE_CURRENCY_RE.finditer(text):
         p = _parse_money(m2.group(1))
+        if p is None:
+            continue
+        if best is None or p > best:
+            best = p
+    return best
+
+
+
+
+def _extract_rrc_price(text: Optional[str]) -> Optional[Decimal]:
+    if not text:
+        return None
+    for m in RRC_KEYWORDS_RE.finditer(text):
+        p = _parse_money(m.group(1))
         if p is not None:
             return p
     return None
-
 
 def _extract_cost_price(text: Optional[str]) -> Optional[Decimal]:
     if not text:
@@ -293,11 +311,15 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
     if not title:
         title = payload.get("title") or f"product-{int(datetime.utcnow().timestamp())}"
     sale_price = _extract_sale_price(text) or Decimal("0.00")
+    rrc_price = _extract_rrc_price(text)
+    if rrc_price is not None and rrc_price > 0:
+        sale_price = max(Decimal("1.00"), rrc_price - RRC_DISCOUNT_RUB)
     cost_price = _extract_cost_price(text)
     sizes = _extract_sizes(text)
     colors = _extract_colors(text)
     hashtags = _extract_hashtags(text)
     stock_quantity = _extract_stock_quantity(text, payload)
+    effective_stock_quantity = max(0, int(stock_quantity)) if stock_quantity is not None else IMPORT_FALLBACK_STOCK_QTY
     visible = False if (is_draft or len(hashtags) == 0) else True
     category = None
     if hashtags:
@@ -440,7 +462,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                     v_kwargs = {
                         "product_id": prod.id,
                         "price": sale_price,
-                        "stock_quantity": (stock_quantity if stock_quantity is not None else 0),
+                        "stock_quantity": effective_stock_quantity,
                         "created_at": now,
                         "updated_at": now,
                         "size_id": getattr(size_obj, "id", None),
@@ -456,7 +478,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                 v_kwargs = {
                     "product_id": prod.id,
                     "price": sale_price,
-                    "stock_quantity": (stock_quantity if stock_quantity is not None else 0),
+                    "stock_quantity": effective_stock_quantity,
                     "created_at": now,
                     "updated_at": now,
                     "size_id": getattr(size_obj, "id", None),
@@ -471,7 +493,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                 v_kwargs = {
                     "product_id": prod.id,
                     "price": sale_price,
-                    "stock_quantity": (stock_quantity if stock_quantity is not None else 0),
+                    "stock_quantity": effective_stock_quantity,
                     "created_at": now,
                     "updated_at": now,
                     "color_id": getattr(color_obj, "id", None),
@@ -484,7 +506,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
             v_kwargs = {
                 "product_id": prod.id,
                 "price": sale_price,
-                "stock_quantity": (stock_quantity if stock_quantity is not None else 0),
+                "stock_quantity": effective_stock_quantity,
                 "created_at": now,
                 "updated_at": now,
             }
