@@ -63,6 +63,36 @@ def test_extract_catalog_items_reads_numeric_size_with_explicit_marker():
     assert items[0]["size"] == "43"
 
 
+def test_extract_catalog_items_parses_thousands_separators_as_full_price():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Кроссовки Alpha", "1,399"],
+        ["Кроссовки Beta", "3.099"],
+    ]
+    items = extract_catalog_items(rows)
+    assert [it["dropship_price"] for it in items] == [1399.0, 3099.0]
+
+
+def test_extract_catalog_items_prefers_lower_purchase_candidate_when_selected_price_looks_retail():
+    rows = [
+        ["Товар", "Цена", "Опт"],
+        ["Кроссовки Alpha", "22999", "5590"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 5590.0
+
+
+def test_extract_catalog_items_infers_trailing_footwear_size_from_title():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Nike Air Max black 42", "5290"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "42"
+
+
 def test_extract_catalog_items_splits_multiple_image_urls():
     rows = [
         ["Товар", "Дроп цена", "Фото"],
