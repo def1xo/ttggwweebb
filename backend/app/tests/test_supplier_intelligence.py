@@ -818,3 +818,15 @@ def test_extract_catalog_items_derives_sizes_from_stock_map_when_size_missing():
     assert len(items) == 1
     assert items[0]["size"] == "42 43"
     assert items[0]["stock_map"] == {"42": 1, "43": 2}
+
+
+def test_extract_catalog_items_reads_size_headers_as_stock_columns():
+    rows = [
+        ["Товар", "Дроп цена", "41", "42", "43", "44", "45"],
+        ["NB 2002R", "3199", "0", "1", "0", "0", "0"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "41 42 43 44 45"
+    assert items[0]["stock_map"] == {"41": 0, "42": 1, "43": 0, "44": 0, "45": 0}
+    assert items[0]["stock"] == 1
