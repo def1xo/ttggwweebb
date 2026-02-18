@@ -132,6 +132,7 @@ export default function ProductPage() {
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const [related, setRelated] = useState<any[]>([]);
+  const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
 
   const touchX = useRef<number | null>(null);
 
@@ -392,7 +393,7 @@ export default function ProductPage() {
           onTouchStart={onTouchStart}
           onTouchEnd={onTouchEnd}
         >
-          <img className="product-detail-hero" src={activeImage} alt={product.title} />
+          <img className="product-detail-hero" src={activeImage} alt={product.title} style={{ cursor: "zoom-in" }} onClick={() => setIsImageViewerOpen(true)} />
 
           {images.length > 1 ? (
             <div className="thumb-grid" style={{ marginTop: 10 }}>
@@ -486,6 +487,104 @@ export default function ProductPage() {
           </button>
         </div>
       </div>
+
+
+      {isImageViewerOpen ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setIsImageViewerOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            background: "rgba(0,0,0,0.92)",
+            display: "grid",
+            placeItems: "center",
+            padding: 16,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setIsImageViewerOpen(false)}
+            style={{
+              position: "fixed",
+              top: 14,
+              right: 14,
+              width: 42,
+              height: 42,
+              borderRadius: 999,
+              border: "1px solid rgba(255,255,255,0.25)",
+              background: "rgba(18,18,18,0.7)",
+              color: "#fff",
+              fontSize: 22,
+              lineHeight: 1,
+            }}
+            aria-label="Закрыть фото"
+          >
+            ×
+          </button>
+
+          {images.length > 1 ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setActiveIndex((i) => (i - 1 + images.length) % images.length);
+              }}
+              style={{
+                position: "fixed",
+                left: 10,
+                top: "50%",
+                transform: "translateY(-50%)",
+                width: 44,
+                height: 44,
+                borderRadius: 999,
+                border: "1px solid rgba(255,255,255,0.25)",
+                background: "rgba(18,18,18,0.7)",
+                color: "#fff",
+                fontSize: 26,
+              }}
+              aria-label="Предыдущее фото"
+            >
+              ‹
+            </button>
+          ) : null}
+
+          <img
+            src={activeImage}
+            alt={product.title}
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: "100%", maxHeight: "90vh", objectFit: "contain", borderRadius: 12 }}
+          />
+
+          {images.length > 1 ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setActiveIndex((i) => (i + 1) % images.length);
+              }}
+              style={{
+                position: "fixed",
+                right: 10,
+                top: "50%",
+                transform: "translateY(-50%)",
+                width: 44,
+                height: 44,
+                borderRadius: 999,
+                border: "1px solid rgba(255,255,255,0.25)",
+                background: "rgba(18,18,18,0.7)",
+                color: "#fff",
+                fontSize: 26,
+              }}
+              aria-label="Следующее фото"
+            >
+              ›
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {related.length > 0 ? (
         <div className="card" style={{ marginTop: 12, padding: 14 }}>
