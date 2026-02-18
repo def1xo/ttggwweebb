@@ -33,6 +33,13 @@ function sortSizes(values: string[]) {
 }
 
 
+function isFootwearProduct(title: string, categoryName?: string): boolean {
+  const hay = `${title || ""} ${categoryName || ""}`.toLowerCase();
+  return /(new\s*balance|\bnb\b|nike|adidas|jordan|yeezy|air\s*max|dunk|campus|samba|gazelle|vomero|крос|кед|обув)/i.test(hay);
+}
+
+const DEFAULT_SHOE_SIZE_RANGE = Array.from({ length: 10 }, (_, i) => String(36 + i));
+
 function normalizeMediaUrl(raw: unknown): string | null {
   if (!raw) return null;
   const url = String(raw).trim();
