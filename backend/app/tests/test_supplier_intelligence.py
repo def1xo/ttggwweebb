@@ -744,3 +744,32 @@ def test_extract_catalog_items_size_row_text_trims_after_price_keywords():
     items = extract_catalog_items(rows)
     assert len(items) == 1
     assert items[0]["size"] == "36 37 38 39 40 41 42 43 44 45"
+
+def test_extract_image_urls_from_html_page_strips_single_query_and_reads_full_tg_block(monkeypatch):
+    html_single = '<html><head><meta property="og:image" content="https://cdn4.telesco.pe/file/single.jpg"></head></html>'
+    html_public = (
+        '<div class="tgme_widget_message_wrap" data-post="firmachdroppp/3183">'
+        '<a style="background-image:url(https://cdn4.telesco.pe/file/a.jpg)"></a>'
+        '<a style="background-image:url(https://cdn4.telesco.pe/file/b.jpg)"></a>'
+        '</div>'
+    )
+
+    seen = []
+
+    def fake_get(url, **kwargs):
+        seen.append(url)
+        if url == "https://t.me/firmachdroppp/3183":
+            return type("R", (), {"text": html_single})
+        if url == "https://t.me/s/firmachdroppp/3183":
+            return type("R", (), {"text": html_public})
+        return type("R", (), {"text": ""})
+
+    monkeypatch.setattr(si, "_http_get_with_retries", fake_get)
+
+    out = si.extract_image_urls_from_html_page("https://t.me/firmachdroppp/3183?single", limit=5)
+
+    assert seen[0] == "https://t.me/firmachdroppp/3183"
+    assert out[:2] == [
+        "https://cdn4.telesco.pe/file/a.jpg",
+        "https://cdn4.telesco.pe/file/b.jpg",
+    ]

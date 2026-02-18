@@ -931,7 +931,20 @@ def suggest_sale_price(dropship_price: float) -> float:
     return ensure_min_markup_price(suggested, base)
 
 
+def _normalize_telegram_post_url(raw_url: str) -> str:
+    u = str(raw_url or "").strip()
+    if not u:
+        return u
+    # Telegram sometimes appends `?single` to force one media item preview.
+    # For importer we always want the full post media set.
+    u = re.sub(r"([?&])single(?:=[^&#]*)?(?=(&|#|$))", r"\1", u, flags=re.I)
+    u = re.sub(r"[?&]+$", "", u)
+    u = u.replace("#", "")
+    return u
+
+
 def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: int = 20) -> list[str]:
+    url = _normalize_telegram_post_url(url)
     headers = {"User-Agent": "defshop-intel-bot/1.0"}
     r = _http_get_with_retries(url, timeout_sec=timeout_sec, headers=headers, max_attempts=3)
     html = r.text or ""
@@ -948,12 +961,15 @@ def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: in
             parsed = urlparse(base_url or url)
             if parsed.scheme and parsed.netloc:
                 u = f"{parsed.scheme}://{parsed.netloc}{u}"
-        if u.lower().startswith(("http://", "https://")) and u not in urls:
-            urls.append(u)
+        if u.lower().startswith(("http://", "https://")):
+            if "t.me/" in u or "telegram.me/" in u:
+                u = _normalize_telegram_post_url(u)
+            if u not in urls:
+                urls.append(u)
 
     # Telegram direct post pages often expose only one preview image in og:image.
     # Public /s/channel/id pages usually contain the full media set for that post.
-    tg_m = re.search(r"https?://t\.me/(?:(?:s/)?)([A-Za-z0-9_]{3,})/(\d+)(?:\?.*)?$", str(url).strip(), flags=re.I)
+    tg_m = re.search(r"https?://t\.me/(?:(?:s/)?)([A-Za-z0-9_]{3,})/(\d+)(?:\?.*)?$", _normalize_telegram_post_url(str(url).strip()), flags=re.I)
     if tg_m:
         channel = tg_m.group(1)
         msg_id = tg_m.group(2)

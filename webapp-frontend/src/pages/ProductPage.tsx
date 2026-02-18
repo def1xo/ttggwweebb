@@ -33,6 +33,13 @@ function sortSizes(values: string[]) {
 }
 
 
+function isFootwearProduct(title: string, categoryName?: string): boolean {
+  const hay = `${title || ""} ${categoryName || ""}`.toLowerCase();
+  return /(new\s*balance|\bnb\b|nike|adidas|jordan|yeezy|air\s*max|dunk|campus|samba|gazelle|vomero|крос|кед|обув)/i.test(hay);
+}
+
+const DEFAULT_SHOE_SIZE_RANGE = Array.from({ length: 10 }, (_, i) => String(36 + i));
+
 function normalizeMediaUrl(raw: unknown): string | null {
   if (!raw) return null;
   const url = String(raw).trim();
@@ -137,6 +144,40 @@ export default function ProductPage() {
     return uniq([...fromVariants, ...fromProduct]);
   }, [variants, product?.colors]);
 
+  const isFootwear = useMemo(() => isFootwearProduct(String(product?.title || ""), String((product as any)?.category_name || "")), [product?.title, (product as any)?.category_name]);
+
+  const sizeOptions = useMemo(() => {
+    if (isFootwear && sizes.length <= 1) return DEFAULT_SHOE_SIZE_RANGE;
+    return sizes;
+  }, [isFootwear, sizes]);
+
+  const sizeAvailability = useMemo(() => {
+    const out: Record<string, boolean> = {};
+    const variantBySize = new Map<string, any[]>();
+    for (const v of variants) {
+      const sz = String(v?.size?.name || v?.size || "").trim();
+      if (!sz) continue;
+      const arr = variantBySize.get(sz) || [];
+      arr.push(v);
+      variantBySize.set(sz, arr);
+    }
+
+    for (const sz of sizeOptions) {
+      const vv = variantBySize.get(sz) || [];
+      if (vv.length === 0) {
+        out[sz] = sizes.includes(sz);
+        continue;
+      }
+      const inStock = vv.some((v) => {
+        const c = String(v?.color?.name || v?.color || "");
+        const colorOk = !selectedColor || c === selectedColor;
+        return colorOk && Number(v?.stock ?? 0) > 0;
+      });
+      out[sz] = inStock;
+    }
+    return out;
+  }, [variants, sizeOptions, selectedColor, sizes]);
+
   const hasAnyStock = useMemo(() => variants.some((v) => Number(v?.stock ?? 0) > 0), [variants]);
 
   const selectedVariant = useMemo(() => {
@@ -147,7 +188,7 @@ export default function ProductPage() {
     }) || null;
   }, [variants, selectedSize, selectedColor]);
 
-  const selectionMissing = (sizes.length > 0 && !selectedSize) || (colors.length > 0 && !selectedColor);
+  const selectionMissing = (sizeOptions.length > 0 && !selectedSize) || (colors.length > 0 && !selectedColor);
 
   const price = useMemo(() => {
     const base = Number(product?.price ?? product?.base_price ?? 0);
@@ -335,21 +376,29 @@ export default function ProductPage() {
           </div>
         ) : null}
 
-        {sizes.length ? (
+        {sizeOptions.length ? (
           <div style={{ marginTop: 14 }}>
             <div className="muted" style={{ fontWeight: 800, marginBottom: 8 }}>
               Размер
             </div>
             <div className="chips">
-              {sizes.map((s) => {
+              {sizeOptions.map((s) => {
                 const active = selectedSize === s;
+                const available = Boolean(sizeAvailability[s]);
                 return (
                   <button
                     key={s}
                     className="chip"
                     type="button"
+                    disabled={!available}
                     onClick={() => setSelectedSize(active ? null : s)}
-                    style={{ borderColor: active ? "var(--ring)" : undefined }}
+                    style={{
+                      borderColor: active ? "var(--ring)" : undefined,
+                      opacity: available ? 1 : 0.45,
+                      textDecoration: available ? "none" : "line-through",
+                      cursor: available ? "pointer" : "not-allowed",
+                    }}
+                    title={available ? "В наличии" : "Нет этого размера"}
                   >
                     {s}
                   </button>
