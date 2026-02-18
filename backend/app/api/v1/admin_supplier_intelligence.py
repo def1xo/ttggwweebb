@@ -24,6 +24,7 @@ from app.services.supplier_intelligence import (
     estimate_market_price,
     avito_market_scan,
     dominant_color_name_from_url,
+    detect_source_kind,
     extract_catalog_items,
     extract_image_urls_from_html_page,
     fetch_tabular_preview,
@@ -793,9 +794,14 @@ def import_products_from_sources(
     telegram_media_cache: dict[str, list[str]] = {}
     telegram_media_expand_count = 0
     pre_scan_error_messages: dict[int, str] = {}
+    supplier_has_table_source: dict[str, bool] = {}
+    supplier_tg_images_by_title: dict[str, dict[str, list[str]]] = {}
 
     def _title_key(raw_title: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
+
+    def _supplier_key(raw_supplier: str | None) -> str:
+        return re.sub(r"\s+", " ", str(raw_supplier or "").strip().lower())
 
     def _is_placeholder_title(raw_title: str | None) -> bool:
         return _title_key(raw_title).startswith("позиция из tg #")
@@ -937,6 +943,10 @@ def import_products_from_sources(
     # pre-scan all selected sources to get minimal закупка per title and known image pool
     for src in sources:
         src_url = (src.source_url or "").strip()
+        src_kind = detect_source_kind(src_url)
+        supplier_key = _supplier_key(getattr(src, "supplier_name", None))
+        if supplier_key and src_kind in {"google_sheet", "moysklad_catalog"}:
+            supplier_has_table_source[supplier_key] = True
         if not src_url:
             source_items_map[int(src.id)] = []
             continue
@@ -979,6 +989,15 @@ def import_products_from_sources(
                         if uu not in known_item_by_image_url:
                             known_item_by_image_url[uu] = dict(it)
                             known_image_urls.append(uu)
+
+                if supplier_key and src_kind == "telegram_channel" and title:
+                    tg_bucket = supplier_tg_images_by_title.setdefault(supplier_key, {})
+                    tk = _title_key(title)
+                    slot = tg_bucket.setdefault(tk, [])
+                    for u in pool:
+                        uu = _resolve_source_image_url(u, src_url)
+                        if uu and uu not in slot:
+                            slot.append(uu)
         except Exception as exc:
             src_id = int(src.id)
             source_items_map[src_id] = []
@@ -989,6 +1008,8 @@ def import_products_from_sources(
         src_url = (src.source_url or "").strip()
         if not src_url:
             continue
+        src_kind = detect_source_kind(src_url)
+        supplier_key = _supplier_key(getattr(src, "supplier_name", None))
         report = _new_source_report(source_id=int(src.id), source_url=src_url)
         try:
             items = source_items_map.get(int(src.id), [])
@@ -1000,6 +1021,12 @@ def import_products_from_sources(
         pre_scan_error = pre_scan_error_messages.get(int(src.id))
         if pre_scan_error and not items:
             _register_source_error(report, RuntimeError(f"pre-scan failed: {pre_scan_error}"))
+
+        # When supplier has a tabular feed, Telegram source is used only as media donor.
+        # Price/stock/size authority remains the table rows.
+        if supplier_key and src_kind == "telegram_channel" and supplier_has_table_source.get(supplier_key):
+            source_reports.append(report)
+            continue
 
         for it in items:
             try:
@@ -1077,6 +1104,18 @@ def import_products_from_sources(
                     uu = _resolve_source_image_url(u, src_url)
                     if uu and uu not in image_urls:
                         image_urls.append(uu)
+
+                # Prefer Telegram channel photos for suppliers that have paired table+TG sources.
+                if supplier_key and src_kind != "telegram_channel":
+                    tg_images = supplier_tg_images_by_title.get(supplier_key, {}).get(base_title_key, [])
+                    if tg_images:
+                        merged: list[str] = []
+                        for u in [*tg_images, *image_urls]:
+                            uu = str(u or "").strip()
+                            if uu and uu not in merged:
+                                merged.append(uu)
+                        image_urls = merged
+                        image_url = image_urls[0] if image_urls else image_url
 
                 # expand telegram post links into direct image URLs with safety caps,
                 # otherwise large imports can spend minutes on network lookups.
