@@ -48,6 +48,44 @@ import "./main.css";
   try { window.visualViewport?.addEventListener("resize", apply, { passive: true } as any); } catch {}
 })();
 
+
+(function installDynamicImportRecovery() {
+  if (typeof window === "undefined") return;
+  const STORAGE_KEY = "__dyn_import_retry_once";
+
+  const shouldRecover = (err: any): boolean => {
+    const msg = String(
+      err?.message || err?.reason?.message || err?.reason || err || ""
+    ).toLowerCase();
+    return (
+      msg.includes("failed to fetch dynamically imported module") ||
+      msg.includes("importing a module script failed")
+    );
+  };
+
+  const tryRecover = (err: any) => {
+    if (!shouldRecover(err)) return;
+    try {
+      const alreadyRetried = sessionStorage.getItem(STORAGE_KEY) === "1";
+      if (alreadyRetried) return;
+      sessionStorage.setItem(STORAGE_KEY, "1");
+      const u = new URL(window.location.href);
+      u.searchParams.set("v", String(Date.now()));
+      window.location.replace(u.toString());
+    } catch {}
+  };
+
+  // clear marker after stable boot window; prevents reload loops on broken deploys
+  try { window.setTimeout(() => { try { sessionStorage.removeItem(STORAGE_KEY); } catch {} }, 15000); } catch {}
+
+  window.addEventListener("error", (e) => {
+    tryRecover((e as any)?.error || (e as any));
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    tryRecover((e as any)?.reason || (e as any));
+  });
+})();
+
 (function installGlobalErrorOverlay() {
   if (typeof window === "undefined") return;
   try {

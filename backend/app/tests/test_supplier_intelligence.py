@@ -416,6 +416,71 @@ def test_import_products_in_reads_env_overrides(monkeypatch):
     assert payload.tg_fallback_limit == 750000
 
 
+def test_default_pre_scan_rows_cap_reads_env(monkeypatch):
+    monkeypatch.delenv("SUPPLIER_IMPORT_PRE_SCAN_ROWS_CAP", raising=False)
+    assert asi._default_pre_scan_rows_cap() == 5000
+
+    monkeypatch.setenv("SUPPLIER_IMPORT_PRE_SCAN_ROWS_CAP", "1234")
+    assert asi._default_pre_scan_rows_cap() == 1234
+
+
+def test_default_auto_import_limits_read_env(monkeypatch):
+    monkeypatch.delenv("SUPPLIER_AUTO_IMPORT_MAX_ITEMS_PER_SOURCE", raising=False)
+    monkeypatch.delenv("SUPPLIER_AUTO_IMPORT_FETCH_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("SUPPLIER_AUTO_IMPORT_TG_FALLBACK_LIMIT", raising=False)
+
+    assert asi._default_auto_import_max_items_per_source() == 10_000
+    assert asi._default_auto_import_fetch_timeout_sec() == 180
+    assert asi._default_auto_import_tg_fallback_limit() == 5_000
+
+    monkeypatch.setenv("SUPPLIER_AUTO_IMPORT_MAX_ITEMS_PER_SOURCE", "2222")
+    monkeypatch.setenv("SUPPLIER_AUTO_IMPORT_FETCH_TIMEOUT_SEC", "155")
+    monkeypatch.setenv("SUPPLIER_AUTO_IMPORT_TG_FALLBACK_LIMIT", "3333")
+
+    assert asi._default_auto_import_max_items_per_source() == 2222
+    assert asi._default_auto_import_fetch_timeout_sec() == 155
+    assert asi._default_auto_import_tg_fallback_limit() == 3333
+
+
+def test_force_sync_auto_import_reads_env(monkeypatch):
+    monkeypatch.delenv("SUPPLIER_AUTO_IMPORT_FORCE_SYNC", raising=False)
+    assert asi._force_sync_auto_import() is False
+
+    monkeypatch.setenv("SUPPLIER_AUTO_IMPORT_FORCE_SYNC", "1")
+    assert asi._force_sync_auto_import() is True
+
+
+def test_has_online_celery_workers(monkeypatch):
+    class DummyInspect:
+        def ping(self):
+            return {"worker@node": {"ok": "pong"}}
+
+    class DummyControl:
+        def inspect(self, timeout=1.0):
+            return DummyInspect()
+
+    class DummyApp:
+        control = DummyControl()
+
+    monkeypatch.setattr(asi, "celery_app", DummyApp())
+    assert asi._has_online_celery_workers() is True
+
+
+def test_has_online_celery_workers_handles_missing_workers(monkeypatch):
+    class DummyInspect:
+        def ping(self):
+            return None
+
+    class DummyControl:
+        def inspect(self, timeout=1.0):
+            return DummyInspect()
+
+    class DummyApp:
+        control = DummyControl()
+
+    monkeypatch.setattr(asi, "celery_app", DummyApp())
+    assert asi._has_online_celery_workers() is False
+
 def test_classify_import_error_codes():
     assert asi._classify_import_error(RuntimeError("request timeout on supplier")) == asi.ERROR_CODE_NETWORK_TIMEOUT
     assert asi._classify_import_error(RuntimeError("content is not an image")) == asi.ERROR_CODE_INVALID_IMAGE
@@ -600,6 +665,43 @@ def test_extract_catalog_items_replaces_unrealistic_low_price_from_row_candidate
     assert len(items) == 1
     assert items[0]["dropship_price"] == 9379.0
 
+
+def test_split_size_tokens_parses_mixed_size_marks_and_ranges():
+    assert si.split_size_tokens("46(S)-✅ 48(M)-✅ 50(L)-✅") == ["46", "48", "50"]
+    assert si.split_size_tokens("41–43") == ["41", "42", "43"]
+
+
+
+
+def test_extract_image_urls_from_html_page_expands_telegram_post_block(monkeypatch):
+    class DummyResp:
+        def __init__(self, text: str):
+            self.text = text
+
+    html_single = '<meta property="og:image" content="https://cdn4.telesco.pe/file/preview.jpg">'
+    html_public = (
+        '<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="firmachdroppp/3183">'
+        '<a class="tgme_widget_message_photo_wrap" style="background-image:url(\'https://cdn4.telesco.pe/file/a.jpg\')"></a>'
+        '<a class="tgme_widget_message_photo_wrap" style="background-image:url(\'https://cdn4.telesco.pe/file/b.jpg\')"></a>'
+        '</div></div>'
+        '<div class="tgme_widget_message_wrap"><div data-post="firmachdroppp/3184"></div></div>'
+    )
+
+    def fake_get(url, **kwargs):
+        if url == "https://t.me/firmachdroppp/3183":
+            return DummyResp(html_single)
+        if url == "https://t.me/s/firmachdroppp/3183":
+            return DummyResp(html_public)
+        return DummyResp("")
+
+    monkeypatch.setattr(si, "_http_get_with_retries", fake_get)
+
+    out = si.extract_image_urls_from_html_page("https://t.me/firmachdroppp/3183", limit=5)
+
+    assert out[:2] == [
+        "https://cdn4.telesco.pe/file/a.jpg",
+        "https://cdn4.telesco.pe/file/b.jpg",
+    ]
 
 def test_split_image_urls_supports_www_prefix():
     got = si._split_image_urls("www.example.com/pic.jpg")
