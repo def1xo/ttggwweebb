@@ -408,11 +408,24 @@ def _extract_size_from_title(title: str) -> str | None:
     t = str(title or "")
     if not t:
         return None
-    # examples: "NB 9060 42", "hoodie XL", "size M"
-    m = re.search(r"(?i)\b(?:size\s*)?(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3})\b", t)
-    if not m:
+    # Safe inference from free-form titles:
+    # - textual sizes can be inferred directly ("hoodie XL")
+    # - numeric sizes are inferred only when explicit size marker exists,
+    #   so model numbers like "Yeezy 350" are not treated as shoe size.
+    text_m = re.search(r"(?i)\b(XXS|XS|S|M|L|XL|XXL|XXXL)\b", t)
+    if text_m:
+        return str(text_m.group(1)).upper()
+
+    num_m = re.search(r"(?i)\b(?:size|размер|eu|us|ru)\s*[:#-]?\s*(\d{2,3})\b", t)
+    if not num_m:
         return None
-    return str(m.group(1)).upper()
+    try:
+        val = int(num_m.group(1))
+    except Exception:
+        return None
+    if 18 <= val <= 60:
+        return str(val)
+    return None
 
 
 
