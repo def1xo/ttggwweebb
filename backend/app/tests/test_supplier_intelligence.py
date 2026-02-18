@@ -41,6 +41,28 @@ def test_extract_catalog_items_by_header():
     assert items[0]["dropship_price"] == 3990.0
 
 
+
+
+def test_extract_catalog_items_does_not_take_model_number_as_size_without_marker():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Yeezy Boost 350 v2", "12990"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] is None
+
+
+def test_extract_catalog_items_reads_numeric_size_with_explicit_marker():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Yeezy Boost size 43", "12990"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "43"
+
+
 def test_extract_catalog_items_splits_multiple_image_urls():
     rows = [
         ["Товар", "Дроп цена", "Фото"],
@@ -229,6 +251,24 @@ def test_download_image_bytes_rejects_non_image_content(monkeypatch):
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "not an image" in str(exc)
+
+
+
+
+def test_split_color_tokens_accepts_multiple_delimiters():
+    got = asi._split_color_tokens("black/white, red | navy")
+    assert got == ["black", "white", "red", "navy"]
+
+
+def test_prefer_local_image_url_falls_back_to_remote_on_failure(monkeypatch):
+    monkeypatch.setattr(asi.media_store, "save_remote_image_to_local", lambda *a, **k: (_ for _ in ()).throw(ValueError("boom")))
+    src = "https://cdn.example.com/a.jpg"
+    assert asi._prefer_local_image_url(src) == src
+
+
+def test_prefer_local_image_url_uses_localized_url(monkeypatch):
+    monkeypatch.setattr(asi.media_store, "save_remote_image_to_local", lambda *a, **k: "/uploads/products/a.jpg")
+    assert asi._prefer_local_image_url("https://cdn.example.com/a.jpg") == "/uploads/products/a.jpg"
 
 
 def test_classify_import_error_codes():
