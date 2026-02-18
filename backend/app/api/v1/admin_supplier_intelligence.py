@@ -1311,14 +1311,13 @@ def import_products_from_sources(
 
 
                 report.imported += 1
+                # persist each processed item immediately so long imports
+                # don't lose all progress on later failures.
+                if not payload.dry_run:
+                    db.commit()
             except Exception as exc:
-                _register_source_error(report, exc)
-
-        if not payload.dry_run:
-            try:
-                db.commit()
-            except Exception as exc:
-                db.rollback()
+                if not payload.dry_run:
+                    db.rollback()
                 _register_source_error(report, exc)
 
         source_reports.append(report)
