@@ -1515,9 +1515,6 @@ def import_products_from_sources(
 
                 if supplier_key == "shop_vkus" and not stock_map and isinstance(it, dict):
                     stock_map = _extract_shop_vkus_stock_map(it)
-                    # For shop_vkus avoid phantom availability when no explicit stock map is found.
-                    if not stock_map and raw_stock is None:
-                        stock_qty = 0
 
                 if not size_tokens and stock_map:
                     size_tokens = sorted(
