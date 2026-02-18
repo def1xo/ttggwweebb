@@ -33,13 +33,6 @@ function sortSizes(values: string[]) {
 }
 
 
-function isFootwearProduct(title: string, categoryName?: string): boolean {
-  const hay = `${title || ""} ${categoryName || ""}`.toLowerCase();
-  return /(new\s*balance|\bnb\b|nike|adidas|jordan|yeezy|air\s*max|dunk|campus|samba|gazelle|vomero|крос|кед|обув)/i.test(hay);
-}
-
-const DEFAULT_SHOE_SIZE_RANGE = Array.from({ length: 10 }, (_, i) => String(36 + i));
-
 function normalizeMediaUrl(raw: unknown): string | null {
   if (!raw) return null;
   const url = String(raw).trim();
@@ -146,6 +139,18 @@ export default function ProductPage() {
 
   const sizeOptions = sizes;
 
+  const variantStockBySize = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const v of variants) {
+      const sz = String(v?.size?.name || v?.size || "").trim();
+      if (!sz) continue;
+      const stock = Number(v?.stock_quantity ?? v?.stock ?? 0);
+      if (!Number.isFinite(stock)) continue;
+      out[sz] = (out[sz] || 0) + Math.max(0, stock);
+    }
+    return out;
+  }, [variants]);
+
   const sizeAvailability = useMemo(() => {
     const out: Record<string, boolean> = {};
     const variantBySize = new Map<string, any[]>();
@@ -163,17 +168,20 @@ export default function ProductPage() {
         out[sz] = sizes.includes(sz);
         continue;
       }
-      const inStock = vv.some((v) => {
-        const c = String(v?.color?.name || v?.color || "");
-        const colorOk = !selectedColor || c === selectedColor;
-        return colorOk && Number(v?.stock ?? 0) > 0;
-      });
-      out[sz] = inStock;
-    }
+        const inStock = vv.some((v) => {
+          const c = String(v?.color?.name || v?.color || "");
+          const colorOk = !selectedColor || c === selectedColor;
+          return colorOk && Number(v?.stock_quantity ?? v?.stock ?? 0) > 0;
+        });
+        out[sz] = inStock;
+      }
     return out;
   }, [variants, sizeOptions, selectedColor, sizes]);
 
-  const hasAnyStock = useMemo(() => variants.some((v) => Number(v?.stock ?? 0) > 0), [variants]);
+  const hasAnyStock = useMemo(
+    () => variants.some((v) => Number(v?.stock_quantity ?? v?.stock ?? 0) > 0),
+    [variants],
+  );
 
   const selectedVariant = useMemo(() => {
     return variants.find((v) => {
@@ -224,7 +232,7 @@ export default function ProductPage() {
       if (match) variant = match;
     }
     const variantId = product?.default_variant_id || variant?.id || product?.id;
-    if (Number(variant?.stock ?? 0) <= 0) {
+    if (Number(variant?.stock_quantity ?? variant?.stock ?? 0) <= 0) {
       notify("Товар сейчас не в наличии", "error");
       return;
     }
@@ -393,7 +401,7 @@ export default function ProductPage() {
                       textDecoration: available ? "none" : "line-through",
                       cursor: available ? "pointer" : "not-allowed",
                     }}
-                    title={available ? "В наличии" : "Нет этого размера"}
+                    title={available ? `В наличии: ${Math.max(0, Number(variantStockBySize[s] || 0))} шт` : "Нет этого размера"}
                   >
                     {s}
                   </button>
@@ -404,7 +412,11 @@ export default function ProductPage() {
         ) : null}
 
         <div style={{ marginTop: 16, display: "grid", gap: 10 }}>
-          <button className="btn btn-primary product-add-btn" onClick={addToCart} disabled={!hasAnyStock || (selectedVariant ? Number(selectedVariant?.stock ?? 0) <= 0 : false)}>
+          <button
+            className="btn btn-primary product-add-btn"
+            onClick={addToCart}
+            disabled={!hasAnyStock || (selectedVariant ? Number(selectedVariant?.stock_quantity ?? selectedVariant?.stock ?? 0) <= 0 : false)}
+          >
             {!hasAnyStock ? "Нет в наличии" : "Добавить в корзину"}
           </button>
         </div>
