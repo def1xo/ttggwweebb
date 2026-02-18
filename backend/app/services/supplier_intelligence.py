@@ -317,6 +317,39 @@ def _to_float(raw: Any) -> float | None:
         return None
 
 
+
+
+def _price_candidates_from_row(row: list[Any], exclude_indices: set[int] | None = None) -> list[float]:
+    ex = exclude_indices or set()
+    out: list[float] = []
+    for idx, cell in enumerate(row):
+        if idx in ex:
+            continue
+        val = _to_float(cell)
+        if val is None:
+            continue
+        if val <= 0 or val >= 500_000:
+            continue
+        out.append(float(val))
+    return out
+
+
+def _coerce_row_price(primary_price: float | None, row: list[Any], *, exclude_indices: set[int] | None = None) -> float | None:
+    if primary_price is None:
+        candidates = _price_candidates_from_row(row, exclude_indices=exclude_indices)
+        if not candidates:
+            return None
+        primary_price = max(candidates)
+
+    if primary_price >= 300:
+        return float(primary_price)
+
+    candidates = _price_candidates_from_row(row, exclude_indices=exclude_indices)
+    large = [x for x in candidates if x >= 500]
+    if large:
+        return float(max(large))
+    return float(primary_price)
+
 def _to_int(raw: Any) -> int | None:
     f = _to_float(raw)
     if f is None:
@@ -559,7 +592,8 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         if not _looks_like_title(title):
             continue
 
-        price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
+        raw_price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
+        price = _coerce_row_price(raw_price, row, exclude_indices={x for x in [idx_title, idx_size, idx_stock] if x is not None})
         if price is None or price <= 0:
             continue
 
@@ -824,6 +858,33 @@ def _extract_prices_from_text(text: str) -> list[float]:
             continue
     return out
 
+
+
+
+def search_image_urls_by_title(query: str, limit: int = 3, timeout_sec: int = 20) -> list[str]:
+    q = (query or "").strip()
+    if not q:
+        return []
+    url = f"https://www.bing.com/images/search?q={requests.utils.quote(q)}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Mobile Safari/537.36",
+        "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+    }
+    try:
+        r = _http_get_with_retries(url, timeout_sec=timeout_sec, headers=headers, max_attempts=2)
+        txt = r.text or ""
+    except Exception:
+        return []
+
+    out: list[str] = []
+    # bing embeds source image in murl JSON snippets
+    for m in re.findall(r'murl&quot;:&quot;(https?://[^&]+?)&quot;', txt, flags=re.I):
+        u = m.replace('\/', '/')
+        if u not in out:
+            out.append(u)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
 
 def avito_market_scan(query: str, max_pages: int = 1, timeout_sec: int = 20, only_new: bool = True) -> dict[str, Any]:
     """Best-effort scan of Avito search pages (can fail due to anti-bot)."""

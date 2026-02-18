@@ -404,3 +404,18 @@ def test_split_image_urls_supports_protocol_relative():
 
 def test_map_category_detects_vest_not_accessory():
     assert map_category("Жилетка Canada Goose") == "Куртки"
+
+
+def test_extract_catalog_items_replaces_unrealistic_low_price_from_row_candidates():
+    rows = [
+        ["Товар", "Цена", "Дроп", "Фото"],
+        ["NEW BALANCE 2002 R 42", "1", "9379", "https://cdn.site/nb.jpg"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 9379.0
+
+
+def test_split_image_urls_supports_www_prefix():
+    got = si._split_image_urls("www.example.com/pic.jpg")
+    assert got == ["https://www.example.com/pic.jpg"]

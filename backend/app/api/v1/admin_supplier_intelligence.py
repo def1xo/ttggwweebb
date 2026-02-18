@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_admin_user, get_db
 from app.db import models
 from app.services.importer_notifications import slugify
+from app.services import media_store
 from app.services.supplier_intelligence import (
     SupplierOffer,
     ensure_min_markup_price,
@@ -34,6 +35,7 @@ from app.services.supplier_intelligence import (
     split_size_tokens,
     suggest_sale_price,
     normalize_retail_price,
+    search_image_urls_by_title,
 )
 
 router = APIRouter(tags=["admin_supplier_intelligence"])
@@ -936,6 +938,23 @@ def import_products_from_sources(
                     uu = str(u or "").strip()
                     if uu and uu not in image_urls:
                         image_urls.append(uu)
+
+                # Last-resort quality step: if supplier didn't provide any image,
+                # search by title and download a few images to local storage.
+                if not image_urls:
+                    try:
+                        searched = search_image_urls_by_title(title, limit=3)
+                    except Exception:
+                        searched = []
+                    for remote_u in searched:
+                        try:
+                            local_u = media_store.save_remote_image_to_local(remote_u, folder="products")
+                        except Exception:
+                            continue
+                        if local_u and local_u not in image_urls:
+                            image_urls.append(local_u)
+                    if image_urls:
+                        image_url = image_urls[0]
 
                 # auto-enrich item gallery with similar photos from known supplier pool
                 if image_url and known_image_urls:
