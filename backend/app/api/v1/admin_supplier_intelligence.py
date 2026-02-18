@@ -939,6 +939,29 @@ def import_products_from_sources(
                     if uu and uu not in image_urls:
                         image_urls.append(uu)
 
+                # store supplier images locally when possible so they are stable
+                # across devices and not affected by source-side hotlink limits.
+                localized_image_urls: list[str] = []
+                for img_u in image_urls:
+                    normalized_u = str(img_u or "").strip()
+                    if not normalized_u:
+                        continue
+                    local_u = normalized_u
+                    if normalized_u.lower().startswith(("http://", "https://")):
+                        try:
+                            local_candidate = media_store.save_remote_image_to_local(normalized_u, folder="products")
+                            if local_candidate:
+                                local_u = local_candidate
+                        except Exception:
+                            # Keep original URL if localization failed.
+                            pass
+                    if local_u not in localized_image_urls:
+                        localized_image_urls.append(local_u)
+
+                if localized_image_urls:
+                    image_urls = localized_image_urls
+                    image_url = image_urls[0]
+
                 # Last-resort quality step: if supplier didn't provide any image,
                 # search by title and download a few images to local storage.
                 if not image_urls:
