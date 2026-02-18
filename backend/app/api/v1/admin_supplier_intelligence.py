@@ -796,12 +796,64 @@ def import_products_from_sources(
     pre_scan_error_messages: dict[int, str] = {}
     supplier_has_table_source: dict[str, bool] = {}
     supplier_tg_images_by_title: dict[str, dict[str, list[str]]] = {}
+    supplier_tg_fallback_images: dict[str, list[str]] = {}
 
     def _title_key(raw_title: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
 
     def _supplier_key(raw_supplier: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_supplier or "").strip().lower())
+
+    def _title_media_key(raw_title: str | None) -> str:
+        txt = str(raw_title or "").lower()
+        txt = re.sub(r"[^\w\s]+", " ", txt, flags=re.U)
+        tokens = [t for t in re.split(r"\s+", txt) if t]
+        stop = {
+            "new", "balance", "nike", "adidas", "puma", "reebok", "asics", "nb",
+            "муж", "жен", "унисекс", "кроссовки", "кеды", "обувь",
+            "black", "white", "grey", "gray", "beige", "brown", "blue", "green", "red",
+            "черный", "чёрный", "белый", "серый", "бежевый", "коричневый", "синий", "зеленый", "зелёный", "красный",
+        }
+        out: list[str] = []
+        for t in tokens:
+            if t in stop:
+                continue
+            if re.fullmatch(r"\d{1,2}", t):
+                # likely a size
+                continue
+            out.append(t)
+        return " ".join(out[:10]).strip()
+
+    def _pick_tg_images_for_title(supplier_key: str, raw_title: str) -> list[str]:
+        by_title = supplier_tg_images_by_title.get(supplier_key, {})
+        if not by_title:
+            return []
+        exact_key = _title_key(raw_title)
+        if exact_key in by_title:
+            return list(by_title.get(exact_key) or [])
+
+        media_key = _title_media_key(raw_title)
+        media_tokens = set(media_key.split())
+        if not media_tokens:
+            return []
+
+        best_key = ""
+        best_score = 0.0
+        for k in by_title.keys():
+            k_tokens = set(_title_media_key(k).split())
+            if not k_tokens:
+                continue
+            inter = len(media_tokens & k_tokens)
+            if inter <= 0:
+                continue
+            score = inter / max(1, len(media_tokens | k_tokens))
+            if score > best_score:
+                best_score = score
+                best_key = k
+
+        if best_key and best_score >= 0.34:
+            return list(by_title.get(best_key) or [])
+        return []
 
     def _is_placeholder_title(raw_title: str | None) -> bool:
         return _title_key(raw_title).startswith("позиция из tg #")
@@ -990,14 +1042,26 @@ def import_products_from_sources(
                             known_item_by_image_url[uu] = dict(it)
                             known_image_urls.append(uu)
 
-                if supplier_key and src_kind == "telegram_channel" and title:
-                    tg_bucket = supplier_tg_images_by_title.setdefault(supplier_key, {})
-                    tk = _title_key(title)
-                    slot = tg_bucket.setdefault(tk, [])
+                if supplier_key and src_kind == "telegram_channel":
+                    resolved_pool: list[str] = []
                     for u in pool:
                         uu = _resolve_source_image_url(u, src_url)
-                        if uu and uu not in slot:
-                            slot.append(uu)
+                        if uu and uu not in resolved_pool:
+                            resolved_pool.append(uu)
+                    if resolved_pool:
+                        fb = supplier_tg_fallback_images.setdefault(supplier_key, [])
+                        for uu in resolved_pool:
+                            if uu not in fb:
+                                fb.append(uu)
+                    if title and resolved_pool:
+                        tg_bucket = supplier_tg_images_by_title.setdefault(supplier_key, {})
+                        for tk in {_title_key(title), _title_media_key(title)}:
+                            if not tk:
+                                continue
+                            slot = tg_bucket.setdefault(tk, [])
+                            for uu in resolved_pool:
+                                if uu not in slot:
+                                    slot.append(uu)
         except Exception as exc:
             src_id = int(src.id)
             source_items_map[src_id] = []
@@ -1064,7 +1128,7 @@ def import_products_from_sources(
                             it["description"] = matched_item.get("description")
 
                 if not title or ds_price <= 0:
-                    # skip generic TG placeholders and unresolved items instead of polluting catalog
+                    # keep unresolved placeholders out of catalog; they are only media donors
                     continue
 
                 base_title_key = _title_key(title)
@@ -1085,6 +1149,10 @@ def import_products_from_sources(
                         desc = generate_ai_product_description(title, cat_name, it.get("color"))
                     else:
                         desc = generate_youth_description(title, cat_name, it.get("color"))
+                # Guard against anomalously low supplier price parse (e.g. 799 for sneakers).
+                # For footwear-like titles enforce a minimal wholesale floor before retail pricing.
+                if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title):
+                    ds_price = max(float(ds_price or 0), 1800.0)
                 sale_price = pick_sale_price(title, ds_price, min_dropship_price=min_dropship, rrc_price=(it.get("rrc_price") if isinstance(it, dict) else None))
                 row_image_urls = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
                 image_url = str(it.get("image_url") or "").strip() or None
@@ -1107,7 +1175,9 @@ def import_products_from_sources(
 
                 # Prefer Telegram channel photos for suppliers that have paired table+TG sources.
                 if supplier_key and src_kind != "telegram_channel":
-                    tg_images = supplier_tg_images_by_title.get(supplier_key, {}).get(base_title_key, [])
+                    tg_images = _pick_tg_images_for_title(supplier_key, title)
+                    if not tg_images:
+                        tg_images = list(supplier_tg_fallback_images.get(supplier_key, [])[:8])
                     if tg_images:
                         merged: list[str] = []
                         for u in [*tg_images, *image_urls]:
@@ -1226,7 +1296,14 @@ def import_products_from_sources(
                     if desc and not p.description:
                         p.description = desc
                         changed = True
-                    if sale_price > 0 and float(p.base_price or 0) <= 0:
+                    current_base = float(p.base_price or 0)
+                    should_fix_low_price = bool(
+                        current_base > 0
+                        and sale_price > 0
+                        and current_base < 1000
+                        and re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title)
+                    )
+                    if sale_price > 0 and (current_base <= 0 or should_fix_low_price):
                         p.base_price = Decimal(str(sale_price))
                         changed = True
                     if image_url and not p.default_image:
