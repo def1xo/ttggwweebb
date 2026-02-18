@@ -937,12 +937,15 @@ def import_products_from_sources(
                         fallback_ref = fallback_images[0] if fallback_images else ""
                     matched_item: dict[str, object] | None = None
                     if fallback_ref and known_image_urls:
-                        best = find_similar_images(
-                            fallback_ref,
-                            known_image_urls,
-                            max_hamming_distance=7,
-                            limit=1,
-                        )
+                        try:
+                            best = find_similar_images(
+                                fallback_ref,
+                                known_image_urls,
+                                max_hamming_distance=7,
+                                limit=1,
+                            )
+                        except Exception:
+                            best = []
                         if best:
                             matched_item = known_item_by_image_url.get(str(best[0].get("image_url") or ""))
                     if matched_item:
@@ -1102,7 +1105,10 @@ def import_products_from_sources(
                         db.add(p)
                         updated_products += 1
 
-                sig = image_print_signature_from_url(image_url) if image_url else None
+                try:
+                    sig = image_print_signature_from_url(image_url) if image_url else None
+                except Exception:
+                    sig = None
                 candidate_pid = _pick_product_id_by_signature(
                     title_product_candidates.get(base_title_key, []),
                     sig,
@@ -1123,7 +1129,10 @@ def import_products_from_sources(
                 if p:
                     remember_product_candidate(base_title_key, int(p.id), sig)
 
-                detected_color = dominant_color_name_from_url(image_url) if image_url else None
+                try:
+                    detected_color = dominant_color_name_from_url(image_url) if image_url else None
+                except Exception:
+                    detected_color = None
                 src_color = it.get("color") or detected_color
                 color_tokens = _split_color_tokens(src_color)
                 if not color_tokens and detected_color:
