@@ -390,8 +390,38 @@ def _to_int(raw: Any) -> int | None:
         return None
 
 
+def _extract_size_stock_map(raw: Any) -> dict[str, int]:
+    txt = _norm(raw).upper()
+    if not txt:
+        return {}
+    txt = txt.replace("–", "-").replace("—", "-").replace("−", "-")
+    out: dict[str, int] = {}
+
+    def _push(sz: str, qty: str) -> None:
+        try:
+            szi = int(str(sz).strip())
+            q = int(str(qty).strip())
+        except Exception:
+            return
+        if q < 0 or szi < 20 or szi > 60:
+            return
+        key = str(szi)
+        out[key] = max(out.get(key, 0), q)
+
+    patterns = [
+        r"\b(\d{2,3})\s*\(\s*(\d{1,3})\s*(?:ШТ|PCS|X)?\s*\)",
+        r"\b(\d{2,3})\s*[:=]\s*(\d{1,3})\s*(?:ШТ|PCS|X)?\b",
+        r"\b(\d{2,3})\s*[-]\s*(\d{1,3})\s*(?:ШТ|PCS|X)\b",
+        r"\b(\d{2,3})\s+(\d{1,3})\s*(?:ШТ|PCS|X)\b",
+    ]
+    for pat in patterns:
+        for sz, qty in re.findall(pat, txt):
+            _push(sz, qty)
+    return out
+
+
 def _normalize_image_candidate(url: str) -> str | None:
-    u = str(url or "").strip().strip("\"'()[]{}<>")
+    u = str(url or "").strip().strip("\"\'()[]{}<>")
     if not u:
         return None
     if u.startswith("//"):
@@ -468,11 +498,35 @@ def _extract_size_from_title(title: str) -> str | None:
     return None
 
 
+def _extract_size_from_row_text(row: list[str]) -> str | None:
+    text = " ".join([_norm(x) for x in (row or []) if _norm(x)])
+    if not text:
+        return None
+
+    # Parse sizes only from explicit size-marked fragments.
+    # Avoid scanning the whole row blindly to prevent pollution by prices/codes
+    # (e.g. 24/25/28 leaking into size grid).
+    matches = re.findall(r"(?i)(?:размер(?:ы)?|size)\s*[:#-]?\s*([^\n]+)", text)
+    out: list[str] = []
+    for chunk in matches:
+        cleaned = re.split(
+            r"(?i)\b(?:цена|стоимость|руб|ррц|rrc|мрц|mrc|наличие|остаток|stock|арт(?:икул)?|код)\b",
+            chunk,
+            maxsplit=1,
+        )[0]
+        for tok in split_size_tokens(cleaned):
+            if tok not in out:
+                out.append(tok)
+    if out:
+        return " ".join(out[:12])
+    return None
+
+
 def split_size_tokens(raw: Any) -> list[str]:
     txt = _norm(raw).upper()
     if not txt:
         return []
-    txt = txt.replace("РАЗМЕР", " ").replace("SIZE", " ")
+    txt = re.sub(r"(?i)\b(?:РАЗМЕРЫ?|SIZE|SIZES?)\b", " ", txt)
     txt = txt.replace("–", "-").replace("—", "-").replace("−", "-")
     out: list[str] = []
 
@@ -487,7 +541,7 @@ def split_size_tokens(raw: Any) -> list[str]:
             bb = int(b)
         except Exception:
             continue
-        if aa <= bb and bb - aa <= 8:
+        if aa <= bb and bb - aa <= 20:
             for size_num in range(aa, bb + 1):
                 _push(str(size_num))
 
@@ -725,6 +779,20 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             if alt_low:
                 price = float(max(alt_low))
 
+        # Footwear sanity check: very low prices (e.g. 799) are often wrong columns
+        # in mixed supplier sheets where wholesale is in another numeric field.
+        if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|574|9060|1906|2002)\b", title) and price < 1200:
+            excluded_with_price = set(excluded)
+            if idx_price is not None:
+                excluded_with_price.add(idx_price)
+            alt_footwear = [
+                x
+                for x in _price_candidates_from_row(row, exclude_indices=excluded_with_price)
+                if 1200 <= x <= 9_999
+            ]
+            if alt_footwear:
+                price = float(min(alt_footwear))
+
         # Guard against accidentally selected retail-like column.
         # If picked price is very high, but the row contains plausible purchase price,
         # prefer that lower candidate.
@@ -751,7 +819,13 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         size = _norm(row[idx_size]) if idx_size is not None and idx_size < len(row) else ""
         if not size:
             size = _extract_size_from_title(title) or ""
-        stock = _to_int(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else None
+        if not size:
+            size = _extract_size_from_row_text(row) or ""
+        stock_raw = _norm(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else ""
+        stock_map = _extract_size_stock_map(stock_raw)
+        stock = _to_int(stock_raw) if stock_raw else None
+        if stock_map:
+            stock = int(sum(max(0, int(v)) for v in stock_map.values()))
         raw_image = _norm(row[idx_image]) if idx_image is not None and idx_image < len(row) else ""
         image_urls = _split_image_urls(raw_image)
         if not image_urls:
@@ -766,6 +840,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             "rrc_price": float(rrc_price) if rrc_price and rrc_price > 0 else None,
             "size": size or None,
             "stock": stock,
+            "stock_map": stock_map or None,
             "image_url": image_url,
             "image_urls": image_urls,
             "description": description or None,
@@ -891,7 +966,20 @@ def suggest_sale_price(dropship_price: float) -> float:
     return ensure_min_markup_price(suggested, base)
 
 
+def _normalize_telegram_post_url(raw_url: str) -> str:
+    u = str(raw_url or "").strip()
+    if not u:
+        return u
+    # Telegram sometimes appends `?single` to force one media item preview.
+    # For importer we always want the full post media set.
+    u = re.sub(r"([?&])single(?:=[^&#]*)?(?=(&|#|$))", r"\1", u, flags=re.I)
+    u = re.sub(r"[?&]+$", "", u)
+    u = u.replace("#", "")
+    return u
+
+
 def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: int = 20) -> list[str]:
+    url = _normalize_telegram_post_url(url)
     headers = {"User-Agent": "defshop-intel-bot/1.0"}
     r = _http_get_with_retries(url, timeout_sec=timeout_sec, headers=headers, max_attempts=3)
     html = r.text or ""
@@ -908,12 +996,15 @@ def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: in
             parsed = urlparse(base_url or url)
             if parsed.scheme and parsed.netloc:
                 u = f"{parsed.scheme}://{parsed.netloc}{u}"
-        if u.lower().startswith(("http://", "https://")) and u not in urls:
-            urls.append(u)
+        if u.lower().startswith(("http://", "https://")):
+            if "t.me/" in u or "telegram.me/" in u:
+                u = _normalize_telegram_post_url(u)
+            if u not in urls:
+                urls.append(u)
 
     # Telegram direct post pages often expose only one preview image in og:image.
     # Public /s/channel/id pages usually contain the full media set for that post.
-    tg_m = re.search(r"https?://t\.me/(?:(?:s/)?)([A-Za-z0-9_]{3,})/(\d+)(?:\?.*)?$", str(url).strip(), flags=re.I)
+    tg_m = re.search(r"https?://t\.me/(?:(?:s/)?)([A-Za-z0-9_]{3,})/(\d+)(?:\?.*)?$", _normalize_telegram_post_url(str(url).strip()), flags=re.I)
     if tg_m:
         channel = tg_m.group(1)
         msg_id = tg_m.group(2)
@@ -1050,7 +1141,7 @@ def search_image_urls_by_title(query: str, limit: int = 3, timeout_sec: int = 20
     out: list[str] = []
     # bing embeds source image in murl JSON snippets
     for m in re.findall(r'murl&quot;:&quot;(https?://[^&]+?)&quot;', txt, flags=re.I):
-        u = m.replace('\/', '/')
+        u = m.replace("\\/", "/")
         if u not in out:
             out.append(u)
         if len(out) >= max(1, int(limit)):

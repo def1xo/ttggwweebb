@@ -13,7 +13,7 @@ function formatApiErrorMessage(raw: any): string {
     const s = raw.trim();
     if (!s) return "";
     if (/^<\s*html[\s>]/i.test(s) || /<\/?body/i.test(s) || /<\/?center/i.test(s) || /\bnginx\//i.test(s)) {
-      if (/405\s*Not\s*Allowed/i.test(s)) return "Промокод сейчас недоступен (ошибка сервера 405)";
+      if (/405\s*Not\s*Allowed/i.test(s)) return "Метод запроса не поддерживается (405)";
       return "Сервис временно недоступен";
     }
     return s;
@@ -533,9 +533,12 @@ export async function uploadPaymentProof(orderId: number | string, file: File) {
       `${API_BASE_URL}/api/orders/${orderId}/payment-proof`,
       `${API_BASE_URL}/api/v1/orders/${orderId}/payment-proof`,
       `/api/orders/${orderId}/payment-proof`,
+      `/api/v1/orders/${orderId}/payment-proof`,
       `/orders/${orderId}/payment-proof`,
     ];
-    return await tryCandidates(candidates, { method: "post", data: fd, headers: { "Content-Type": "multipart/form-data" } });
+    // Do not force Content-Type manually for FormData in browser:
+    // axios will attach proper multipart boundary automatically.
+    return await tryCandidates(candidates, { method: "post", data: fd });
   } catch (e) {
     return handleAxiosError(e);
   }
