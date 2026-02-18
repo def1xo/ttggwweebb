@@ -111,6 +111,8 @@ async function postToBackendImporter(payload) {
 }
 
 const bot = new Telegraf(BOT_TOKEN);
+const MEDIA_GROUP_FLUSH_DELAY_MS = Number(process.env.TG_MEDIA_GROUP_FLUSH_MS || 1400);
+const mediaGroups = new Map();
 
 // helper: download file from Telegram using file_path
 async function downloadFileFromTelegram(filePath) {
@@ -211,6 +213,51 @@ async function handleChannelPost(ctx) {
       text,
       image_urls: images
     };
+
+    const mediaGroupId = post.media_group_id ? String(post.media_group_id) : '';
+    if (mediaGroupId) {
+      const key = `${chat_id}:${mediaGroupId}`;
+      const grouped = mediaGroups.get(key) || {
+        channel_id: chat_id,
+        message_id,
+        date: payload.date,
+        text: text || '',
+        image_urls: [],
+        timer: null,
+      };
+      grouped.message_id = Math.min(Number(grouped.message_id || message_id), Number(message_id));
+      if (!grouped.text && text) grouped.text = text;
+      if (!grouped.date) grouped.date = payload.date;
+      for (const u of payload.image_urls || []) {
+        if (u && !grouped.image_urls.includes(u)) grouped.image_urls.push(u);
+      }
+      if (grouped.timer) clearTimeout(grouped.timer);
+      grouped.timer = setTimeout(async () => {
+        const ready = mediaGroups.get(key);
+        mediaGroups.delete(key);
+        if (!ready) return;
+        try {
+          const { endpoint } = await postToBackendImporter({
+            channel_id: ready.channel_id,
+            message_id: `media_group:${mediaGroupId}`,
+            media_group_id: mediaGroupId,
+            first_message_id: ready.message_id,
+            date: ready.date,
+            text: ready.text,
+            image_urls: ready.image_urls,
+          });
+          console.log(`Imported media group ${mediaGroupId} (${ready.image_urls.length} images) from chat ${chat_id} -> ${endpoint}`);
+        } catch (err) {
+          console.error('Failed to POST media group to backend:', err && err.message ? err.message : err);
+          if (ADMIN_CHAT_ID) {
+            const errText = `❗️ Failed to import media group ${mediaGroupId} from ${chat_id}:\n${err && err.message ? err.message : String(err)}`;
+            try { await ctx.telegram.sendMessage(ADMIN_CHAT_ID, errText); } catch(e){ console.error('Failed to notify admin:', e && e.message ? e.message : e); }
+          }
+        }
+      }, MEDIA_GROUP_FLUSH_DELAY_MS);
+      mediaGroups.set(key, grouped);
+      return;
+    }
 
     try {
       const { endpoint } = await postToBackendImporter(payload);
