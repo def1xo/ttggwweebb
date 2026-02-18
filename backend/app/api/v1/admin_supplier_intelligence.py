@@ -53,6 +53,16 @@ ERROR_SAMPLES_LIMIT = 3
 ERROR_MESSAGE_MAX_LEN = 500
 IMPORT_FALLBACK_STOCK_QTY = 1
 RRC_DISCOUNT_RUB = 300
+MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT = 40
+
+
+def _looks_like_direct_image_url(url: str | None) -> bool:
+    u = str(url or "").strip().lower()
+    if not u:
+        return False
+    if any(ext in u for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif")):
+        return True
+    return any(token in u for token in ("/file/", "/image/", "/photo/"))
 
 
 def _normalize_error_message(exc: Exception) -> str:
@@ -749,6 +759,8 @@ def import_products_from_sources(
     title_min_dropship: dict[str, float] = {}
     known_image_urls: list[str] = []
     known_item_by_image_url: dict[str, dict[str, object]] = {}
+    telegram_media_cache: dict[str, list[str]] = {}
+    telegram_media_expand_count = 0
 
     def _title_key(raw_title: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
@@ -1027,17 +1039,26 @@ def import_products_from_sources(
                     if uu and uu not in image_urls:
                         image_urls.append(uu)
 
-                # expand telegram post links into direct image URLs
+                # expand telegram post links into direct image URLs with safety caps,
+                # otherwise large imports can spend minutes on network lookups.
                 expanded_image_urls: list[str] = []
+                has_direct_image = any(_looks_like_direct_image_url(u) for u in image_urls)
                 for candidate in image_urls:
                     cu = str(candidate or "").strip()
                     if not cu:
                         continue
-                    if "t.me/" in cu or "telegram.me/" in cu:
-                        try:
-                            tg_media = extract_image_urls_from_html_page(cu, limit=8)
-                        except Exception:
-                            tg_media = []
+                    if ("t.me/" in cu or "telegram.me/" in cu) and not has_direct_image:
+                        tg_media = telegram_media_cache.get(cu)
+                        if tg_media is None:
+                            if telegram_media_expand_count >= MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT:
+                                tg_media = []
+                            else:
+                                telegram_media_expand_count += 1
+                                try:
+                                    tg_media = extract_image_urls_from_html_page(cu, limit=8)
+                                except Exception:
+                                    tg_media = []
+                                telegram_media_cache[cu] = list(tg_media)
                         if tg_media:
                             for media_u in tg_media:
                                 uu = _resolve_source_image_url(media_u, cu)
