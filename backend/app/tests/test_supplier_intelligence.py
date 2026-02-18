@@ -1,5 +1,6 @@
 import app.api.v1.admin_supplier_intelligence as asi
 import app.services.supplier_intelligence as si
+import app.services.media_store as media_store
 from app.services.supplier_intelligence import SupplierOffer, detect_source_kind, ensure_min_markup_price, estimate_market_price, extract_catalog_items, find_similar_images, generate_ai_product_description, generate_youth_description, map_category, pick_best_offer, print_signature_hamming, split_size_tokens, suggest_sale_price
 
 
@@ -321,6 +322,43 @@ def test_download_image_bytes_rejects_non_image_content(monkeypatch):
 def test_split_color_tokens_accepts_multiple_delimiters():
     got = asi._split_color_tokens("black/white, red | navy")
     assert got == ["black", "white", "red", "navy"]
+
+
+
+
+def test_save_remote_image_to_local_accepts_octet_stream_with_image_ext(monkeypatch, tmp_path):
+    captured = {}
+
+    class DummyResp:
+        headers = {"content-type": "application/octet-stream"}
+        content = b"\x89PNG\r\n\x1a\n1234"
+
+        def raise_for_status(self):
+            return None
+
+    def _fake_get(url, timeout=None, headers=None):
+        captured["url"] = url
+        captured["headers"] = headers or {}
+        return DummyResp()
+
+    monkeypatch.setattr(media_store.requests, "get", _fake_get)
+    monkeypatch.setattr(media_store, "UPLOAD_BASE", tmp_path)
+
+    out = media_store.save_remote_image_to_local(
+        "https://cdn.example.com/photo.png",
+        folder="products/photos",
+        filename_hint="model-1",
+        referer="https://supplier.example/catalog",
+    )
+
+    assert out.endswith(".png")
+    assert captured["headers"].get("Referer") == "https://supplier.example/catalog"
+
+
+def test_resolve_source_image_url_supports_relative_and_protocol_relative():
+    assert asi._resolve_source_image_url("/media/a.jpg", "https://supplier.example/catalog") == "https://supplier.example/media/a.jpg"
+    assert asi._resolve_source_image_url("images/a.jpg", "https://supplier.example/catalog/list") == "https://supplier.example/catalog/images/a.jpg"
+    assert asi._resolve_source_image_url("//cdn.example.com/a.jpg", "https://supplier.example/catalog") == "https://cdn.example.com/a.jpg"
 
 
 def test_prefer_local_image_url_falls_back_to_remote_on_failure(monkeypatch):

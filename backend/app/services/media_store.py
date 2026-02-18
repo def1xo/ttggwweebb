@@ -1,5 +1,6 @@
 import os
 import hashlib
+import imghdr
 import re
 from uuid import uuid4
 from pathlib import Path
@@ -114,21 +115,25 @@ def save_remote_image_to_local(
     folder: str = "products",
     timeout_sec: int = 20,
     filename_hint: str | None = None,
+    referer: str | None = None,
 ) -> str:
     """Download an image from URL and save to local uploads, return public URL."""
     u = (url or "").strip()
     if not u.lower().startswith(("http://", "https://")):
         raise ValueError("unsupported remote image url")
 
+    headers = {"User-Agent": "defshop-media-fetch/1.0"}
+    if referer:
+        headers["Referer"] = str(referer).strip()
+
     try:
-        resp = requests.get(u, timeout=timeout_sec, headers={"User-Agent": "defshop-media-fetch/1.0"})
+        resp = requests.get(u, timeout=timeout_sec, headers=headers)
         resp.raise_for_status()
     except Exception as exc:
         raise ValueError(f"failed to download image: {exc}")
 
+    data = resp.content or b""
     ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
-    if not ctype.startswith("image/"):
-        raise ValueError("remote url is not an image")
 
     ext_map = {
         "image/jpeg": ".jpg",
@@ -137,9 +142,21 @@ def save_remote_image_to_local(
         "image/webp": ".webp",
     }
     url_ext = os.path.splitext(urlparse(u).path)[1].lower()
-    ext = ext_map.get(ctype, url_ext if url_ext in ALLOWED_EXTS_IMAGE else ".jpg")
 
-    data = resp.content or b""
+    guessed = (imghdr.what(None, h=data[:128]) or "").lower()
+    guessed_ext_map = {
+        "jpeg": ".jpg",
+        "png": ".png",
+        "webp": ".webp",
+    }
+    guessed_ext = guessed_ext_map.get(guessed)
+
+    is_image_payload = bool(ctype.startswith("image/") or guessed_ext or (url_ext in ALLOWED_EXTS_IMAGE))
+    if not is_image_payload:
+        raise ValueError("remote url is not an image")
+
+    ext = ext_map.get(ctype) or guessed_ext or (url_ext if url_ext in ALLOWED_EXTS_IMAGE else ".jpg")
+
     if len(data) == 0:
         raise ValueError("empty image payload")
     if len(data) > MAX_UPLOAD_BYTES:

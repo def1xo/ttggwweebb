@@ -4,6 +4,7 @@ import logging
 import os
 from decimal import Decimal
 import re
+from urllib.parse import urljoin, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from celery.result import AsyncResult
@@ -73,8 +74,31 @@ def _split_color_tokens(raw: str | None) -> list[str]:
     return out
 
 
-def _prefer_local_image_url(url: str | None, *, title_hint: str | None = None) -> str | None:
-    normalized_u = str(url or "").strip()
+def _resolve_source_image_url(raw_url: str | None, source_url: str) -> str | None:
+    raw = str(raw_url or "").strip()
+    if not raw:
+        return None
+    low = raw.lower()
+    if low.startswith(("data:", "blob:")):
+        return None
+    if low.startswith("//"):
+        return f"https:{raw}"
+    if low.startswith(("http://", "https://", "/uploads/", "uploads/")):
+        return raw
+    src = str(source_url or "").strip()
+    if not src:
+        return raw
+    try:
+        parsed = urlparse(src)
+        if not parsed.scheme or not parsed.netloc:
+            return raw
+        return urljoin(src, raw)
+    except Exception:
+        return raw
+
+
+def _prefer_local_image_url(url: str | None, *, title_hint: str | None = None, source_page_url: str | None = None) -> str | None:
+    normalized_u = _resolve_source_image_url(url, source_page_url or "") or ""
     if not normalized_u:
         return None
     if not normalized_u.lower().startswith(("http://", "https://")):
@@ -84,6 +108,7 @@ def _prefer_local_image_url(url: str | None, *, title_hint: str | None = None) -
             normalized_u,
             folder="products/photos",
             filename_hint=title_hint,
+            referer=source_page_url,
         )
         if local_candidate:
             return local_candidate
@@ -998,7 +1023,7 @@ def import_products_from_sources(
 
                 image_urls: list[str] = []
                 for u in [image_url, *row_image_urls]:
-                    uu = str(u or "").strip()
+                    uu = _resolve_source_image_url(u, src_url)
                     if uu and uu not in image_urls:
                         image_urls.append(uu)
 
@@ -1006,7 +1031,7 @@ def import_products_from_sources(
                 # across devices and not affected by source-side hotlink limits.
                 localized_image_urls: list[str] = []
                 for img_u in image_urls:
-                    local_u = _prefer_local_image_url(img_u, title_hint=title)
+                    local_u = _prefer_local_image_url(img_u, title_hint=title, source_page_url=src_url)
                     if local_u and local_u not in localized_image_urls:
                         localized_image_urls.append(local_u)
 
@@ -1023,7 +1048,7 @@ def import_products_from_sources(
                         searched = []
                     for remote_u in searched:
                         try:
-                            local_u = media_store.save_remote_image_to_local(remote_u, folder="products/photos", filename_hint=title)
+                            local_u = media_store.save_remote_image_to_local(remote_u, folder="products/photos", filename_hint=title, referer=src_url)
                         except Exception:
                             continue
                         if local_u and local_u not in image_urls:
@@ -1042,7 +1067,7 @@ def import_products_from_sources(
                             matched_meta = known_item_by_image_url.get(sim_url) or {}
                             if _title_key(str(matched_meta.get("title") or "")) != _title_key(title):
                                 continue
-                            final_sim_url = _prefer_local_image_url(sim_url, title_hint=title)
+                            final_sim_url = _prefer_local_image_url(sim_url, title_hint=title, source_page_url=src_url)
                             if not final_sim_url or final_sim_url in image_urls:
                                 continue
                             image_urls.append(final_sim_url)
