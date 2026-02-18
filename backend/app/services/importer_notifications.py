@@ -37,6 +37,7 @@ COLOR_RE = re.compile(r'цвет(?:а|ов)?[:\s]*([A-Za-zА-Яа-яЁё0-9,#\s\
 HASHTAG_RE = re.compile(r'#([\w\-А-Яа-яёЁ]+)', flags=re.UNICODE)
 STOCK_RE = re.compile(r'(?:остаток|в\s*наличии|наличие|stock|склад|qty|кол-?во|количество)[:\s\-]*([0-9]{1,5})', flags=re.IGNORECASE)
 RRC_KEYWORDS_RE = re.compile(r'(?:ррц|rrc|мрц|mrc|розниц(?:а|ная)?\s*цена|retail)[:\s\-]*([0-9][0-9\s,.\u00A0]*)', flags=re.IGNORECASE)
+URL_RE = re.compile(r"https?://[^\s<>\"'']+", flags=re.IGNORECASE)
 
 IMPORT_FALLBACK_STOCK_QTY = 9_999
 RRC_DISCOUNT_RUB = Decimal("300")
@@ -209,7 +210,26 @@ def _extract_sizes(text: Optional[str]) -> List[str]:
 
 
 def _extract_size_stock_map(text: Optional[str]) -> Dict[str, int]:
-    return _sheet_extract_size_stock_map(text)
+    parsed = _sheet_extract_size_stock_map(text)
+    if parsed:
+        return parsed
+    if not text:
+        return {}
+
+    # Conservative fallback for patterns like "41(0шт), 42(1шт)".
+    # Keep this strict to avoid treating price lines as size-stock rows.
+    out: Dict[str, int] = {}
+    for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)\s*\(\s*(\d{1,4})\s*(?:шт|pcs|pc)?\s*\)", text, flags=re.IGNORECASE):
+        size = str(m.group(1) or "").replace(",", ".").strip()
+        qty_raw = str(m.group(2) or "").strip()
+        if not size or not qty_raw:
+            continue
+        try:
+            qty = max(0, int(qty_raw))
+        except Exception:
+            continue
+        out[size] = qty
+    return out
 
 
 def _extract_colors(text: Optional[str]) -> List[str]:
@@ -250,6 +270,20 @@ def _extract_stock_quantity(text: Optional[str], payload: Optional[Dict[str, Any
         except Exception:
             return None
     return None
+
+
+def _extract_urls_from_text(text: Optional[str]) -> List[str]:
+    if not text:
+        return []
+    out: List[str] = []
+    seen = set()
+    for m in URL_RE.finditer(text):
+        u = str(m.group(0) or "").strip().rstrip(").,;!")
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        out.append(u)
+    return out
 
 def _split_image_candidates(raw: Any) -> List[str]:
     if raw is None:
@@ -453,7 +487,12 @@ def _get_or_create_size(db: Session, label: str):
 
 def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = False) -> Optional[models.Product]:
     text = (payload.get("text") or payload.get("caption") or "") or ""
-    images = _normalize_image_urls(payload)
+    payload_with_text_links = dict(payload or {})
+    text_links = _extract_urls_from_text(text)
+    if text_links:
+        merged = list(payload_with_text_links.get("image_urls") or []) + text_links
+        payload_with_text_links["image_urls"] = merged
+    images = _normalize_image_urls(payload_with_text_links)
     title = None
     for line in (text.splitlines() if text else []):
         ln = line.strip()

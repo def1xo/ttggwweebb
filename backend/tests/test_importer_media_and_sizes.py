@@ -78,3 +78,34 @@ def test_normalize_image_urls_splits_and_prefers_non_thumbnail_urls():
         "https://cdn.example.com/b.jpg",
         "https://cdn.example.com/c.jpg",
     ]
+
+
+
+def test_parse_and_save_post_uses_shop_link_from_text_when_no_direct_images(tmp_db, monkeypatch):
+    db = tmp_db
+
+    def fake_expand(url: str):
+        assert "shop-vkus.example" in url
+        return ["https://cdn.example.com/full-1.jpg", "https://cdn.example.com/full-2.jpg"]
+
+    monkeypatch.setattr(importer, "_expand_gallery_url_to_images", fake_expand)
+
+    prod = parse_and_save_post(
+        db,
+        {
+            "message_id": 77701,
+            "text": "#sneakers\nКроссы\nhttps://shop-vkus.example/item/abc?single=true",
+            "image_urls": [],
+        },
+    )
+    assert prod is not None
+    assert prod.default_image == "https://cdn.example.com/full-1.jpg"
+
+    urls = [x.url for x in (prod.images or [])]
+    assert urls == ["https://cdn.example.com/full-1.jpg", "https://cdn.example.com/full-2.jpg"]
+
+
+
+def test_extract_size_stock_map_fallback_for_42_1sht():
+    parsed = importer._extract_size_stock_map("в наличии: 41(0шт), 42(1шт), 43(0шт)")
+    assert parsed == {"41": 0, "42": 1, "43": 0}
