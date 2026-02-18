@@ -371,8 +371,9 @@ def supplier_auto_import_24h_task():
             "ai_description_enabled": True,
             "use_avito_pricing": False,
             "avito_max_pages": 1,
-            "max_items_per_source": 2500,
-            "fetch_timeout_sec": 60,
+            "max_items_per_source": 1_000_000,
+            "fetch_timeout_sec": 180,
+            "tg_fallback_limit": 1_000_000,
         }
         return _run_supplier_import(db, payload)
     except Exception as exc:

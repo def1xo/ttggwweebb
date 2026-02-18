@@ -271,18 +271,32 @@ def test_prefer_local_image_url_uses_localized_url(monkeypatch):
     assert asi._prefer_local_image_url("https://cdn.example.com/a.jpg") == "/uploads/products/a.jpg"
 
 
-def test_import_products_in_defaults_allow_large_supplier_batches():
+def test_import_products_in_defaults_allow_large_supplier_batches(monkeypatch):
+    monkeypatch.delenv("SUPPLIER_IMPORT_MAX_ITEMS_PER_SOURCE", raising=False)
+    monkeypatch.delenv("SUPPLIER_IMPORT_FETCH_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("SUPPLIER_IMPORT_TG_FALLBACK_LIMIT", raising=False)
     payload = asi.ImportProductsIn(source_ids=[1])
-    assert payload.max_items_per_source == 2500
-    assert payload.fetch_timeout_sec == 60
+    assert payload.max_items_per_source == 1_000_000
+    assert payload.fetch_timeout_sec == 180
+    assert payload.tg_fallback_limit == 1_000_000
 
 
 def test_import_products_in_rejects_too_large_batch_size():
     try:
-        asi.ImportProductsIn(source_ids=[1], max_items_per_source=20000)
+        asi.ImportProductsIn(source_ids=[1], max_items_per_source=2_000_000)
         assert False, "expected validation error"
     except Exception as exc:
         assert "max_items_per_source" in str(exc)
+
+
+def test_import_products_in_reads_env_overrides(monkeypatch):
+    monkeypatch.setenv("SUPPLIER_IMPORT_MAX_ITEMS_PER_SOURCE", "500000")
+    monkeypatch.setenv("SUPPLIER_IMPORT_FETCH_TIMEOUT_SEC", "240")
+    monkeypatch.setenv("SUPPLIER_IMPORT_TG_FALLBACK_LIMIT", "750000")
+    payload = asi.ImportProductsIn(source_ids=[1])
+    assert payload.max_items_per_source == 500000
+    assert payload.fetch_timeout_sec == 240
+    assert payload.tg_fallback_limit == 750000
 
 
 def test_classify_import_error_codes():

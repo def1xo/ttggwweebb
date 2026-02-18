@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from decimal import Decimal
 import re
 
@@ -85,6 +86,28 @@ def _prefer_local_image_url(url: str | None) -> str | None:
     except Exception:
         pass
     return normalized_u
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
+def _default_max_items_per_source() -> int:
+    return _env_int("SUPPLIER_IMPORT_MAX_ITEMS_PER_SOURCE", 1_000_000)
+
+
+def _default_fetch_timeout_sec() -> int:
+    return _env_int("SUPPLIER_IMPORT_FETCH_TIMEOUT_SEC", 180)
+
+
+def _default_tg_fallback_limit() -> int:
+    return _env_int("SUPPLIER_IMPORT_TG_FALLBACK_LIMIT", 1_000_000)
 
 
 def _classify_import_error(exc: Exception) -> str:
@@ -410,9 +433,10 @@ def analyze_stored_sources(payload: AnalyzeStoredSourcesIn, _admin=Depends(get_c
 
 
 class ImportProductsIn(BaseModel):
-    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=300)
-    max_items_per_source: int = Field(default=2500, ge=1, le=10000)
-    fetch_timeout_sec: int = Field(default=60, ge=10, le=300)
+    source_ids: list[int] = Field(default_factory=list, min_items=1, max_items=1_000_000)
+    max_items_per_source: int = Field(default_factory=_default_max_items_per_source, ge=1, le=1_000_000)
+    fetch_timeout_sec: int = Field(default_factory=_default_fetch_timeout_sec, ge=10, le=3600)
+    tg_fallback_limit: int = Field(default_factory=_default_tg_fallback_limit, ge=1, le=1_000_000)
     dry_run: bool = True
     publish_visible: bool = False
     ai_style_description: bool = True
@@ -852,7 +876,7 @@ def import_products_from_sources(
             rows = preview.get("rows_preview") or []
             items = extract_catalog_items(rows, max_items=payload.max_items_per_source)
             if not items and "t.me/" in src_url:
-                imgs = extract_image_urls_from_html_page(src_url, limit=min(payload.max_items_per_source, 30))
+                imgs = extract_image_urls_from_html_page(src_url, limit=min(payload.max_items_per_source, payload.tg_fallback_limit))
                 items = [
                     {
                         "title": f"Позиция из TG #{i+1}",
@@ -1227,8 +1251,9 @@ def run_auto_import_now(
             "ai_description_enabled": True,
             "use_avito_pricing": False,
             "avito_max_pages": 1,
-            "max_items_per_source": 2500,
-            "fetch_timeout_sec": 60,
+            "max_items_per_source": 1_000_000,
+            "fetch_timeout_sec": 180,
+            "tg_fallback_limit": 1_000_000,
         }
     })
 
