@@ -473,30 +473,42 @@ def split_size_tokens(raw: Any) -> list[str]:
     if not txt:
         return []
     txt = txt.replace("РАЗМЕР", " ").replace("SIZE", " ")
+    txt = txt.replace("–", "-").replace("—", "-").replace("−", "-")
     out: list[str] = []
+
+    def _push(token: str) -> None:
+        if token and token not in out:
+            out.append(token)
+
+    # numeric ranges in any textual form, e.g. "41-45", "41–45"
+    for a, b in re.findall(r"\b(\d{2,3})\s*-\s*(\d{2,3})\b", txt):
+        try:
+            aa = int(a)
+            bb = int(b)
+        except Exception:
+            continue
+        if aa <= bb and bb - aa <= 8:
+            for size_num in range(aa, bb + 1):
+                _push(str(size_num))
+
     for chunk in re.split(r"[\s,;|/]+", txt):
         token = chunk.strip().strip(".")
         if not token:
             continue
+
         if "-" in token and re.match(r"^[0-9]{2,3}-[0-9]{2,3}$", token):
-            a, b = token.split("-", 1)
-            try:
-                aa = int(a)
-                bb = int(b)
-                if aa <= bb and bb - aa <= 6:
-                    for size_num in range(aa, bb + 1):
-                        val = str(size_num)
-                        if val not in out:
-                            out.append(val)
-                    continue
-            except Exception:
-                pass
+            continue
+
         cleaned = re.sub(r"[^A-Z0-9+-]", "", token)
         if not cleaned:
             continue
         if re.match(r"^(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3})$", cleaned):
-            if cleaned not in out:
-                out.append(cleaned)
+            _push(cleaned)
+
+    # fallback parser for formats like "46(S)-✅ 48(M)-✅ 50(L)-✅"
+    for token in re.findall(r"\b(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3})\b", txt):
+        _push(token)
+
     return out
 
 
@@ -525,6 +537,7 @@ _COLOR_CANONICAL_MAP: tuple[tuple[str, str], ...] = (
 
 
 MIN_REASONABLE_DROPSHIP_PRICE = 300
+MIN_ABSOLUTE_DROPSHIP_PRICE = 100
 
 
 def _is_size_only_title(text: str) -> bool:
@@ -691,8 +704,20 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         raw_price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
         excluded = {x for x in [idx_title, idx_size, idx_stock] if x is not None}
         price = _coerce_row_price(raw_price, row, exclude_indices=excluded)
-        if price is None or price < MIN_REASONABLE_DROPSHIP_PRICE:
+        if price is None or price < MIN_ABSOLUTE_DROPSHIP_PRICE:
             continue
+
+        # Some supplier sheets contain legitimately low wholesale prices
+        # (e.g. accessories), so do not hard-drop them if they are >=100.
+        if price < MIN_REASONABLE_DROPSHIP_PRICE:
+            excluded_low = {x for x in [idx_title, idx_size, idx_stock] if x is not None}
+            alt_low = [
+                x
+                for x in _price_candidates_from_row(row, exclude_indices=excluded_low)
+                if x >= MIN_REASONABLE_DROPSHIP_PRICE
+            ]
+            if alt_low:
+                price = float(max(alt_low))
 
         # Guard against accidentally selected retail-like column.
         # If picked price is very high, but the row contains plausible purchase price,
