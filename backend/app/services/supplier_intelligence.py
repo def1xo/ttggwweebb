@@ -1159,6 +1159,31 @@ def _normalize_telegram_post_url(raw_url: str) -> str:
     return u
 
 
+def _extract_tg_cdn_urls_from_blob(blob: str) -> list[str]:
+    txt = str(blob or "")
+    out: list[str] = []
+
+    def _push(u: str):
+        uu = str(u or "").strip().strip("\"'")
+        if not uu:
+            return
+        uu = uu.replace('\\/', '/')
+        if uu.startswith('//'):
+            uu = 'https:' + uu
+        if uu.startswith('http://') or uu.startswith('https://'):
+            if uu not in out:
+                out.append(uu)
+
+    for m in re.findall(r'https?://cdn\d?\.telesco\.pe/file/[^"\'\s<)]+', txt, flags=re.I):
+        _push(m)
+    for m in re.findall(r'https?:\\/\\/cdn\d?\.telesco\.pe\\/file\\/[^"\'\s<)]+', txt, flags=re.I):
+        _push(m)
+    for m in re.findall(r'url\(([^)]+)\)', txt, flags=re.I):
+        _push(m)
+
+    return out
+
+
 def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: int = 20) -> list[str]:
     url = _normalize_telegram_post_url(url)
     headers = {"User-Agent": "defshop-intel-bot/1.0"}
@@ -1204,10 +1229,25 @@ def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: in
                 for m in re.findall(r"background-image:url\(([^)]+)\)", block, flags=re.I):
                     _push(m, tg_public)
 
-                for m in re.findall(r'https://cdn\d?\.telesco\.pe/file/[^"\'\s<)]+', block, flags=re.I):
+                for m in _extract_tg_cdn_urls_from_blob(block):
                     _push(m, tg_public)
         except Exception:
             pass
+
+    # fallback for Telegram pages where CDN links are escaped in scripts
+    if tg_m and len(urls) <= 1:
+        for m in _extract_tg_cdn_urls_from_blob(html):
+            _push(m, url)
+        if len(urls) <= 1:
+            try:
+                embed_url = _normalize_telegram_post_url(str(url).strip()) + "?embed=1&mode=tme"
+                embed_html = _http_get_with_retries(embed_url, timeout_sec=timeout_sec, headers=headers, max_attempts=2).text or ""
+                for m in _extract_tg_cdn_urls_from_blob(embed_html):
+                    _push(m, embed_url)
+                for m in re.findall(r"<img[^>]+src=[\"']([^\"']+)[\"']", embed_html, flags=re.I):
+                    _push(m, embed_url)
+            except Exception:
+                pass
 
     # og/twitter image meta
     for m in re.findall(r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]+content=["\']([^"\']+)["\']', html, flags=re.I):

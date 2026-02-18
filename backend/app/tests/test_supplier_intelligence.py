@@ -887,3 +887,48 @@ def test_extract_catalog_items_appends_sidecar_photo_link_rows_to_previous_item(
         "https://t.me/venomdrop12/41/10151",
         "https://t.me/venomdrop12/599/672",
     ]
+
+
+
+def test_extract_shop_vkus_stock_map_from_text_blob():
+    item = {
+        "title": "Кроссы",
+        "description": "Размеры и наличие: 41(0шт), 42(1шт), 43(0шт)",
+    }
+    got = asi._extract_shop_vkus_stock_map(item)
+    assert got == {"41": 0, "42": 1, "43": 0}
+
+
+def test_extract_shop_vkus_stock_map_empty_when_no_size_qty_pairs():
+    item = {
+        "title": "Кроссы",
+        "description": "Размеры: 41,42,43 без указания остатков",
+    }
+    got = asi._extract_shop_vkus_stock_map(item)
+    assert got == {}
+
+
+
+def test_extract_image_urls_from_html_page_reads_escaped_telescope_urls(monkeypatch):
+    html_single = '<html><head><meta property="og:image" content="https://cdn4.telesco.pe/file/single.jpg"></head></html>'
+    html_public = (
+        '<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="shop_vkus/10">'
+        '<script>var x="https:\/\/cdn4.telesco.pe\/file\/a.jpg";</script>'
+        '<script>var y="https:\/\/cdn4.telesco.pe\/file\/b.jpg";</script>'
+        '</div></div>'
+    )
+
+    def fake_get(url, **kwargs):
+        if url == "https://t.me/shop_vkus/10":
+            return type("R", (), {"text": html_single})
+        if url == "https://t.me/s/shop_vkus/10":
+            return type("R", (), {"text": html_public})
+        return type("R", (), {"text": ""})
+
+    monkeypatch.setattr(si, "_http_get_with_retries", fake_get)
+
+    out = si.extract_image_urls_from_html_page("https://t.me/shop_vkus/10?single", limit=5)
+    assert out[:2] == [
+        "https://cdn4.telesco.pe/file/a.jpg",
+        "https://cdn4.telesco.pe/file/b.jpg",
+    ]
