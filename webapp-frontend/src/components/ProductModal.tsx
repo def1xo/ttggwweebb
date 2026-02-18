@@ -70,7 +70,8 @@ export default function ProductModal({
 
   const [title, setTitle] = useState("");
   const [basePrice, setBasePrice] = useState<string>("");
-  const [stockQuantity, setStockQuantity] = useState<string>("0");
+  const [stockQuantity, setStockQuantity] = useState<string>("9999");
+  const [costPrice, setCostPrice] = useState<string>("");
   const [description, setDescription] = useState("");
   const [categoryId, setCategoryId] = useState<string>("");
   const [visible, setVisible] = useState(true);
@@ -104,11 +105,13 @@ export default function ProductModal({
     const p: any = product || {};
     setTitle(p.title || p.name || "");
     setBasePrice(String(p.base_price ?? p.price ?? ""));
+    setStockQuantity(p.stock_quantity != null ? String(p.stock_quantity) : "9999");
     setDescription(p.description || "");
     setCategoryId(p.category_id ? String(p.category_id) : "");
     setVisible(p.visible ?? true);
     setSizesInput((p.sizes && Array.isArray(p.sizes) ? p.sizes.join(", ") : "") || "");
     setColorInput((p.colors && Array.isArray(p.colors) ? p.colors.join(" / ") : "") || "");
+    setCostPrice(p.cost_price != null ? String(p.cost_price) : "");
     setFiles([]);
     setCategoryOpen(false);
   }, [open, product]);
@@ -142,6 +145,7 @@ export default function ProductModal({
         category_id: categoryId ? Number(categoryId) : undefined,
         visible: !!visible,
         stock_quantity: Math.max(0, Number(stockQuantity || 0)),
+        cost_price: costPrice === "" ? undefined : Number(costPrice),
       };
       if (parsedSizes.length) payload.sizes = parsedSizes.join(",");
       if (parsedColors.length) payload.color = parsedColors.join(", ");
@@ -228,10 +232,15 @@ export default function ProductModal({
           </div>
 
           <div style={{ display: "grid", gap: 10 }}>
-            <label className="small-muted">Остаток (на все варианты)</label>
-            <input className="input" type="number" min={0} step={1} value={stockQuantity} onChange={(e) => setStockQuantity(e.target.value)} placeholder="0" />
+            <label className="small-muted">Остаток (на все варианты, по умолчанию 9999 = квазибесконечно)</label>
+            <input className="input" type="number" min={0} step={1} value={stockQuantity} onChange={(e) => setStockQuantity(e.target.value)} placeholder="9999" />
           </div>
 
+
+          <div style={{ display: "grid", gap: 10 }}>
+            <label className="small-muted">Закуп (себестоимость, ₽)</label>
+            <input className="input" type="number" min={0} step={1} value={costPrice} onChange={(e) => setCostPrice(e.target.value)} placeholder="например 2200" />
+          </div>
           <div style={{ display: "grid", gap: 10 }}>
             <label className="small-muted">Описание</label>
             <textarea className="input" value={description} onChange={(e) => setDescription(e.target.value)} rows={4} placeholder="Материал, особенности, советы по уходу..." />

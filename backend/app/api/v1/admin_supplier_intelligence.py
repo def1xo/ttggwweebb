@@ -18,6 +18,7 @@ from app.api.dependencies import get_current_admin_user, get_db
 from app.db import models
 from app.services.importer_notifications import slugify
 from app.services import media_store
+from app.services.supplier_profiles import normalize_title_for_supplier
 from app.services.supplier_intelligence import (
     SupplierOffer,
     ensure_min_markup_price,
@@ -52,7 +53,7 @@ ERROR_CODE_UNKNOWN = "unknown"
 TOP_FAILING_SOURCES_LIMIT = 5
 ERROR_SAMPLES_LIMIT = 3
 ERROR_MESSAGE_MAX_LEN = 500
-IMPORT_FALLBACK_STOCK_QTY = 1
+IMPORT_FALLBACK_STOCK_QTY = 9_999
 RRC_DISCOUNT_RUB = 300
 MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT = 40
 
@@ -561,6 +562,23 @@ class SupplierImportTaskStatusOut(BaseModel):
     result: dict | None = None
 
 
+class ImportQualityAuditItem(BaseModel):
+    product_id: int
+    title: str
+    category_id: int | None = None
+    supplier: str | None = None
+    issue: str
+
+
+class ImportQualityAuditOut(BaseModel):
+    total_visible: int
+    one_photo_count: int
+    no_size_count: int
+    duplicate_title_count: int
+    no_stock_count: int
+    sample_items: list[ImportQualityAuditItem] = Field(default_factory=list)
+
+
 def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
     return ImportSourceReport(source_id=source_id, url=source_url)
 
@@ -801,6 +819,8 @@ def import_products_from_sources(
     supplier_has_table_source: dict[str, bool] = {}
     supplier_tg_images_by_title: dict[str, dict[str, list[str]]] = {}
     supplier_tg_fallback_images: dict[str, list[str]] = {}
+    existing_product_by_supplier_title: dict[tuple[str, str], models.Product] = {}
+    existing_product_by_global_title: dict[tuple[int, str], models.Product] = {}
 
     def _title_key(raw_title: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
@@ -862,6 +882,50 @@ def import_products_from_sources(
     def _is_placeholder_title(raw_title: str | None) -> bool:
         return _title_key(raw_title).startswith("позиция из tg #")
 
+
+    def _find_existing_supplier_product(supplier_key: str, supplier_name: str | None, title_key: str) -> models.Product | None:
+        cache_key = (supplier_key, title_key)
+        cached = existing_product_by_supplier_title.get(cache_key)
+        if cached is not None:
+            return cached
+        if not supplier_key or not title_key:
+            return None
+        rows = (
+            db.query(models.Product)
+            .filter(models.Product.import_supplier_name == supplier_name)
+            .order_by(models.Product.id.desc())
+            .limit(300)
+            .all()
+        )
+        for cand in rows:
+            cand_title_key = _title_key(_group_title(getattr(cand, "title", "") or getattr(cand, "title", "")) or getattr(cand, "title", ""))
+            if cand_title_key == title_key:
+                existing_product_by_supplier_title[cache_key] = cand
+                return cand
+        return None
+
+
+
+    def _find_existing_global_product(category_id: int, title_key: str) -> models.Product | None:
+        cache_key = (int(category_id), title_key)
+        cached = existing_product_by_global_title.get(cache_key)
+        if cached is not None:
+            return cached
+        if not title_key:
+            return None
+        rows = (
+            db.query(models.Product)
+            .filter(models.Product.category_id == int(category_id))
+            .order_by(models.Product.id.desc())
+            .limit(500)
+            .all()
+        )
+        for cand in rows:
+            cand_title_key = _title_key(_group_title(getattr(cand, "title", "") or getattr(cand, "title", "")) or getattr(cand, "title", ""))
+            if cand_title_key == title_key:
+                existing_product_by_global_title[cache_key] = cand
+                return cand
+        return None
     def get_or_create_category(name: str) -> models.Category:
         nonlocal created_categories
         n = (name or "Разное").strip()[:255] or "Разное"
@@ -1028,7 +1092,7 @@ def import_products_from_sources(
                 ]
             source_items_map[int(src.id)] = items
             for it in items:
-                title = str(it.get("title") or "").strip()
+                title = normalize_title_for_supplier(str(it.get("title") or "").strip(), getattr(src, "supplier_name", None))
                 ds_price = float(it.get("dropship_price") or 0)
                 if title and ds_price > 0 and not _is_placeholder_title(title):
                     k = _title_key(title)
@@ -1079,6 +1143,7 @@ def import_products_from_sources(
         src_kind = detect_source_kind(src_url)
         supplier_key = _supplier_key(getattr(src, "supplier_name", None))
         report = _new_source_report(source_id=int(src.id), source_url=src_url)
+        touched_product_ids: set[int] = set()
         try:
             items = source_items_map.get(int(src.id), [])
         except Exception as exc:
@@ -1098,7 +1163,7 @@ def import_products_from_sources(
 
         for it in items:
             try:
-                title = str(it.get("title") or "").strip()
+                title = normalize_title_for_supplier(str(it.get("title") or "").strip(), getattr(src, "supplier_name", None))
                 ds_price = float(it.get("dropship_price") or 0)
                 is_tg_fallback = bool(it.get("__tg_fallback__")) or _is_placeholder_title(title)
                 if is_tg_fallback:
@@ -1146,6 +1211,10 @@ def import_products_from_sources(
                 p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
                 if not p:
                     p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
+                if not p and supplier_key:
+                    p = _find_existing_supplier_product(supplier_key, getattr(src, "supplier_name", None), _title_key(effective_title))
+                if not p:
+                    p = _find_existing_global_product(int(category.id), _title_key(effective_title))
 
                 desc = str(it.get("description") or "").strip()
                 if payload.ai_style_description and not desc:
@@ -1192,12 +1261,11 @@ def import_products_from_sources(
                 # expand telegram post links into direct image URLs with safety caps,
                 # otherwise large imports can spend minutes on network lookups.
                 expanded_image_urls: list[str] = []
-                has_direct_image = any(_looks_like_direct_image_url(u) for u in image_urls)
                 for candidate in image_urls:
                     cu = str(candidate or "").strip()
                     if not cu:
                         continue
-                    if ("t.me/" in cu or "telegram.me/" in cu) and not has_direct_image:
+                    if "t.me/" in cu or "telegram.me/" in cu:
                         tg_media = telegram_media_cache.get(cu)
                         if tg_media is None:
                             if telegram_media_expand_count >= MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT:
@@ -1214,9 +1282,11 @@ def import_products_from_sources(
                                 uu = _resolve_source_image_url(media_u, cu)
                                 if uu and uu not in expanded_image_urls:
                                     expanded_image_urls.append(uu)
+                            # do not keep telegram page URL in final media list
                             continue
-                    if cu not in expanded_image_urls:
-                        expanded_image_urls.append(cu)
+                    uu = _resolve_source_image_url(cu, src_url)
+                    if uu and uu not in expanded_image_urls:
+                        expanded_image_urls.append(uu)
 
                 if expanded_image_urls:
                     image_urls = expanded_image_urls
@@ -1308,7 +1378,9 @@ def import_products_from_sources(
                         and current_base < 1000
                         and re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title)
                     )
-                    if sale_price > 0 and (current_base <= 0 or should_fix_low_price):
+                    # keep best offer among suppliers: if newly calculated sale is lower,
+                    # update retail price downward as well (while keeping low-price guard).
+                    if sale_price > 0 and (current_base <= 0 or should_fix_low_price or sale_price < current_base):
                         p.base_price = Decimal(str(sale_price))
                         changed = True
                     if image_url and not p.default_image:
@@ -1367,6 +1439,10 @@ def import_products_from_sources(
 
                 if p:
                     remember_product_candidate(base_title_key, int(p.id), sig)
+                    touched_product_ids.add(int(p.id))
+                    if supplier_key:
+                        existing_product_by_supplier_title[(supplier_key, _title_key(effective_title))] = p
+                    existing_product_by_global_title[(int(category.id), _title_key(effective_title))] = p
 
                 # Color policy:
                 # - if source has only one color, do not force color variants;
@@ -1458,8 +1534,16 @@ def import_products_from_sources(
                         else:
                             if float(variant.price or 0) <= 0 and sale_price > 0:
                                 variant.price = Decimal(str(sale_price))
-                            if per_variant_stock > 0 and int(variant.stock_quantity or 0) <= 0:
+
+                            # Stock update policy:
+                            # - when stock map is explicit, always trust and overwrite;
+                            # - when row has explicit zero stock, propagate zero;
+                            # - otherwise keep previous positive stock unless empty.
+                            if has_stock_map or stock_qty == 0:
+                                variant.stock_quantity = max(0, int(per_variant_stock))
+                            elif per_variant_stock > 0 and int(variant.stock_quantity or 0) <= 0:
                                 variant.stock_quantity = per_variant_stock
+
                             if image_urls and not variant.images:
                                 variant.images = image_urls
                             elif image_url and not variant.images:
@@ -1476,6 +1560,22 @@ def import_products_from_sources(
                 if not payload.dry_run:
                     db.rollback()
                 _register_source_error(report, exc)
+
+        if not payload.dry_run and src_kind in {"google_sheet", "moysklad_catalog", "generic_html"} and items:
+            stale_q = db.query(models.Product).filter(models.Product.import_source_url == src_url)
+            if src_kind:
+                stale_q = stale_q.filter(models.Product.import_source_kind == src_kind)
+            if supplier_key:
+                stale_q = stale_q.filter(models.Product.import_supplier_name == getattr(src, "supplier_name", None))
+            if touched_product_ids:
+                stale_q = stale_q.filter(~models.Product.id.in_(sorted(touched_product_ids)))
+            stale_products = stale_q.all()
+            if stale_products:
+                for stale in stale_products:
+                    for vv in (getattr(stale, "variants", []) or []):
+                        vv.stock_quantity = 0
+                        db.add(vv)
+                db.commit()
 
         source_reports.append(report)
 
@@ -1576,6 +1676,73 @@ def get_supplier_import_task_status(
         successful=bool(result.successful()),
         failed=bool(result.failed()),
         result=payload,
+    )
+
+
+@router.get("/supplier-intelligence/import-quality-audit", response_model=ImportQualityAuditOut)
+def import_quality_audit(
+    sample_limit: int = 60,
+    _admin=Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    sample_limit = max(1, min(int(sample_limit or 60), 300))
+    products = db.query(models.Product).filter(models.Product.visible == True).all()  # noqa: E712
+
+    one_photo = 0
+    no_size = 0
+    duplicate_title = 0
+    no_stock = 0
+    samples: list[ImportQualityAuditItem] = []
+
+    title_buckets: dict[tuple[int | None, str], list[models.Product]] = {}
+    for p in products:
+        key = (getattr(p, "category_id", None), re.sub(r"\s+", " ", str(getattr(p, "title", "") or "").strip().lower()))
+        title_buckets.setdefault(key, []).append(p)
+
+    duplicate_ids: set[int] = set()
+    for bucket in title_buckets.values():
+        if len(bucket) > 1:
+            duplicate_title += len(bucket)
+            for p in bucket:
+                if getattr(p, "id", None):
+                    duplicate_ids.add(int(p.id))
+
+    for p in products:
+        pid = int(getattr(p, "id", 0) or 0)
+        if pid <= 0:
+            continue
+        imgs = list(getattr(p, "images", []) or [])
+        image_count = len(imgs)
+        if not image_count and getattr(p, "default_image", None):
+            image_count = 1
+        if image_count <= 1:
+            one_photo += 1
+            if len(samples) < sample_limit:
+                samples.append(ImportQualityAuditItem(product_id=pid, title=str(getattr(p, "title", "") or ""), category_id=getattr(p, "category_id", None), supplier=getattr(p, "import_supplier_name", None), issue="one_photo"))
+
+        variants = list(getattr(p, "variants", []) or [])
+        size_names = [str(getattr(getattr(v, "size", None), "name", "") or "").strip() for v in variants]
+        if not any(size_names):
+            no_size += 1
+            if len(samples) < sample_limit:
+                samples.append(ImportQualityAuditItem(product_id=pid, title=str(getattr(p, "title", "") or ""), category_id=getattr(p, "category_id", None), supplier=getattr(p, "import_supplier_name", None), issue="no_size"))
+
+        has_stock = any(int(getattr(v, "stock_quantity", 0) or 0) > 0 for v in variants)
+        if not has_stock:
+            no_stock += 1
+            if len(samples) < sample_limit:
+                samples.append(ImportQualityAuditItem(product_id=pid, title=str(getattr(p, "title", "") or ""), category_id=getattr(p, "category_id", None), supplier=getattr(p, "import_supplier_name", None), issue="no_stock"))
+
+        if pid in duplicate_ids and len(samples) < sample_limit:
+            samples.append(ImportQualityAuditItem(product_id=pid, title=str(getattr(p, "title", "") or ""), category_id=getattr(p, "category_id", None), supplier=getattr(p, "import_supplier_name", None), issue="duplicate_title"))
+
+    return ImportQualityAuditOut(
+        total_visible=len(products),
+        one_photo_count=one_photo,
+        no_size_count=no_size,
+        duplicate_title_count=duplicate_title,
+        no_stock_count=no_stock,
+        sample_items=samples,
     )
 
 
