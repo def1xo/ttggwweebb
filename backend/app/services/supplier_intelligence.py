@@ -307,16 +307,46 @@ def _norm(s: Any) -> str:
 
 
 def _to_float(raw: Any) -> float | None:
-    s = _norm(raw).replace(" ", "").replace("₽", "").replace(",", ".")
-    m = re.search(r"-?\d+(?:\.\d+)?", s)
+    s = _norm(raw)
+    if not s:
+        return None
+    s = s.replace(" ", " ").replace("₽", " ").replace("руб", " ").replace("RUB", " ")
+    m = re.search(r"-?\d[\d\s.,]*", s)
     if not m:
         return None
-    try:
-        return float(m.group(0))
-    except Exception:
+    token = m.group(0).strip().replace(" ", "")
+    if not token:
         return None
 
+    # 1) explicit thousand grouping: 1,399 / 3.099 / 12 999
+    if re.fullmatch(r"-?\d{1,3}(?:[.,]\d{3})+", token):
+        try:
+            return float(token.replace(",", "").replace(".", ""))
+        except Exception:
+            return None
 
+    # 2) classic decimal forms: 1299.50 / 1299,50
+    if re.fullmatch(r"-?\d+[.,]\d{1,2}", token):
+        try:
+            return float(token.replace(",", "."))
+        except Exception:
+            return None
+
+    # 3) ambiguous single separator with 3 trailing digits (common thousand format in supplier sheets)
+    if re.fullmatch(r"-?\d+[.,]\d{3}", token):
+        try:
+            return float(token.replace(",", "").replace(".", ""))
+        except Exception:
+            return None
+
+    # 4) fallback: remove separators and parse as integer-like value
+    compact = token.replace(",", "").replace(".", "")
+    if not re.fullmatch(r"-?\d+", compact):
+        return None
+    try:
+        return float(compact)
+    except Exception:
+        return None
 
 
 def _price_candidates_from_row(row: list[Any], exclude_indices: set[int] | None = None) -> list[float]:
@@ -408,12 +438,34 @@ def _extract_size_from_title(title: str) -> str | None:
     t = str(title or "")
     if not t:
         return None
-    # examples: "NB 9060 42", "hoodie XL", "size M"
-    m = re.search(r"(?i)\b(?:size\s*)?(XXS|XS|S|M|L|XL|XXL|XXXL|\d{2,3})\b", t)
-    if not m:
-        return None
-    return str(m.group(1)).upper()
+    # textual sizes are safe to infer directly
+    text_m = re.search(r"(?i)\b(XXS|XS|S|M|L|XL|XXL|XXXL)\b", t)
+    if text_m:
+        return str(text_m.group(1)).upper()
 
+    # explicit numeric marker is highest priority
+    num_m = re.search(r"(?i)\b(?:size|размер|eu|us|ru)\s*[:#-]?\s*(\d{2,3})\b", t)
+    if num_m:
+        try:
+            val = int(num_m.group(1))
+            if 18 <= val <= 60:
+                return str(val)
+        except Exception:
+            return None
+
+    # fallback for footwear-like titles: trailing 2-digit token (e.g. "NB 9060 black 42")
+    # keeps model numbers in middle ("Yeezy 350 v2") from becoming size.
+    if re.search(r"(?i)\b(yeezy|air\s*max|jordan|nike|adidas|new\s*balance|nb|sneaker|крос|кед)\b", t):
+        tail_m = re.search(r"\b(\d{2})\s*$", t)
+        if tail_m:
+            try:
+                val = int(tail_m.group(1))
+                if 30 <= val <= 60:
+                    return str(val)
+            except Exception:
+                return None
+
+    return None
 
 
 def split_size_tokens(raw: Any) -> list[str]:
@@ -470,6 +522,48 @@ _COLOR_CANONICAL_MAP: tuple[tuple[str, str], ...] = (
 )
 
 
+
+
+MIN_REASONABLE_DROPSHIP_PRICE = 300
+
+
+def _is_size_only_title(text: str) -> bool:
+    t = str(text or "").strip().upper()
+    if not t:
+        return False
+    compact = re.sub(r"[\s\-/]+", "", t)
+    if re.fullmatch(r"\d{2,3}", compact):
+        return True
+    if re.fullmatch(r"(?:XXS|XS|S|M|L|XL|XXL|XXXL|\dXL|\dXl|\dxl)+", compact):
+        return True
+    if re.fullmatch(r"(?:XXS|XS|S|M|L|XL|XXL|XXXL|\dXL)(?:[,;/|](?:XXS|XS|S|M|L|XL|XXL|XXXL|\dXL))*", t):
+        return True
+    return False
+
+
+def _is_noise_title(text: str) -> bool:
+    t = str(text or "").strip().lower()
+    if not t:
+        return True
+    noise_tokens = (
+        "в наличии",
+        "наличие",
+        "дроп цена",
+        "drop price",
+        "оба цвета",
+        "1 цвет",
+        "2 цвет",
+        "3 цвет",
+        "4 цвет",
+        "цена:",
+        "цена ",
+    )
+    if any(tok in t for tok in noise_tokens):
+        return True
+    if _is_size_only_title(t):
+        return True
+    return False
+
 def _looks_like_title(text: str) -> bool:
     t = str(text or "").strip()
     if len(t) < 3:
@@ -477,6 +571,8 @@ def _looks_like_title(text: str) -> bool:
     if re.match(r"^https?://", t, flags=re.I):
         return False
     if re.fullmatch(r"[\d\s.,:/-]+", t):
+        return False
+    if _is_noise_title(t):
         return False
     return bool(re.search(r"[A-Za-zА-Яа-яЁё]", t))
 
@@ -593,9 +689,25 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             continue
 
         raw_price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
-        price = _coerce_row_price(raw_price, row, exclude_indices={x for x in [idx_title, idx_size, idx_stock] if x is not None})
-        if price is None or price <= 0:
+        excluded = {x for x in [idx_title, idx_size, idx_stock] if x is not None}
+        price = _coerce_row_price(raw_price, row, exclude_indices=excluded)
+        if price is None or price < MIN_REASONABLE_DROPSHIP_PRICE:
             continue
+
+        # Guard against accidentally selected retail-like column.
+        # If picked price is very high, but the row contains plausible purchase price,
+        # prefer that lower candidate.
+        if price >= 10_000:
+            exclude_with_price = set(excluded)
+            if idx_price is not None:
+                exclude_with_price.add(idx_price)
+            alt_candidates = [
+                x
+                for x in _price_candidates_from_row(row, exclude_indices=exclude_with_price)
+                if 300 <= x <= 9_999
+            ]
+            if alt_candidates:
+                price = float(max(alt_candidates))
 
         rrc_price = _to_float(row[idx_rrc]) if idx_rrc is not None and idx_rrc < len(row) else None
         color = _norm(row[idx_color]) if idx_color is not None and idx_color < len(row) else ""

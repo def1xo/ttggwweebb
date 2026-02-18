@@ -1,7 +1,11 @@
 import os
+import hashlib
+import imghdr
+import re
 from uuid import uuid4
 from pathlib import Path
 from typing import Optional, Set, Tuple
+from urllib.parse import urlparse
 
 import requests
 
@@ -97,21 +101,39 @@ def generate_presigned_put_stub(key: str, content_type: str, expires_in: int = 9
     return {"put_url": "", "object_url": f"/{UPLOAD_BASE}/{key}"}
 
 
-def save_remote_image_to_local(url: str, folder: str = "products", timeout_sec: int = 20) -> str:
+def _filename_stem_hint(raw: str | None) -> str:
+    s = str(raw or "").strip().lower()
+    if not s:
+        return ""
+    s = re.sub(r"[^a-zа-я0-9]+", "-", s, flags=re.IGNORECASE)
+    s = s.strip("-")
+    return s[:80]
+
+
+def save_remote_image_to_local(
+    url: str,
+    folder: str = "products",
+    timeout_sec: int = 20,
+    filename_hint: str | None = None,
+    referer: str | None = None,
+) -> str:
     """Download an image from URL and save to local uploads, return public URL."""
     u = (url or "").strip()
     if not u.lower().startswith(("http://", "https://")):
         raise ValueError("unsupported remote image url")
 
+    headers = {"User-Agent": "defshop-media-fetch/1.0"}
+    if referer:
+        headers["Referer"] = str(referer).strip()
+
     try:
-        resp = requests.get(u, timeout=timeout_sec, headers={"User-Agent": "defshop-media-fetch/1.0"})
+        resp = requests.get(u, timeout=timeout_sec, headers=headers)
         resp.raise_for_status()
     except Exception as exc:
         raise ValueError(f"failed to download image: {exc}")
 
+    data = resp.content or b""
     ctype = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
-    if not ctype.startswith("image/"):
-        raise ValueError("remote url is not an image")
 
     ext_map = {
         "image/jpeg": ".jpg",
@@ -119,16 +141,39 @@ def save_remote_image_to_local(url: str, folder: str = "products", timeout_sec: 
         "image/png": ".png",
         "image/webp": ".webp",
     }
-    ext = ext_map.get(ctype, ".jpg")
+    url_ext = os.path.splitext(urlparse(u).path)[1].lower()
 
-    data = resp.content or b""
+    guessed = (imghdr.what(None, h=data[:128]) or "").lower()
+    guessed_ext_map = {
+        "jpeg": ".jpg",
+        "png": ".png",
+        "webp": ".webp",
+    }
+    guessed_ext = guessed_ext_map.get(guessed)
+
+    is_image_payload = bool(ctype.startswith("image/") or guessed_ext or (url_ext in ALLOWED_EXTS_IMAGE))
+    if not is_image_payload:
+        raise ValueError("remote url is not an image")
+
+    ext = ext_map.get(ctype) or guessed_ext or (url_ext if url_ext in ALLOWED_EXTS_IMAGE else ".jpg")
+
     if len(data) == 0:
         raise ValueError("empty image payload")
     if len(data) > MAX_UPLOAD_BYTES:
         raise ValueError("remote image too large")
 
     dest_folder = _ensure_folder(folder)
-    dest_path = dest_folder / f"{uuid4().hex}{ext}"
+
+    url_hash = hashlib.sha1(u.encode("utf-8")).hexdigest()[:16]
+    for existing in dest_folder.glob(f"*_{url_hash}.*"):
+        if existing.is_file():
+            return public_url_from_path(existing)
+
+    stem = _filename_stem_hint(filename_hint)
+    if not stem:
+        parsed_name = os.path.basename(urlparse(u).path).rsplit(".", 1)[0]
+        stem = _filename_stem_hint(parsed_name) or f"image-{uuid4().hex[:8]}"
+    dest_path = dest_folder / f"{stem}_{url_hash}{ext}"
     with open(dest_path, "wb") as f:
         f.write(data)
     return public_url_from_path(dest_path)

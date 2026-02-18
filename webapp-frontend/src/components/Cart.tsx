@@ -71,14 +71,29 @@ function toIsoDateTime(ts?: string | null) {
   }
 }
 
+function normalizePromoCode(code: string): string {
+  return String(code || "").trim().replace(/\s+/g, "").toUpperCase();
+}
+
+function normalizeMediaUrl(raw: unknown): string | null {
+  if (!raw) return null;
+  const url = String(raw).trim();
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url)) return url;
+  const base = String((import.meta as any).env?.VITE_BACKEND_URL || (import.meta as any).env?.VITE_API_URL || "").trim().replace(/\/+$/, "").replace(/\/api$/, "");
+  if (url.startsWith("/")) return base ? `${base}${url}` : url;
+  return base ? `${base}/${url}` : url;
+}
+
 function pickCardImage(product: any): string | null {
   const imgs = (product?.images || product?.image_urls || product?.imageUrls || []) as any[];
-  return (
+  const raw = (
     (Array.isArray(imgs) && imgs.length ? (imgs[0]?.url || imgs[0]) : null) ||
     product?.default_image ||
     product?.image ||
     null
   );
+  return normalizeMediaUrl(raw);
 }
 
 export default function Cart() {
@@ -238,10 +253,11 @@ export default function Cart() {
   }
 
   async function onApplyPromo() {
-    if (!promo.trim()) return;
+    const normalizedPromo = normalizePromoCode(promo);
+    if (!normalizedPromo) return;
     setPromoApplying(true);
     try {
-      const res: any = await applyCartPromo(promo.trim());
+      const res: any = await applyCartPromo(normalizedPromo);
       const data = res?.data ?? res;
       if (data?.status && data?.status >= 400) {
         notify(data?.detail || "Не удалось применить промокод", "error");
@@ -271,6 +287,8 @@ export default function Cart() {
   }
 
   async function onClearCart() {
+    const ok = window.confirm("Точно очистить корзину? Это действие нельзя отменить.");
+    if (!ok) return;
     try {
       const res: any = await clearCart();
       const data = res?.data ?? res;
@@ -304,7 +322,7 @@ export default function Cart() {
         delivery_type: "pvz",
         delivery_address: pvz.trim(),
         note: note.trim() || undefined,
-        promo_code: promoApplied || promo.trim() || undefined,
+        promo_code: normalizePromoCode(promoApplied || promo) || undefined,
       };
 
       trackAnalyticsEvent({
@@ -547,6 +565,15 @@ export default function Cart() {
             </div>
           ) : null}
 
+          <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+            <button className="btn full-width-on-mobile" onClick={onPlaceOrder} disabled={placing || loading || refreshing}>
+              {placing ? "Оформляем…" : "Оформить заказ"}
+            </button>
+            <button className="btn ghost full-width-on-mobile" onClick={onClearCart} disabled={placing || loading || refreshing}>
+              Очистить
+            </button>
+          </div>
+
           {!relatedLoading && related.length > 0 ? (
             <div className="card" style={{ marginTop: 12, padding: 12 }}>
               <div style={{ fontWeight: 900, marginBottom: 8 }}>С этим берут</div>
@@ -577,14 +604,6 @@ export default function Cart() {
             </div>
           ) : null}
 
-          <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-            <button className="btn full-width-on-mobile" onClick={onPlaceOrder} disabled={placing || loading || refreshing}>
-              {placing ? "Оформляем…" : "Оформить заказ"}
-            </button>
-            <button className="btn ghost full-width-on-mobile" onClick={onClearCart} disabled={placing || loading || refreshing}>
-              Очистить
-            </button>
-          </div>
         </div>
       </div>
     </div>
