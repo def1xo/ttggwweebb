@@ -3,6 +3,7 @@
 import os
 import re
 import logging
+from urllib.parse import urljoin, urlparse, parse_qsl, urlencode, urlunparse
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Optional, Any
@@ -180,11 +181,18 @@ def _extract_sizes(text: Optional[str]) -> List[str]:
         chunk = re.split(r'\b(?:цвет(?:а|ов)?|цена|наличие|остаток|склад|арт(?:икул)?|код)\b', chunk, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,.;:-")
         if not chunk:
             continue
-        tokens = split_size_tokens(chunk)
+
+        inline_size_stock_map = _sheet_extract_size_stock_map(chunk)
+        if inline_size_stock_map:
+            found.extend(list(inline_size_stock_map.keys()))
+            continue
+
+        cleaned_chunk = re.sub(r"\((?:\s*\d+\s*(?:шт|pcs|pc)?\s*)\)", "", chunk, flags=re.IGNORECASE)
+        tokens = split_size_tokens(cleaned_chunk)
         if tokens:
             found.extend(tokens)
             continue
-        parts = re.split(r'[;,/\\\n]', chunk)
+        parts = re.split(r'[;,/\\\n]', cleaned_chunk)
         for p in parts:
             token = re.sub(r'\s+', ' ', p).strip()
             if token:
@@ -272,7 +280,83 @@ def _looks_like_thumbnail(url: str) -> bool:
         return False
     if any(x in u for x in ("thumb", "thumbnail", "preview", "_small", "/small/")):
         return True
-    return bool(re.search(r"(?:^|[?&])(w|width|h|height|q|quality|size)=", u))
+    return bool(re.search(r"(?:^|[?&])(w|width|h|height|q|quality|size|name)=", u))
+
+
+def _is_probable_image_url(url: str) -> bool:
+    u = str(url or "").lower()
+    return bool(re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:[?#].*)?$", u))
+
+
+def _strip_gallery_single_param(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        pairs = [
+            (k, v)
+            for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+            if k.lower() not in {"single", "single_image", "img", "photo"}
+        ]
+        query = urlencode(pairs, doseq=True)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, parsed.fragment))
+    except Exception:
+        return url
+
+
+def _upgrade_image_url_quality(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        pairs = [
+            (k, v)
+            for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+            if k.lower() not in {"w", "width", "h", "height", "q", "quality", "size", "name", "single"}
+        ]
+        query = urlencode(pairs, doseq=True)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, parsed.fragment))
+    except Exception:
+        return url
+
+
+def _extract_images_from_html(base_url: str, html: str) -> List[str]:
+    urls: List[str] = []
+    for m in re.finditer(r'(?:src|data-src|href|content)\s*=\s*["\']([^"\']+)["\']', html, flags=re.IGNORECASE):
+        cand = (m.group(1) or "").strip()
+        if not cand:
+            continue
+        if cand.startswith("//"):
+            cand = f"https:{cand}"
+        cand = urljoin(base_url, cand)
+        if _is_probable_image_url(cand):
+            urls.append(cand)
+    for m in re.finditer(r'["\'](https?://[^"\']+\.(?:jpg|jpeg|png|webp|avif|gif)(?:\?[^"\']*)?)["\']', html, flags=re.IGNORECASE):
+        urls.append((m.group(1) or "").strip())
+    out: List[str] = []
+    seen = set()
+    for u in urls:
+        uq = _upgrade_image_url_quality(u)
+        if uq and uq not in seen:
+            seen.add(uq)
+            out.append(uq)
+    return out
+
+
+def _expand_gallery_url_to_images(url: str) -> List[str]:
+    clean_url = _strip_gallery_single_param(url)
+    candidates = [clean_url]
+    if clean_url != url:
+        candidates.append(url)
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; TGImporter/1.0)"}
+    for target in candidates:
+        try:
+            resp = requests.get(target, timeout=8, headers=headers)
+            if int(getattr(resp, "status_code", 0) or 0) >= 400:
+                continue
+            html = resp.text or ""
+            found = _extract_images_from_html(target, html)
+            if found:
+                return found
+        except Exception:
+            continue
+    return []
 
 
 def _normalize_image_urls(payload: Dict[str, Any]) -> List[str]:
@@ -283,18 +367,34 @@ def _normalize_image_urls(payload: Dict[str, Any]) -> List[str]:
         for mi in payload["media"]:
             urls.extend(_split_image_candidates(mi))
     urls.extend(_split_image_candidates(payload.get("image")))
+
+    expanded_urls: List[str] = []
+    for u in urls:
+        cu = str(u or "").strip()
+        if not cu:
+            continue
+        if _is_probable_image_url(cu):
+            expanded_urls.append(_upgrade_image_url_quality(cu))
+            continue
+        gallery_images = _expand_gallery_url_to_images(cu)
+        if gallery_images:
+            expanded_urls.extend(gallery_images)
+        else:
+            expanded_urls.append(_upgrade_image_url_quality(cu))
+
     seen = set()
     out: List[str] = []
     thumbs: List[str] = []
-    for u in urls:
+    for u in expanded_urls:
         if not u:
             continue
-        if u not in seen:
-            seen.add(u)
-            if _looks_like_thumbnail(u):
-                thumbs.append(u)
-            else:
-                out.append(u)
+        if u in seen:
+            continue
+        seen.add(u)
+        if _looks_like_thumbnail(u):
+            thumbs.append(u)
+        else:
+            out.append(u)
     if not out:
         out = thumbs
     return out
