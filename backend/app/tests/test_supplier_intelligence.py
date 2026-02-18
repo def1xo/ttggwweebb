@@ -41,6 +41,28 @@ def test_extract_catalog_items_by_header():
     assert items[0]["dropship_price"] == 3990.0
 
 
+
+
+def test_extract_catalog_items_does_not_take_model_number_as_size_without_marker():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Yeezy Boost 350 v2", "12990"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] is None
+
+
+def test_extract_catalog_items_reads_numeric_size_with_explicit_marker():
+    rows = [
+        ["Товар", "Дроп цена"],
+        ["Yeezy Boost size 43", "12990"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["size"] == "43"
+
+
 def test_extract_catalog_items_splits_multiple_image_urls():
     rows = [
         ["Товар", "Дроп цена", "Фото"],
