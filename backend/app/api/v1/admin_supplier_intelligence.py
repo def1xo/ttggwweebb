@@ -1911,6 +1911,7 @@ def import_products_from_sources(
 
                 stock_map_raw = (it.get("stock_map") if isinstance(it, dict) else None) or {}
                 stock_map: dict[str, int] = {}
+                availability_sizes_locked = False
                 if isinstance(stock_map_raw, dict):
                     for k, v in stock_map_raw.items():
                         kk = str(k or "").strip()
@@ -1940,6 +1941,7 @@ def import_products_from_sources(
                     listed_in_stock = [x for x in listed_in_stock_raw if x in valid_sizes]
                     if listed_in_stock and len(valid_sizes) >= 2 and not range_only_stock:
                         stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(listed_in_stock)}
+                        availability_sizes_locked = True
 
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
                     shop_vkus_map = _extract_shop_vkus_stock_map(it if isinstance(it, dict) else {})
@@ -2110,7 +2112,7 @@ def import_products_from_sources(
                         row_variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
                         size_cache: dict[int, str] = {}
                         for vv in row_variants:
-                            if vv.color_id not in row_color_ids:
+                            if not availability_sizes_locked and vv.color_id not in row_color_ids:
                                 continue
                             sz_name = ""
                             if vv.size_id:
