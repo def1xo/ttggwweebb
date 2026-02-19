@@ -959,10 +959,24 @@ def test_rerank_gallery_images_prefers_higher_score(monkeypatch):
         "/uploads/products/a.jpg",
         "/uploads/products/b.jpg",
         "/uploads/products/c.jpg",
-    ], supplier_key="shop_vkus")
+    ], supplier_key=None)
 
     assert out == [
         "/uploads/products/b.jpg",
         "/uploads/products/a.jpg",
         "/uploads/products/c.jpg",
     ]
+
+
+def test_rerank_gallery_images_shop_vkus_filters_non_product_keywords():
+    out = asi._rerank_gallery_images([
+        "https://cdn.example.com/shoe-1.jpg",
+        "https://cdn.example.com/shop_vkus_logo_banner.jpg",
+        "https://cdn.example.com/shoe-2.jpg",
+        "https://cdn.example.com/emoji_1f49c.png",
+    ], supplier_key="shop_vkus")
+
+    assert "https://cdn.example.com/shop_vkus_logo_banner.jpg" not in out
+    assert "https://cdn.example.com/emoji_1f49c.png" not in out
+    assert "https://cdn.example.com/shoe-1.jpg" in out
+    assert "https://cdn.example.com/shoe-2.jpg" in out

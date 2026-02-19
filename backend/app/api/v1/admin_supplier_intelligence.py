@@ -167,6 +167,59 @@ def _resolve_source_image_url(raw_url: str | None, source_url: str) -> str | Non
         return raw
 
 
+
+def _is_shop_vkus_item_context(supplier_key: str | None, source_url: str, item: dict | None = None) -> bool:
+    if str(supplier_key or "").strip().lower() == "shop_vkus":
+        return True
+    src = str(source_url or "").lower()
+    if "shop_vkus" in src:
+        return True
+    if not isinstance(item, dict):
+        return False
+    for key in ("image_url", "source_url", "url", "text", "description", "notes", "stock", "stock_text"):
+        val = item.get(key)
+        if isinstance(val, str) and "shop_vkus" in val.lower():
+            return True
+    for u in (item.get("image_urls") or []):
+        if "shop_vkus" in str(u or "").lower():
+            return True
+    return False
+
+
+def _is_likely_product_image(url: str) -> bool:
+    low = str(url or "").strip().lower()
+    if not low:
+        return False
+    if any(tok in low for tok in ("emoji", "sticker", "logo", "banner", "promo", "avatar", "icon", "watermark")):
+        return False
+
+    local_path: str | None = None
+    if low.startswith("/"):
+        local_path = str(url).lstrip("/")
+    elif low.startswith("uploads/"):
+        local_path = str(url)
+
+    if local_path:
+        try:
+            from PIL import Image, ImageStat  # type: ignore
+            with Image.open(local_path) as img:
+                w, h = img.size
+                if w < 320 or h < 320:
+                    return False
+                gray = img.convert("L")
+                stat = ImageStat.Stat(gray)
+                std = float(stat.stddev[0] if stat.stddev else 0.0)
+                try:
+                    entropy = float(gray.entropy())
+                except Exception:
+                    entropy = 0.0
+                if entropy < 2.9 and std < 14.0:
+                    return False
+        except Exception:
+            pass
+
+    return True
+
 def _score_gallery_image(url: str | None) -> float:
     u = str(url or "").strip()
     if not u:
@@ -243,15 +296,15 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
     if len(uniq) <= 1:
         return uniq
 
-    ranked = sorted(uniq, key=lambda x: _score_gallery_image(x), reverse=True)
-
-    # shop_vkus feed often starts with 1-2 noisy promo frames and then useful product photos.
-    # Product requirement: drop first 2 and keep only next 7 images.
     if supplier_key == "shop_vkus":
-        if len(ranked) > 7:
-            trimmed = ranked[2:] if len(ranked) > 2 else ranked
-            return trimmed[:7]
-        return ranked
+        filtered = [u for u in uniq if _is_likely_product_image(u)]
+        work = filtered if filtered else uniq
+        if len(work) > 7:
+            work = work[2:] if len(work) > 2 else work
+            work = work[:7]
+        return work
+
+    ranked = sorted(uniq, key=lambda x: _score_gallery_image(x), reverse=True)
     return ranked
 
 
@@ -1651,8 +1704,8 @@ def import_products_from_sources(
                         if kk and vv >= 0:
                             stock_map[kk] = vv
 
-                if supplier_key == "shop_vkus" and isinstance(it, dict):
-                    shop_vkus_map = _extract_shop_vkus_stock_map(it)
+                if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
+                    shop_vkus_map = _extract_shop_vkus_stock_map(it if isinstance(it, dict) else {})
                     if shop_vkus_map:
                         merged_map = dict(stock_map)
                         for sk, sv in shop_vkus_map.items():
