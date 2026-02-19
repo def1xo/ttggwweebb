@@ -137,6 +137,7 @@ export default function ProductPage() {
 
   const touchX = useRef<number | null>(null);
   const viewerTouchX = useRef<number | null>(null);
+  const prevSelectedSizeRef = useRef<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -217,6 +218,34 @@ export default function ProductPage() {
     }
     return out;
   }, [variants]);
+
+  const colorAvailabilityBySelectedSize = useMemo(() => {
+    const out: Record<string, boolean> = {};
+    if (!selectedSize) {
+      for (const c of colors) out[c] = true;
+      return out;
+    }
+    for (const c of colors) {
+      const hasForSize = variants.some((v) => {
+        const s = String(v?.size?.name || v?.size || "").trim();
+        const vc = String(v?.color?.name || v?.color || "");
+        return s === selectedSize && vc === c && getVariantStock(v) > 0;
+      });
+      out[c] = hasForSize;
+    }
+    return out;
+  }, [colors, variants, selectedSize]);
+
+  useEffect(() => {
+    const prevSize = prevSelectedSizeRef.current;
+    prevSelectedSizeRef.current = selectedSize;
+    if (prevSize === selectedSize) return;
+    if (!selectedSize || !colors.length) return;
+    const currentStillAvailable = selectedColor ? Boolean(colorAvailabilityBySelectedSize[selectedColor]) : false;
+    if (currentStillAvailable) return;
+    const bestColor = colors.find((c) => colorAvailabilityBySelectedSize[c]);
+    if (bestColor) setSelectedColor(bestColor);
+  }, [selectedSize, colors, selectedColor, colorAvailabilityBySelectedSize]);
 
   const sizeAvailability = useMemo(() => {
     const out: Record<string, boolean> = {};
@@ -468,6 +497,8 @@ export default function ProductPage() {
                     alignItems: "center",
                     gap: 8,
                     borderColor: selectedColor === c ? "var(--ring)" : undefined,
+                    opacity: selectedSize && !colorAvailabilityBySelectedSize[c] ? 0.45 : 1,
+                    filter: selectedSize && !colorAvailabilityBySelectedSize[c] ? "grayscale(0.35)" : "none",
                   }}
                 >
                   <ColorSwatch name={c} size={16} />

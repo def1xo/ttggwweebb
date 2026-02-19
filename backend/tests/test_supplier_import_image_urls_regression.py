@@ -889,6 +889,57 @@ def test_import_products_shop_vkus_stock_text_with_specific_size_marks_only_that
         Base.metadata.drop_all(engine)
 
 
+def test_import_products_shop_vkus_single_half_size_stock_token_marks_it_in_stock(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-10b/htmlview",
+            supplier_name="shop_vkus",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото"],
+                    ["Nike SB Dunk", "4900", "43.5", "43.5", "https://cdn.example.com/a.jpg"],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        variants = db.query(models.ProductVariant).all()
+        by_size = {
+            (db.query(models.Size).filter(models.Size.id == v.size_id).one().name if v.size_id else ""): int(v.stock_quantity or 0)
+            for v in variants
+        }
+        assert by_size["43.5"] == 9999
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+
+
 def test_import_products_shop_vkus_like_row_without_link_uses_availability_sizes_only(monkeypatch):
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)

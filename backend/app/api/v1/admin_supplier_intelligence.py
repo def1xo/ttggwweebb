@@ -2025,7 +2025,7 @@ def import_products_from_sources(
                     if not stock_map and raw_stock_str and re.fullmatch(r"\d{2,3}(?:[.,]5)?", raw_stock_str):
                         token = str(raw_stock_str).replace(",", ".").strip()
                         normalized_sizes = {str(x).replace(",", ".").strip() for x in size_tokens if str(x).strip()}
-                        if (size_range_like or len(normalized_sizes) > 1) and token in normalized_sizes:
+                        if token in normalized_sizes and (size_range_like or len(normalized_sizes) >= 1):
                             stock_map = {token: int(IMPORT_FALLBACK_STOCK_QTY)}
 
                     # If supplier says generic "in stock" and row has explicit numeric size list,
