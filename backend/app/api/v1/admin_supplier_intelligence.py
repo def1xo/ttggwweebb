@@ -1897,11 +1897,19 @@ def import_products_from_sources(
                         # Only treat plain separated size lists as "in stock" fallback.
                         # Avoid ranges like "41-45" turning all sizes into available.
                         list_like = bool(re.search(r"[,;/]", raw_stock_str))
-                        range_like = bool(re.search(r"\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?", raw_stock_str))
+                        range_like = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", raw_stock_str))
                         if list_like and not range_like:
                             inferred_sizes = [str(x).strip()[:16] for x in split_size_tokens(raw_stock_str) if str(x).strip()[:16]]
                             if inferred_sizes:
                                 stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in inferred_sizes}
+
+                    # If supplier says generic "in stock" and row has explicit numeric size list,
+                    # apply default stock to those sizes only.
+                    if not stock_map and raw_stock_str and re.search(r"(?i)\b(в\s*наличии|есть|in\s*stock|available)\b", raw_stock_str):
+                        listed_sizes = [str(x).strip()[:16] for x in split_size_tokens(it.get("size")) if str(x).strip()[:16]]
+                        listed_sizes = [s for s in listed_sizes if re.fullmatch(r"\d{2,3}(?:[.,]5)?", s)]
+                        if listed_sizes:
+                            stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in listed_sizes}
 
                 if not size_tokens and stock_map:
                     size_tokens = sorted(
