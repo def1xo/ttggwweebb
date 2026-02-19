@@ -40,6 +40,7 @@ from app.services.supplier_intelligence import (
     suggest_sale_price,
     normalize_retail_price,
     search_image_urls_by_title,
+    _extract_size_stock_map as extract_size_stock_map,
 )
 
 router = APIRouter(tags=["admin_supplier_intelligence"])
@@ -86,6 +87,42 @@ def _split_color_tokens(raw: str | None) -> list[str]:
     return out
 
 
+
+
+def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
+    blob_parts: list[str] = []
+    for key in ("size", "sizes", "stock", "stock_text", "title", "description", "text", "notes"):
+        v = item.get(key)
+        if isinstance(v, str) and v.strip():
+            blob_parts.append(v)
+    blob = "\n".join(blob_parts)
+    if not blob:
+        return {}
+
+    parsed = extract_size_stock_map(blob)
+    if parsed:
+        out: dict[str, int] = {}
+        for k, v in parsed.items():
+            kk = str(k or "").strip().replace(",", ".")
+            try:
+                vv = max(0, int(v))
+            except Exception:
+                continue
+            if kk:
+                out[kk] = vv
+        if out:
+            return out
+
+    strict: dict[str, int] = {}
+    for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)\s*\(\s*(\d{1,4})\s*(?:шт|pcs|pc)?\s*\)", blob, flags=re.IGNORECASE):
+        sz = str(m.group(1) or "").replace(",", ".").strip()
+        try:
+            qty = max(0, int(m.group(2) or 0))
+        except Exception:
+            continue
+        if sz:
+            strict[sz] = qty
+    return strict
 def _resolve_source_image_url(raw_url: str | None, source_url: str) -> str | None:
     raw = str(raw_url or "").strip()
     if not raw:
@@ -107,6 +144,90 @@ def _resolve_source_image_url(raw_url: str | None, source_url: str) -> str | Non
         return urljoin(src, raw)
     except Exception:
         return raw
+
+
+def _score_gallery_image(url: str | None) -> float:
+    u = str(url or "").strip()
+    if not u:
+        return -1e9
+
+    low = u.lower()
+    score = 0.0
+
+    # URL-level heuristics
+    if any(k in low for k in ("logo", "avatar", "sticker", "emoji", "icon", "banner", "watermark")):
+        score -= 80.0
+    if any(k in low for k in ("shop-vkus", "shop_vkus")) and any(k in low for k in ("logo", "banner", "promo")):
+        score -= 60.0
+    if any(ext in low for ext in (".jpg", ".jpeg", ".png", ".webp", ".avif")):
+        score += 5.0
+
+    # Local-file quality heuristics (if localized and Pillow is available)
+    local_path: str | None = None
+    if low.startswith("/"):
+        local_path = u.lstrip("/")
+    elif low.startswith("uploads/"):
+        local_path = u
+
+    if local_path:
+        try:
+            from PIL import Image, ImageStat  # type: ignore
+            with Image.open(local_path) as img:
+                w, h = img.size
+                pixels = max(1, int(w) * int(h))
+                mp = pixels / 1_000_000.0
+                score += min(40.0, mp * 20.0)
+
+                gray = img.convert("L")
+                stat = ImageStat.Stat(gray)
+                std = float(stat.stddev[0] if stat.stddev else 0.0)
+                score += min(30.0, std * 0.8)
+
+                try:
+                    entropy = float(gray.entropy())
+                except Exception:
+                    entropy = 0.0
+                score += min(20.0, max(0.0, entropy - 4.0) * 4.0)
+                if entropy < 3.4:
+                    score -= 55.0
+
+                if pixels < 220_000:
+                    score -= 70.0
+                elif pixels < 500_000:
+                    score -= 20.0
+
+                ratio = (w / h) if h else 1.0
+                if ratio < 0.45 or ratio > 2.4:
+                    score -= 20.0
+                if 0.85 <= ratio <= 1.15 and std < 18:
+                    score -= 30.0
+        except Exception:
+            pass
+
+    return score
+
+
+def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = None) -> list[str]:
+    if not image_urls:
+        return []
+    uniq: list[str] = []
+    seen = set()
+    for u in image_urls:
+        uu = str(u or "").strip()
+        if not uu or uu in seen:
+            continue
+        seen.add(uu)
+        uniq.append(uu)
+
+    if len(uniq) <= 1:
+        return uniq
+
+    ranked = sorted(uniq, key=lambda x: _score_gallery_image(x), reverse=True)
+
+    # Keep at least one likely product photo in front for known problematic supplier.
+    if supplier_key == "shop_vkus":
+        return ranked[:12] if len(ranked) > 12 else ranked
+    return ranked
 
 
 def _prefer_local_image_url(url: str | None, *, title_hint: str | None = None, source_page_url: str | None = None) -> str | None:
@@ -583,9 +704,11 @@ def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
     return ImportSourceReport(source_id=source_id, url=source_url)
 
 
-def _register_source_error(report: ImportSourceReport, exc: Exception) -> None:
+def _register_source_error(report: ImportSourceReport, exc: Exception, context: str | None = None) -> None:
     code = _classify_import_error(exc)
     message = _normalize_error_message(exc)
+    if context:
+        message = f"{context}: {message}"
     report.errors += 1
     report.last_error_message = message
     report.error_codes[code] = int(report.error_codes.get(code) or 0) + 1
@@ -1162,6 +1285,11 @@ def import_products_from_sources(
             continue
 
         for it in items:
+            # Keep media vars initialized for the whole item scope so any
+            # future early references cannot crash with UnboundLocalError.
+            image_url: str | None = None
+            row_image_urls: list[str] = []
+            image_urls: list[str] = []
             try:
                 title = normalize_title_for_supplier(str(it.get("title") or "").strip(), getattr(src, "supplier_name", None))
                 ds_price = float(it.get("dropship_price") or 0)
@@ -1205,7 +1333,7 @@ def import_products_from_sources(
                 min_dropship = title_min_dropship.get(base_title_key)
                 cat_name = map_category(title)
                 category = get_or_create_category(cat_name)
-                effective_title = (title_for_group or title).strip()
+                effective_title = (title_for_group or title).strip()[:500]
                 slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
                 p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
@@ -1213,6 +1341,7 @@ def import_products_from_sources(
                     p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
                 if not p and supplier_key:
                     p = _find_existing_supplier_product(supplier_key, getattr(src, "supplier_name", None), _title_key(effective_title))
+
                 if not p:
                     p = _find_existing_global_product(int(category.id), _title_key(effective_title))
 
@@ -1233,14 +1362,15 @@ def import_products_from_sources(
                     image_url = row_image_urls[0]
                 if not image_url and "t.me/" in src_url:
                     try:
-                        tg_imgs = extract_image_urls_from_html_page(src_url, limit=3)
+                        tg_limit = 20 if supplier_key == "shop_vkus" else 3
+                        tg_imgs = extract_image_urls_from_html_page(src_url, limit=tg_limit)
                         image_url = tg_imgs[0] if tg_imgs else None
                         if tg_imgs:
                             row_image_urls = [str(x).strip() for x in tg_imgs if str(x).strip()]
                     except Exception:
                         image_url = None
 
-                image_urls: list[str] = []
+                image_urls = []
                 for u in [image_url, *row_image_urls]:
                     uu = _resolve_source_image_url(u, src_url)
                     if uu and uu not in image_urls:
@@ -1273,7 +1403,8 @@ def import_products_from_sources(
                             else:
                                 telegram_media_expand_count += 1
                                 try:
-                                    tg_media = extract_image_urls_from_html_page(cu, limit=8)
+                                    tg_limit = 20 if supplier_key == "shop_vkus" else 8
+                                    tg_media = extract_image_urls_from_html_page(cu, limit=tg_limit)
                                 except Exception:
                                     tg_media = []
                                 telegram_media_cache[cu] = list(tg_media)
@@ -1302,6 +1433,7 @@ def import_products_from_sources(
 
                 if localized_image_urls:
                     image_urls = localized_image_urls
+                    image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
                     image_url = image_urls[0]
 
                 # Last-resort quality step: if supplier didn't provide any image,
@@ -1319,6 +1451,7 @@ def import_products_from_sources(
                         if local_u and local_u not in image_urls:
                             image_urls.append(local_u)
                     if image_urls:
+                        image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
                         image_url = image_urls[0]
 
                 # auto-enrich item gallery with similar photos from known supplier pool
@@ -1340,6 +1473,10 @@ def import_products_from_sources(
                                 break
                     except Exception:
                         pass
+
+                if image_urls:
+                    image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
+                    image_url = image_urls[0]
 
                 if not p:
                     # unique slug fallback
@@ -1383,7 +1520,11 @@ def import_products_from_sources(
                     if sale_price > 0 and (current_base <= 0 or should_fix_low_price or sale_price < current_base):
                         p.base_price = Decimal(str(sale_price))
                         changed = True
-                    if image_url and not p.default_image:
+                    if image_url and (
+                        not p.default_image
+                        or "t.me/" in str(p.default_image)
+                        or "telegram.me/" in str(p.default_image)
+                    ):
                         p.default_image = image_url
                         changed = True
                     if not getattr(p, "import_source_url", None):
@@ -1396,22 +1537,27 @@ def import_products_from_sources(
                         p.import_supplier_name = getattr(src, "supplier_name", None)
                         changed = True
                     if image_urls:
-                        existing_urls = {
-                            str(x.url).strip()
-                            for x in db.query(models.ProductImage).filter(models.ProductImage.product_id == p.id).all()
-                            if str(x.url).strip()
-                        }
-                        next_sort = int(
-                            db.query(models.ProductImage)
-                            .filter(models.ProductImage.product_id == p.id)
-                            .count()
+                        existing_rows = db.query(models.ProductImage).filter(models.ProductImage.product_id == p.id).all()
+                        existing_urls = [str(x.url).strip() for x in existing_rows if str(x.url).strip()]
+                        should_reset_gallery = (
+                            len(existing_urls) <= 1 and len(image_urls) >= 2
                         )
-                        for img_u in image_urls[:8]:
-                            if img_u in existing_urls:
-                                continue
-                            db.add(models.ProductImage(product_id=p.id, url=img_u, sort=next_sort))
-                            next_sort += 1
+                        if should_reset_gallery:
+                            for row in existing_rows:
+                                db.delete(row)
+                            db.flush()
+                            for idx, img_u in enumerate(image_urls[:8]):
+                                db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
                             changed = True
+                        else:
+                            known_urls = set(existing_urls)
+                            next_sort = len(existing_urls)
+                            for img_u in image_urls[:8]:
+                                if img_u in known_urls:
+                                    continue
+                                db.add(models.ProductImage(product_id=p.id, url=img_u, sort=next_sort))
+                                next_sort += 1
+                                changed = True
                     if changed:
                         db.add(p)
                         updated_products += 1
@@ -1452,13 +1598,15 @@ def import_products_from_sources(
                 if len(color_tokens) <= 1:
                     color_tokens = [""]
 
-                size_tokens = split_size_tokens(it.get("size"))
+                size_tokens = [str(x).strip()[:16] for x in split_size_tokens(it.get("size")) if str(x).strip()[:16]]
 
                 raw_stock = it.get("stock") if isinstance(it, dict) else None
+                raw_stock_str = str(raw_stock).strip() if raw_stock is not None else ""
+                has_explicit_stock = bool(raw_stock_str)
                 try:
-                    stock_qty = int(raw_stock) if raw_stock is not None else IMPORT_FALLBACK_STOCK_QTY
+                    stock_qty = int(raw_stock_str) if has_explicit_stock else 0
                 except Exception:
-                    stock_qty = IMPORT_FALLBACK_STOCK_QTY
+                    stock_qty = 0
                 if stock_qty < 0:
                     stock_qty = 0
 
@@ -1474,6 +1622,9 @@ def import_products_from_sources(
                         if kk and vv >= 0:
                             stock_map[kk] = vv
 
+                if supplier_key == "shop_vkus" and not stock_map and isinstance(it, dict):
+                    stock_map = _extract_shop_vkus_stock_map(it)
+
                 if not size_tokens and stock_map:
                     size_tokens = sorted(
                         stock_map.keys(),
@@ -1484,6 +1635,7 @@ def import_products_from_sources(
 
                 combinations = max(1, len(size_tokens) * len(color_tokens))
                 has_stock_map = bool(stock_map)
+                has_explicit_stock_data = bool(has_stock_map or has_explicit_stock)
                 base_stock = stock_qty // combinations if stock_qty > 0 and combinations > 1 else stock_qty
                 remainder_stock = stock_qty % combinations if stock_qty > 0 and combinations > 1 else 0
 
@@ -1494,11 +1646,14 @@ def import_products_from_sources(
                         size_key = str(size_name or "").strip()
                         if has_stock_map:
                             per_variant_stock = int(stock_map.get(size_key, 0) or 0)
-                        else:
+                        elif has_explicit_stock:
                             per_variant_stock = int(base_stock)
                             if remainder_stock > 0:
                                 per_variant_stock += 1
                                 remainder_stock -= 1
+                        else:
+                            # Unknown stock should not become "all sizes in stock".
+                            per_variant_stock = 0
 
                         variant = (
                             db.query(models.ProductVariant)
@@ -1539,14 +1694,19 @@ def import_products_from_sources(
                             # - when stock map is explicit, always trust and overwrite;
                             # - when row has explicit zero stock, propagate zero;
                             # - otherwise keep previous positive stock unless empty.
-                            if has_stock_map or stock_qty == 0:
+                            if has_explicit_stock_data:
                                 variant.stock_quantity = max(0, int(per_variant_stock))
-                            elif per_variant_stock > 0 and int(variant.stock_quantity or 0) <= 0:
-                                variant.stock_quantity = per_variant_stock
 
-                            if image_urls and not variant.images:
-                                variant.images = image_urls
-                            elif image_url and not variant.images:
+                            existing_variant_images = [str(x).strip() for x in (variant.images or []) if str(x).strip()]
+                            if image_urls:
+                                should_replace_variant_images = (
+                                    not existing_variant_images
+                                    or len(existing_variant_images) < len(image_urls)
+                                    or any(("t.me/" in u or "telegram.me/" in u) for u in existing_variant_images)
+                                )
+                                if should_replace_variant_images:
+                                    variant.images = image_urls
+                            elif image_url and not existing_variant_images:
                                 variant.images = [image_url]
                             db.add(variant)
 
@@ -1559,7 +1719,14 @@ def import_products_from_sources(
             except Exception as exc:
                 if not payload.dry_run:
                     db.rollback()
-                _register_source_error(report, exc)
+                try:
+                    ctx_title = str((it or {}).get("title") or "").strip()[:120] if isinstance(it, dict) else ""
+                    ctx_image = str((it or {}).get("image_url") or "").strip()[:120] if isinstance(it, dict) else ""
+                    ctx = f"item title='{ctx_title}' image='{ctx_image}'"
+                except Exception:
+                    ctx = None
+                logger.exception("supplier import item failed source_id=%s url=%s", src.id, src_url)
+                _register_source_error(report, exc, context=ctx)
 
         if not payload.dry_run and src_kind in {"google_sheet", "moysklad_catalog", "generic_html"} and items:
             stale_q = db.query(models.Product).filter(models.Product.import_source_url == src_url)
