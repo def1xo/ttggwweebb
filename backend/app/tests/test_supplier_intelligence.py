@@ -785,6 +785,18 @@ def test_extract_catalog_items_reads_stock_map_from_stock_column():
     assert items[0]["stock_map"] == {"42": 1, "43": 2}
 
 
+
+
+def test_extract_catalog_items_reads_plain_size_list_from_stock_column_as_stock_map():
+    rows = [
+        ["Товар", "Дроп цена", "Размер", "Наличие"],
+        ["NB 574", "2999", "41-45", "41,42,44"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["stock"] == 3
+    assert items[0]["stock_map"] == {"41": 1, "42": 1, "44": 1}
+
 def test_extract_catalog_items_stock_map_does_not_read_size_ranges_as_qty():
     rows = [
         ["Товар", "Дроп цена", "Размер", "Наличие"],
@@ -887,3 +899,84 @@ def test_extract_catalog_items_appends_sidecar_photo_link_rows_to_previous_item(
         "https://t.me/venomdrop12/41/10151",
         "https://t.me/venomdrop12/599/672",
     ]
+
+
+
+def test_extract_shop_vkus_stock_map_from_text_blob():
+    item = {
+        "title": "Кроссы",
+        "description": "Размеры и наличие: 41(0шт), 42(1шт), 43(0шт)",
+    }
+    got = asi._extract_shop_vkus_stock_map(item)
+    assert got == {"41": 0, "42": 1, "43": 0}
+
+
+def test_extract_shop_vkus_stock_map_marks_plain_available_sizes_as_in_stock():
+    item = {
+        "title": "Кроссы",
+        "description": "Размеры: 41-45 Наличие: 41,42,44",
+    }
+    got = asi._extract_shop_vkus_stock_map(item)
+    assert got == {"41": 1, "42": 1, "44": 1}
+
+
+
+def test_extract_image_urls_from_html_page_reads_escaped_telescope_urls(monkeypatch):
+    html_single = '<html><head><meta property="og:image" content="https://cdn4.telesco.pe/file/single.jpg"></head></html>'
+    html_public = (
+        '<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="shop_vkus/10">'
+        '<script>var x="https:\/\/cdn4.telesco.pe\/file\/a.jpg";</script>'
+        '<script>var y="https:\/\/cdn4.telesco.pe\/file\/b.jpg";</script>'
+        '</div></div>'
+    )
+
+    def fake_get(url, **kwargs):
+        if url == "https://t.me/shop_vkus/10":
+            return type("R", (), {"text": html_single})
+        if url == "https://t.me/s/shop_vkus/10":
+            return type("R", (), {"text": html_public})
+        return type("R", (), {"text": ""})
+
+    monkeypatch.setattr(si, "_http_get_with_retries", fake_get)
+
+    out = si.extract_image_urls_from_html_page("https://t.me/shop_vkus/10?single", limit=5)
+    assert out[:2] == [
+        "https://cdn4.telesco.pe/file/a.jpg",
+        "https://cdn4.telesco.pe/file/b.jpg",
+    ]
+
+
+
+def test_rerank_gallery_images_prefers_higher_score(monkeypatch):
+    scores = {
+        "/uploads/products/a.jpg": 10.0,
+        "/uploads/products/b.jpg": 35.0,
+        "/uploads/products/c.jpg": -5.0,
+    }
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda u: scores.get(u, 0.0))
+
+    out = asi._rerank_gallery_images([
+        "/uploads/products/a.jpg",
+        "/uploads/products/b.jpg",
+        "/uploads/products/c.jpg",
+    ], supplier_key=None)
+
+    assert out == [
+        "/uploads/products/b.jpg",
+        "/uploads/products/a.jpg",
+        "/uploads/products/c.jpg",
+    ]
+
+
+def test_rerank_gallery_images_shop_vkus_filters_non_product_keywords():
+    out = asi._rerank_gallery_images([
+        "https://cdn.example.com/shoe-1.jpg",
+        "https://cdn.example.com/shop_vkus_logo_banner.jpg",
+        "https://cdn.example.com/shoe-2.jpg",
+        "https://cdn.example.com/emoji_1f49c.png",
+    ], supplier_key="shop_vkus")
+
+    assert "https://cdn.example.com/shop_vkus_logo_banner.jpg" not in out
+    assert "https://cdn.example.com/emoji_1f49c.png" not in out
+    assert "https://cdn.example.com/shoe-1.jpg" in out
+    assert "https://cdn.example.com/shoe-2.jpg" in out
