@@ -1046,6 +1046,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             "rrc_price": float(rrc_price) if rrc_price and rrc_price > 0 else None,
             "size": size or None,
             "stock": stock,
+            "stock_text": stock_raw or None,
             "stock_map": stock_map or None,
             "image_url": image_url,
             "image_urls": image_urls,
