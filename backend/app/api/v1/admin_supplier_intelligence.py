@@ -417,38 +417,18 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
         return uniq
 
     if supplier_key == "shop_vkus":
-        filtered = [u for u in uniq if _is_likely_product_image(u)]
-        work = filtered if filtered else uniq
+        # For shop_vkus feeds, 5+ image sets usually prepend 2 service frames.
+        # Drop them deterministically from original ordering first.
+        pre = uniq[2:] if len(uniq) >= 5 else list(uniq)
 
-        if len(work) > 2:
-            first_two = work[:2]
-            rest = work[2:]
-            should_drop_leading_pair = False
+        if len(uniq) > 2 and len(uniq) < 5:
+            first_two = uniq[:2]
+            has_supplier_marker = any(("shop_vkus" in str(u or "").lower()) or ("shop-vkus" in str(u or "").lower()) for u in first_two)
+            if has_supplier_marker:
+                pre = uniq[2:]
 
-            # Keep legacy behavior for long galleries: skip first two and keep up to seven.
-            if len(work) > 7:
-                should_drop_leading_pair = True
-
-            # Hard-suspicious leading pair: obvious service visuals/links.
-            if not should_drop_leading_pair and any((not _is_likely_product_image(u)) or (_score_gallery_image(u) < 0) for u in first_two):
-                should_drop_leading_pair = True
-
-            # shop_vkus known pattern: many 5+ photo sets prepend 2 service frames.
-            if not should_drop_leading_pair and len(uniq) >= 5 and len(work) > 2:
-                should_drop_leading_pair = True
-
-            if not should_drop_leading_pair:
-                has_supplier_marker = any(
-                    ("shop_vkus" in str(u or "").lower()) or ("shop-vkus" in str(u or "").lower())
-                    for u in first_two
-                )
-                duplicated_cover = bool(first_two and first_two[0] in rest)
-                second_is_suspicious = bool((not _is_likely_product_image(first_two[1])) or (_score_gallery_image(first_two[1]) < 0)) if len(first_two) >= 2 else False
-                if has_supplier_marker or (duplicated_cover and (second_is_suspicious or len(uniq) >= 5)):
-                    should_drop_leading_pair = True
-
-            if should_drop_leading_pair:
-                work = rest
+        filtered = [u for u in pre if _is_likely_product_image(u)]
+        work = filtered if filtered else pre
 
         work = _filter_gallery_main_signature_cluster(work)
         if len(work) > 7:
