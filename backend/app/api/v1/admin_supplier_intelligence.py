@@ -118,10 +118,42 @@ def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
         for m in re.finditer(r"(?i)(?:наличие|в\s*наличии|stock)\s*[:\-]?\s*([^\n]+)", blob)
         if str(m.group(1) or "").strip()
     ]
+    def _parse_plain_available_sizes(text: str) -> dict[str, int]:
+        raw = str(text or "")
+        if not raw.strip():
+            return {}
+        low = raw.lower()
+        if any(marker in low for marker in ("нет", "out of stock", "sold out", "распродан", "законч")):
+            return {}
+        # Ignore explicit quantity notations to avoid overriding richer parsers.
+        if re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", raw):
+            return {}
+        # For shop_vkus, plain size lists like "41 42 44" or "41,42,44" mean in-stock sizes.
+        # Do not treat ranges like "41-45" as stock map.
+        if not re.search(r"[,;/\s]", raw):
+            return {}
+        out: dict[str, int] = {}
+        for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)(?!\d)", raw):
+            token = str(m.group(1) or "").replace(",", ".").strip()
+            if not token:
+                continue
+            try:
+                v = float(token)
+            except Exception:
+                continue
+            if v < 20 or v > 60:
+                continue
+            key = str(int(v)) if v.is_integer() else token
+            out[key] = 1
+        return out
+
     for chunk in availability_chunks:
         parsed_chunk = _normalize_map(extract_size_stock_map(chunk))
         if parsed_chunk:
             return parsed_chunk
+        plain_available_chunk = _parse_plain_available_sizes(chunk)
+        if plain_available_chunk:
+            return plain_available_chunk
 
     stock_only_parts: list[str] = []
     for key in ("stock", "stock_text", "availability"):
@@ -132,6 +164,9 @@ def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
         parsed_stock_only = _normalize_map(extract_size_stock_map("\n".join(stock_only_parts)))
         if parsed_stock_only:
             return parsed_stock_only
+        plain_available_stock_only = _parse_plain_available_sizes("\n".join(stock_only_parts))
+        if plain_available_stock_only:
+            return plain_available_stock_only
 
     strict: dict[str, int] = {}
     for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)\s*\(\s*(\d{1,4})\s*(?:шт|pcs|pc)?\s*\)", blob, flags=re.IGNORECASE):
@@ -299,8 +334,9 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
     if supplier_key == "shop_vkus":
         filtered = [u for u in uniq if _is_likely_product_image(u)]
         work = filtered if filtered else uniq
-        if len(work) > 7:
+        if len(work) > 2:
             work = work[2:] if len(work) > 2 else work
+        if len(work) > 7:
             work = work[:7]
         return work
 
