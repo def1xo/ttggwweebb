@@ -429,17 +429,16 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
             if not should_drop_leading_pair and any((not _is_likely_product_image(u)) or (_score_gallery_image(u) < 0) for u in first_two):
                 should_drop_leading_pair = True
 
-            # For shop_vkus short/medium galleries (5+), first two frames are frequently
-            # preview/business-card and should be dropped.
-            if not should_drop_leading_pair and len(work) >= 5:
-                should_drop_leading_pair = True
-            elif not should_drop_leading_pair and len(work) <= 4:
+            # shop_vkus: drop first two only when they look like service pair.
+            # Keep clean 5/7-photo galleries intact.
+            if not should_drop_leading_pair:
                 has_supplier_marker = any(
                     ("shop_vkus" in str(u or "").lower()) or ("shop-vkus" in str(u or "").lower())
                     for u in first_two
                 )
                 duplicated_cover = bool(first_two and first_two[0] in rest)
-                if has_supplier_marker or duplicated_cover:
+                second_is_suspicious = bool((not _is_likely_product_image(first_two[1])) or (_score_gallery_image(first_two[1]) < 0)) if len(first_two) >= 2 else False
+                if has_supplier_marker or (duplicated_cover and second_is_suspicious):
                     should_drop_leading_pair = True
 
             if should_drop_leading_pair:
@@ -1912,6 +1911,9 @@ def import_products_from_sources(
                             if remainder_stock > 0:
                                 per_variant_stock += 1
                                 remainder_stock -= 1
+                        elif _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_key:
+                            # shop_vkus default: listed sizes are available unless explicitly out of stock.
+                            per_variant_stock = int(IMPORT_FALLBACK_STOCK_QTY)
                         else:
                             # Unknown stock should not become "all sizes in stock".
                             per_variant_stock = 0
