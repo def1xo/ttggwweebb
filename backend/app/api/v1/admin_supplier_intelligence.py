@@ -1933,11 +1933,11 @@ def import_products_from_sources(
                             stock_map = {token: int(IMPORT_FALLBACK_STOCK_QTY)}
 
                     # If supplier says generic "in stock" and row has explicit numeric size list,
-                    # apply default stock to those sizes only (do not expand numeric ranges).
+                    # apply default stock to those sizes.
                     if not stock_map and raw_stock_str and re.search(r"(?i)\b(в\s*наличии|есть|in\s*stock|available)\b", raw_stock_str):
                         listed_sizes = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                         listed_sizes = [s for s in listed_sizes if re.fullmatch(r"\d{2,3}(?:[.,]5)?", s)]
-                        if listed_sizes and size_list_like and not size_range_like:
+                        if listed_sizes and (size_list_like or size_range_like):
                             stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in listed_sizes}
 
                 if not size_tokens and stock_map:
