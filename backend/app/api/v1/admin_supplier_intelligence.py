@@ -92,6 +92,29 @@ def _split_color_tokens(raw: str | None) -> list[str]:
 
 
 def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = None) -> list[str]:
+    color_aliases = {
+        "чёрный": "черный",
+        "black": "черный",
+        "white": "белый",
+        "grey": "серый",
+        "gray": "серый",
+        "red": "красный",
+        "blue": "синий",
+        "green": "зеленый",
+        "beige": "бежевый",
+        "brown": "коричневый",
+        "pink": "розовый",
+        "purple": "фиолетовый",
+        "yellow": "желтый",
+        "orange": "оранжевый",
+    }
+
+    def _canon_color(name: str | None) -> str:
+        key = str(name or "").strip().lower()
+        if not key:
+            return ""
+        return str(color_aliases.get(key) or key)
+
     palette = (
         "черный", "чёрный", "белый", "серый", "красный", "синий", "голубой", "зеленый", "зелёный",
         "бежевый", "коричневый", "розовый", "фиолетовый", "желтый", "оранжевый",
@@ -106,33 +129,82 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
     found: list[str] = []
     for c in palette:
         if re.search(rf"(?<!\w){re.escape(c)}(?!\w)", blob):
-            if c not in found:
-                found.append(c)
+            cc = _canon_color(c)
+            if cc and cc not in found:
+                found.append(cc)
 
     if len(found) >= 2:
         return found[:3]
 
-    # Fallback: infer up to 2 dominant colors from gallery, only for strong repeated signals.
-    color_hits: dict[str, int] = {}
+    # Fallback: infer colors from gallery with signature clusters.
+    # This avoids false two-color splits when one model has one colorway,
+    # while still allowing mixed rows with two visually different colorways.
+    analyzed: list[tuple[str | None, str]] = []
     for u in (image_urls or [])[:12]:
+        sig: str | None = None
+        try:
+            sig = image_print_signature_from_url(u)
+        except Exception:
+            sig = None
         try:
             nm = dominant_color_name_from_url(u)
         except Exception:
             nm = None
-        key = str(nm or "").strip().lower()
+        key = _canon_color(nm)
         if not key or key in {"мульти"}:
             continue
+        analyzed.append((sig, key))
+
+    if analyzed:
+        clusters: list[dict[str, Any]] = []
+        for sig, color_key in analyzed:
+            target: dict[str, Any] | None = None
+            if sig:
+                for cl in clusters:
+                    rep_sig = str(cl.get("rep_sig") or "")
+                    if rep_sig and print_signature_hamming(sig, rep_sig) <= 6:
+                        target = cl
+                        break
+            if target is None:
+                target = {"rep_sig": sig, "count": 0, "color_hits": {}}
+                clusters.append(target)
+            target["count"] = int(target.get("count") or 0) + 1
+            ch = target["color_hits"]
+            ch[color_key] = int(ch.get(color_key, 0) or 0) + 1
+
+        if clusters:
+            ranked_clusters = sorted(clusters, key=lambda x: int(x.get("count") or 0), reverse=True)
+            cluster_colors: list[tuple[str, int]] = []
+            for cl in ranked_clusters:
+                ch = cl.get("color_hits") or {}
+                if not ch:
+                    continue
+                top_color, _ = max(ch.items(), key=lambda kv: int(kv[1] or 0))
+                cluster_colors.append((str(top_color), int(cl.get("count") or 0)))
+
+            if cluster_colors:
+                if len(cluster_colors) >= 2:
+                    lead = cluster_colors[0][1]
+                    second = cluster_colors[1][1]
+                    # expose 2 colors only when second cluster is substantial.
+                    if second >= 2 and second * 10 >= lead * 6:
+                        out: list[str] = []
+                        for color_name, _ in cluster_colors[:3]:
+                            if color_name not in out:
+                                out.append(color_name)
+                        if out:
+                            return out
+                return [cluster_colors[0][0]]
+
+    color_hits: dict[str, int] = {}
+    for _, key in analyzed:
         color_hits[key] = int(color_hits.get(key, 0) or 0) + 1
     ranked = [k for k, _ in sorted(color_hits.items(), key=lambda x: x[1], reverse=True)]
     strong = [k for k, v in sorted(color_hits.items(), key=lambda x: x[1], reverse=True) if v >= 2]
-    if len(strong) >= 2:
-        return strong[:3]
     if strong:
         return strong[:1]
     if found:
         return found[:1]
-    if ranked:
-        return ranked[:1]
     return []
 
 def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:

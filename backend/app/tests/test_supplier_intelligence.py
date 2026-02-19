@@ -1026,8 +1026,30 @@ def test_dominant_color_name_from_url_prefers_vivid_accent_over_gray(monkeypatch
 
 def test_extract_shop_vkus_color_tokens_keeps_white_and_gray_from_images(monkeypatch):
     monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый" if u in {"a", "b"} else "серый")
+    monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
     got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
-    assert got == ["белый", "серый"]
+    assert got == ["белый"]
+
+
+def test_extract_shop_vkus_color_tokens_keeps_two_colors_for_two_strong_signature_clusters(monkeypatch):
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый" if u in {"a1", "a2", "a3"} else "фиолетовый")
+    monkeypatch.setattr(
+        asi,
+        "image_print_signature_from_url",
+        lambda u: "sig-a" if u in {"a1", "a2", "a3"} else "sig-b",
+    )
+    monkeypatch.setattr(asi, "print_signature_hamming", lambda a, b: 0 if a == b else 40)
+
+    got = asi._extract_shop_vkus_color_tokens({"title": "Forum Mid"}, image_urls=["a1", "a2", "a3", "b1", "b2"])
+    assert got == ["белый", "фиолетовый"]
+
+
+def test_extract_shop_vkus_color_tokens_normalizes_english_color_names(monkeypatch):
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "white" if u in {"a", "b"} else "gray")
+    monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
+
+    got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
+    assert got == ["белый"]
 
 
 def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
@@ -1036,11 +1058,12 @@ def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
         "description": "доступны цвета black white",
     }
     got = asi._extract_shop_vkus_color_tokens(item, image_urls=["u1", "u2"])
-    assert "black" in got and "white" in got
+    assert "черный" in got and "белый" in got
 
     monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "черный" if u in {"a", "b"} else "белый")
+    monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
     got2 = asi._extract_shop_vkus_color_tokens({"title": "Yeezy 350"}, image_urls=["a", "b", "c", "d"])
-    assert got2 == ["черный", "белый"]
+    assert got2 == ["черный"]
 
 def test_extract_image_urls_from_html_page_reads_escaped_telescope_urls(monkeypatch):
     html_single = '<html><head><meta property="og:image" content="https://cdn4.telesco.pe/file/single.jpg"></head></html>'
