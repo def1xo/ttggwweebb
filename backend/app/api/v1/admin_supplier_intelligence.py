@@ -1966,6 +1966,7 @@ def import_products_from_sources(
                     listed_in_stock = [x for x in listed_in_stock_raw if x in valid_sizes]
                     if listed_in_stock:
                         stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(listed_in_stock)}
+                        availability_sizes_locked = True
 
                     if stock_map and size_range_like and all(int(v or 0) <= 1 for v in stock_map.values()):
                         range_sizes = {str(x).replace(",", ".").strip() for x in split_size_tokens(size_raw) if str(x).strip()}
