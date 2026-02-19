@@ -89,6 +89,45 @@ def _split_color_tokens(raw: str | None) -> list[str]:
 
 
 
+
+
+def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = None) -> list[str]:
+    palette = (
+        "черный", "чёрный", "белый", "серый", "красный", "синий", "голубой", "зеленый", "зелёный",
+        "бежевый", "коричневый", "розовый", "фиолетовый", "желтый", "оранжевый",
+        "black", "white", "grey", "gray", "red", "blue", "green", "beige", "brown", "pink", "purple", "yellow", "orange",
+    )
+    blob_parts: list[str] = []
+    for key in ("color", "title", "description", "text", "notes"):
+        v = item.get(key)
+        if isinstance(v, str) and v.strip():
+            blob_parts.append(v)
+    blob = " ".join(blob_parts).lower()
+    found: list[str] = []
+    for c in palette:
+        if re.search(rf"(?<!\w){re.escape(c)}(?!\w)", blob):
+            if c not in found:
+                found.append(c)
+
+    if len(found) >= 2:
+        return found[:3]
+
+    # Fallback: infer up to 2 dominant colors from gallery, only for strong repeated signals.
+    color_hits: dict[str, int] = {}
+    for u in (image_urls or [])[:12]:
+        try:
+            nm = dominant_color_name_from_url(u)
+        except Exception:
+            nm = None
+        key = str(nm or "").strip().lower()
+        if not key or key in {"мульти", "серый"}:
+            continue
+        color_hits[key] = int(color_hits.get(key, 0) or 0) + 1
+    strong = [k for k, v in sorted(color_hits.items(), key=lambda x: x[1], reverse=True) if v >= 2]
+    if len(strong) >= 2:
+        return strong[:3]
+    return found[:1]
+
 def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
     blob_parts: list[str] = []
     for key in ("size", "sizes", "stock", "stock_text", "title", "description", "text", "notes"):
@@ -118,10 +157,42 @@ def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
         for m in re.finditer(r"(?i)(?:наличие|в\s*наличии|stock)\s*[:\-]?\s*([^\n]+)", blob)
         if str(m.group(1) or "").strip()
     ]
+    def _parse_plain_available_sizes(text: str) -> dict[str, int]:
+        raw = str(text or "")
+        if not raw.strip():
+            return {}
+        low = raw.lower()
+        if any(marker in low for marker in ("нет", "out of stock", "sold out", "распродан", "законч")):
+            return {}
+        # Ignore explicit quantity notations to avoid overriding richer parsers.
+        if re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", raw):
+            return {}
+        # For shop_vkus, plain size lists like "41 42 44" or "41,42,44" mean in-stock sizes.
+        # Do not treat ranges like "41-45" as stock map.
+        if not re.search(r"[,;/\s]", raw):
+            return {}
+        out: dict[str, int] = {}
+        for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)(?!\d)", raw):
+            token = str(m.group(1) or "").replace(",", ".").strip()
+            if not token:
+                continue
+            try:
+                v = float(token)
+            except Exception:
+                continue
+            if v < 20 or v > 60:
+                continue
+            key = str(int(v)) if v.is_integer() else token
+            out[key] = 1
+        return out
+
     for chunk in availability_chunks:
         parsed_chunk = _normalize_map(extract_size_stock_map(chunk))
         if parsed_chunk:
             return parsed_chunk
+        plain_available_chunk = _parse_plain_available_sizes(chunk)
+        if plain_available_chunk:
+            return plain_available_chunk
 
     stock_only_parts: list[str] = []
     for key in ("stock", "stock_text", "availability"):
@@ -132,6 +203,9 @@ def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
         parsed_stock_only = _normalize_map(extract_size_stock_map("\n".join(stock_only_parts)))
         if parsed_stock_only:
             return parsed_stock_only
+        plain_available_stock_only = _parse_plain_available_sizes("\n".join(stock_only_parts))
+        if plain_available_stock_only:
+            return plain_available_stock_only
 
     strict: dict[str, int] = {}
     for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)\s*\(\s*(\d{1,4})\s*(?:шт|pcs|pc)?\s*\)", blob, flags=re.IGNORECASE):
@@ -281,6 +355,48 @@ def _score_gallery_image(url: str | None) -> float:
     return score
 
 
+
+
+def _filter_gallery_main_signature_cluster(image_urls: list[str]) -> list[str]:
+    if len(image_urls) < 6:
+        return image_urls
+
+    sigs: list[tuple[str, str]] = []
+    for u in image_urls:
+        try:
+            sig = image_print_signature_from_url(u)
+        except Exception:
+            sig = None
+        if sig:
+            sigs.append((u, sig))
+
+    if len(sigs) < 4:
+        return image_urls
+
+    clusters: list[list[tuple[str, str]]] = []
+    for item in sigs:
+        placed = False
+        for cl in clusters:
+            rep = cl[0][1]
+            d = print_signature_hamming(item[1], rep)
+            if d is not None and d <= 8:
+                cl.append(item)
+                placed = True
+                break
+        if not placed:
+            clusters.append([item])
+
+    if not clusters:
+        return image_urls
+    clusters.sort(key=len, reverse=True)
+    main = clusters[0]
+    main_urls = {u for u, _ in main}
+
+    # Drop outlier clusters only when the dominant cluster is clearly large enough.
+    if len(main_urls) >= max(4, len(image_urls) // 2):
+        return [u for u in image_urls if u in main_urls]
+    return image_urls
+
 def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = None) -> list[str]:
     if not image_urls:
         return []
@@ -299,8 +415,36 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
     if supplier_key == "shop_vkus":
         filtered = [u for u in uniq if _is_likely_product_image(u)]
         work = filtered if filtered else uniq
+
+        if len(work) > 2:
+            first_two = work[:2]
+            rest = work[2:]
+            should_drop_leading_pair = False
+
+            # Keep legacy behavior for long galleries: skip first two and keep up to seven.
+            if len(work) > 7:
+                should_drop_leading_pair = True
+
+            # Hard-suspicious leading pair: obvious service visuals/links.
+            if not should_drop_leading_pair and any((not _is_likely_product_image(u)) or (_score_gallery_image(u) < 0) for u in first_two):
+                should_drop_leading_pair = True
+
+            # For shorter galleries, shop_vkus sometimes prepends preview + business-card frames.
+            # Keep old "all product photos" behavior intact unless we detect a clear hint.
+            if not should_drop_leading_pair and len(work) <= 5:
+                has_supplier_marker = any(
+                    ("shop_vkus" in str(u or "").lower()) or ("shop-vkus" in str(u or "").lower())
+                    for u in first_two
+                )
+                duplicated_cover = bool(first_two and first_two[0] in rest)
+                if has_supplier_marker or duplicated_cover:
+                    should_drop_leading_pair = True
+
+            if should_drop_leading_pair:
+                work = rest
+
+        work = _filter_gallery_main_signature_cluster(work)
         if len(work) > 7:
-            work = work[2:] if len(work) > 2 else work
             work = work[:7]
         return work
 
@@ -1057,6 +1201,10 @@ def import_products_from_sources(
         if exact_key in by_title:
             return list(by_title.get(exact_key) or [])
 
+        # shop_vkus: avoid fuzzy cross-title merges that can mix different models in one gallery.
+        if supplier_key == "shop_vkus":
+            return []
+
         media_key = _title_media_key(raw_title)
         media_tokens = set(media_key.split())
         if not media_tokens:
@@ -1674,13 +1822,25 @@ def import_products_from_sources(
 
                 # Color policy:
                 # - if source has only one color, do not force color variants;
-                # - create color variants only when supplier explicitly gives 2+ colors.
+                # - for shop_vkus, allow fallback color inference from item text/gallery only when 2+ strong colors are detected.
                 src_color = it.get("color")
                 color_tokens = _split_color_tokens(src_color)
+                if len(color_tokens) <= 1 and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
+                    inferred_colors = _extract_shop_vkus_color_tokens(it if isinstance(it, dict) else {}, image_urls=image_urls)
+                    if len(inferred_colors) >= 2:
+                        color_tokens = inferred_colors
                 if len(color_tokens) <= 1:
                     color_tokens = [""]
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(it.get("size")) if str(x).strip()[:16]]
+                if not size_tokens and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
+                    blob_parts: list[str] = []
+                    for key in ("title", "description", "text", "notes", "stock", "stock_text", "availability"):
+                        v = it.get(key) if isinstance(it, dict) else None
+                        if isinstance(v, str) and v.strip():
+                            blob_parts.append(v)
+                    fallback_sizes = split_size_tokens(" ".join(blob_parts))
+                    size_tokens = [str(x).strip()[:16] for x in fallback_sizes if str(x).strip()[:16]]
 
                 raw_stock = it.get("stock") if isinstance(it, dict) else None
                 raw_stock_str = str(raw_stock).strip() if raw_stock is not None else ""
@@ -1749,6 +1909,21 @@ def import_products_from_sources(
                             .filter(models.ProductVariant.color_id == (color.id if color else None))
                             .one_or_none()
                         )
+
+                        variant_images = image_urls or ([image_url] if image_url else None)
+                        if color_tokens and color_name and image_urls:
+                            color_key = str(color_name).strip().lower()
+                            color_specific: list[str] = []
+                            for iu in image_urls:
+                                try:
+                                    dom = str(dominant_color_name_from_url(iu) or "").strip().lower()
+                                except Exception:
+                                    dom = ""
+                                if dom and (dom == color_key or color_key in dom or dom in color_key):
+                                    color_specific.append(iu)
+                            if len(color_specific) >= 2:
+                                variant_images = color_specific
+
                         if variant is None:
                             variant = models.ProductVariant(
                                 product_id=p.id,
@@ -1756,7 +1931,7 @@ def import_products_from_sources(
                                 color_id=color.id if color else None,
                                 price=Decimal(str(sale_price)),
                                 stock_quantity=max(0, per_variant_stock),
-                                images=image_urls or ([image_url] if image_url else None),
+                                images=variant_images,
                             )
                             try:
                                 with db.begin_nested():
@@ -1785,16 +1960,15 @@ def import_products_from_sources(
                                 variant.stock_quantity = max(0, int(per_variant_stock))
 
                             existing_variant_images = [str(x).strip() for x in (variant.images or []) if str(x).strip()]
-                            if image_urls:
+                            if variant_images:
+                                desired_variant_images = [str(x).strip() for x in (variant_images or []) if str(x).strip()]
                                 should_replace_variant_images = (
                                     not existing_variant_images
-                                    or len(existing_variant_images) < len(image_urls)
+                                    or len(existing_variant_images) < len(desired_variant_images)
                                     or any(("t.me/" in u or "telegram.me/" in u) for u in existing_variant_images)
                                 )
                                 if should_replace_variant_images:
-                                    variant.images = image_urls
-                            elif image_url and not existing_variant_images:
-                                variant.images = [image_url]
+                                    variant.images = desired_variant_images
                             db.add(variant)
 
 
