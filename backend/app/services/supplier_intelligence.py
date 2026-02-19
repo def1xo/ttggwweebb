@@ -1014,7 +1014,14 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         if not size and stock_map:
             size = " ".join(sorted(stock_map.keys(), key=lambda x: float(str(x).replace(",", "."))))
 
-        stock = _to_int(stock_raw) if stock_raw else None
+        stock: int | None = None
+        if stock_raw:
+            raw_stock_for_int = str(stock_raw)
+            looks_like_size_range = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", raw_stock_for_int))
+            looks_like_size_list = bool(re.search(r"[,;/]", raw_stock_for_int)) and bool(re.search(r"\b\d{2,3}(?:[.,]5)?\b", raw_stock_for_int))
+            has_qty_markers = bool(re.search(r"(?i)(шт|pcs|pc|qty|остат|налич)|[:=]", raw_stock_for_int))
+            if not looks_like_size_range and (not looks_like_size_list or has_qty_markers):
+                stock = _to_int(stock_raw)
         if stock_map:
             stock = int(sum(max(0, int(v)) for v in stock_map.values()))
         elif explicit_out_of_stock:
@@ -1208,6 +1215,17 @@ def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: in
     r = _http_get_with_retries(url, timeout_sec=timeout_sec, headers=headers, max_attempts=3)
     html = r.text or ""
 
+    def _extract_tg_message_block(page_html: str, channel: str, msg_id: str) -> str:
+        marker = f'data-post="{channel}/{msg_id}"'
+        pos = (page_html or "").find(marker)
+        if pos < 0:
+            return ""
+        start = page_html.rfind('<div class="tgme_widget_message_wrap', 0, pos)
+        if start < 0:
+            start = pos
+        end = page_html.find('<div class="tgme_widget_message_wrap', pos + len(marker))
+        return page_html[start:(end if end > start else len(page_html))]
+
     urls: list[str] = []
 
     def _push(raw_u: str | None, base_url: str | None = None) -> None:
@@ -1235,15 +1253,8 @@ def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: in
         tg_public = f"https://t.me/s/{channel}/{msg_id}"
         try:
             tg_html = _http_get_with_retries(tg_public, timeout_sec=timeout_sec, headers=headers, max_attempts=2).text or ""
-            marker = f'data-post="{channel}/{msg_id}"'
-            pos = tg_html.find(marker)
-            if pos >= 0:
-                start = tg_html.rfind('<div class="tgme_widget_message_wrap', 0, pos)
-                if start < 0:
-                    start = pos
-                end = tg_html.find('<div class="tgme_widget_message_wrap', pos + len(marker))
-                block = tg_html[start:(end if end > start else len(tg_html))]
-
+            block = _extract_tg_message_block(tg_html, channel, msg_id)
+            if block:
                 for m in re.findall(r"background-image:url\(([^)]+)\)", block, flags=re.I):
                     _push(m, tg_public)
 
@@ -1272,7 +1283,12 @@ def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: in
         _push(m, url)
 
     # plain img src
-    for m in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html, flags=re.I):
+    img_scope = html
+    if tg_m:
+        tg_block_inline = _extract_tg_message_block(html, tg_m.group(1), tg_m.group(2))
+        if tg_block_inline:
+            img_scope = tg_block_inline
+    for m in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', img_scope, flags=re.I):
         _push(m, url)
         if len(urls) >= limit:
             break
