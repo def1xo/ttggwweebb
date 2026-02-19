@@ -1921,6 +1921,26 @@ def import_products_from_sources(
                         if kk and vv >= 0:
                             stock_map[kk] = vv
 
+                # Generic per-row availability rule:
+                # if row size set is explicit and stock cell lists specific sizes,
+                # keep only listed sizes as available (default qty 9999 each).
+                if size_tokens:
+                    valid_sizes = {str(x).replace(",", ".").strip() for x in size_tokens if str(x).strip()}
+                    stock_detail_parts: list[str] = []
+                    if isinstance(it, dict):
+                        for k in ("stock_text", "availability", "наличие"):
+                            v = it.get(k)
+                            if isinstance(v, str) and v.strip():
+                                stock_detail_parts.append(v.strip())
+                    if raw_stock_str:
+                        stock_detail_parts.append(raw_stock_str)
+                    stock_detail = " ".join(stock_detail_parts).strip()
+                    range_only_stock = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", stock_detail)) and not bool(re.search(r"[,;/]", stock_detail)) and not bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", stock_detail))
+                    listed_in_stock_raw = [str(m.group(1) or "").replace(",", ".").strip() for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)(?!\d)", stock_detail)]
+                    listed_in_stock = [x for x in listed_in_stock_raw if x in valid_sizes]
+                    if listed_in_stock and len(valid_sizes) >= 2 and not range_only_stock:
+                        stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(listed_in_stock)}
+
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
                     shop_vkus_map = _extract_shop_vkus_stock_map(it if isinstance(it, dict) else {})
                     if shop_vkus_map:
