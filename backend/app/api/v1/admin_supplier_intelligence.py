@@ -190,13 +190,28 @@ def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
             out[key] = 1
         return out
 
+    def _is_plain_range_only(text: str) -> bool:
+        raw = str(text or "").strip()
+        if not raw:
+            return False
+        has_range = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", raw))
+        if not has_range:
+            return False
+        # Treat comma/semicolon/slash lists as explicit available sizes; plain range is ambiguous.
+        has_list_delimiter = bool(re.search(r"[,;/]", raw))
+        has_qty_markers = bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", raw))
+        return has_range and not has_list_delimiter and not has_qty_markers
+
     for chunk in availability_chunks:
-        parsed_chunk = _normalize_map(extract_size_stock_map(chunk))
-        if parsed_chunk:
-            return parsed_chunk
         plain_available_chunk = _parse_plain_available_sizes(chunk)
         if plain_available_chunk:
             return plain_available_chunk
+        # Do not expand ambiguous ranges like "41-45" from availability text into all sizes in stock.
+        if _is_plain_range_only(chunk):
+            continue
+        parsed_chunk = _normalize_map(extract_size_stock_map(chunk))
+        if parsed_chunk:
+            return parsed_chunk
 
     stock_only_parts: list[str] = []
     for key in ("stock", "stock_text", "availability"):
@@ -204,7 +219,10 @@ def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
         if isinstance(v, str) and v.strip():
             stock_only_parts.append(v)
     if stock_only_parts:
-        parsed_stock_only = _normalize_map(extract_size_stock_map("\n".join(stock_only_parts)))
+        stock_blob = "\n".join(stock_only_parts)
+        parsed_stock_only = _normalize_map(extract_size_stock_map(stock_blob))
+        if _is_plain_range_only(stock_blob):
+            parsed_stock_only = {}
         if parsed_stock_only:
             return parsed_stock_only
         plain_available_stock_only = _parse_plain_available_sizes("\n".join(stock_only_parts))
@@ -261,6 +279,18 @@ def _is_shop_vkus_item_context(supplier_key: str | None, source_url: str, item: 
     for u in (item.get("image_urls") or []):
         if "shop_vkus" in str(u or "").lower():
             return True
+
+    # Heuristic fallback for feeds without explicit shop_vkus link/label:
+    # rows with footwear size range and per-item availability sizes in stock cell
+    # should be parsed like shop_vkus (keep only listed sizes in stock).
+    size_raw = str(item.get("size") or "").strip()
+    stock_raw = str(item.get("stock_text") or item.get("availability") or item.get("stock") or "").strip()
+    size_has_range = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", size_raw))
+    stock_has_sizes = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\b", stock_raw))
+    stock_has_item_markers = bool(re.search(r"(?i)(шт|в\s*наличии|available|in\s*stock)", stock_raw))
+    if size_has_range and stock_has_sizes and stock_has_item_markers:
+        return True
+
     return False
 
 
@@ -1913,7 +1943,7 @@ def import_products_from_sources(
                         if map_sizes and map_sizes.issubset(range_sizes) and (generic_in_stock or raw_stock_str == ""):
                             # Generic stock text with a size range should not auto-enable all range sizes.
                             stock_map = {}
-                    if stock_map and not qty_markers and all(int(v or 0) <= 1 for v in stock_map.values()):
+                    if stock_map and all(int(v or 0) <= 1 for v in stock_map.values()):
                         stock_map = {str(k): int(IMPORT_FALLBACK_STOCK_QTY) for k in stock_map.keys()}
                     elif not stock_map and stock_qty_parse_failed:
                         # Only treat plain separated size lists as "in stock" fallback.
