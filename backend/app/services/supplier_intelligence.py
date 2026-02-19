@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import colorsys
 import csv
 import io
 import json
@@ -1373,24 +1374,7 @@ def image_print_signature_from_url(url: str, timeout_sec: int = 20) -> str | Non
 
 
 def dominant_color_name_from_url(url: str, timeout_sec: int = 20) -> str | None:
-    try:
-        img = _load_image_for_analysis(_download_image_bytes(url, timeout_sec=timeout_sec))
-
-        small = img.resize((64, 64))
-        rs = gs = bs = 0
-        n = 0
-        for (rr, gg, bb) in list(small.getdata()):
-            rs += int(rr)
-            gs += int(gg)
-            bs += int(bb)
-            n += 1
-        if n <= 0:
-            return None
-        r_avg = rs / n
-        g_avg = gs / n
-        b_avg = bs / n
-
-        # coarse color naming
+    def _classify_rgb(r_avg: float, g_avg: float, b_avg: float) -> str:
         mx = max(r_avg, g_avg, b_avg)
         mn = min(r_avg, g_avg, b_avg)
         if mx < 45:
@@ -1410,6 +1394,42 @@ def dominant_color_name_from_url(url: str, timeout_sec: int = 20) -> str | None:
         if r_avg > 135 and b_avg > 120 and g_avg < 120:
             return "фиолетовый"
         return "мульти"
+
+    try:
+        img = _load_image_for_analysis(_download_image_bytes(url, timeout_sec=timeout_sec))
+
+        small = img.resize((64, 64))
+        pixels = list(small.getdata())
+        n = len(pixels)
+        if n <= 0:
+            return None
+
+        rs = gs = bs = 0
+        for (rr, gg, bb) in pixels:
+            rs += int(rr)
+            gs += int(gg)
+            bs += int(bb)
+        r_avg = rs / n
+        g_avg = gs / n
+        b_avg = bs / n
+        coarse = _classify_rgb(r_avg, g_avg, b_avg)
+
+        # Accent-aware fallback: if global mean is neutral, try vivid pixels only.
+        if coarse in {"черный", "белый", "серый", "мульти"}:
+            vivid: list[tuple[int, int, int]] = []
+            for (rr, gg, bb) in pixels:
+                h, s, v = colorsys.rgb_to_hsv(rr / 255.0, gg / 255.0, bb / 255.0)
+                if s >= 0.22 and v >= 0.18:
+                    vivid.append((rr, gg, bb))
+            if len(vivid) >= max(40, int(n * 0.03)):
+                vr = sum(int(r) for r, _, _ in vivid) / len(vivid)
+                vg = sum(int(g) for _, g, _ in vivid) / len(vivid)
+                vb = sum(int(b) for _, _, b in vivid) / len(vivid)
+                vivid_name = _classify_rgb(vr, vg, vb)
+                if vivid_name not in {"черный", "белый", "серый", "мульти"}:
+                    return vivid_name
+
+        return coarse
     except Exception:
         return None
 

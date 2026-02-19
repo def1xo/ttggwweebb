@@ -1007,6 +1007,23 @@ def test_extract_shop_vkus_stock_map_reads_cyrillic_availability_keys():
 
 
 
+def test_dominant_color_name_from_url_prefers_vivid_accent_over_gray(monkeypatch):
+    from PIL import Image
+    import io
+
+    img = Image.new("RGB", (64, 64), (120, 120, 120))
+    for y in range(20, 44):
+        for x in range(20, 44):
+            img.putpixel((x, y), (170, 70, 200))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    payload = buf.getvalue()
+
+    monkeypatch.setattr(si, "_download_image_bytes", lambda *a, **k: payload)
+    got = si.dominant_color_name_from_url("https://cdn.example.com/test.png")
+    assert got == "фиолетовый"
+
+
 def test_extract_shop_vkus_color_tokens_keeps_white_and_gray_from_images(monkeypatch):
     monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый" if u in {"a", "b"} else "серый")
     got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
