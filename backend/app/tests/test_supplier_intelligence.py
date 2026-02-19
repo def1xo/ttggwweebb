@@ -198,6 +198,20 @@ def test_split_size_tokens_supports_lists_and_ranges():
     assert split_size_tokens("42-44") == ["42", "43", "44"]
 
 
+
+
+def test_extract_catalog_items_preserves_non_numeric_stock_text():
+    rows = [
+        ["Товар", "Цена дроп", "Размер", "Наличие"],
+        ["Nike SB Dunk", "4900", "41-45", "в наличии"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["stock"] is None
+    assert items[0]["stock_text"] == "в наличии"
+
 def test_find_similar_images_filters_by_hamming_distance(monkeypatch):
     signatures = {
         "https://ref/img.jpg": "aaaa",

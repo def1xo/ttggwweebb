@@ -404,11 +404,12 @@ def _filter_gallery_main_signature_cluster(image_urls: list[str]) -> list[str]:
 def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = None) -> list[str]:
     if not image_urls:
         return []
+    raw_norm: list[str] = [str(u or "").strip() for u in image_urls if str(u or "").strip()]
+
     uniq: list[str] = []
     seen = set()
-    for u in image_urls:
-        uu = str(u or "").strip()
-        if not uu or uu in seen:
+    for uu in raw_norm:
+        if uu in seen:
             continue
         seen.add(uu)
         uniq.append(uu)
@@ -419,13 +420,12 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
     if supplier_key == "shop_vkus":
         # shop_vkus feeds often prepend two service frames in longer galleries.
         pre = list(uniq)
-        if len(uniq) >= 7:
+        source = raw_norm or uniq
+        if len(source) >= 7:
             pre = uniq[2:]
-        elif len(uniq) == 5:
-            pre = uniq[2:]
-        elif len(uniq) > 2:
-            first_two = uniq[:2]
-            rest = uniq[2:]
+        elif len(source) > 2:
+            first_two = source[:2]
+            rest = source[2:]
             has_supplier_marker = any(
                 ("shop_vkus" in str(u or "").lower()) or ("shop-vkus" in str(u or "").lower())
                 for u in first_two
@@ -433,7 +433,14 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
             leading_pair_suspicious = any((not _is_likely_product_image(u)) or (_score_gallery_image(u) < 0) for u in first_two)
             duplicated_cover = bool(first_two and first_two[0] in rest)
             second_is_suspicious = bool((not _is_likely_product_image(first_two[1])) or (_score_gallery_image(first_two[1]) < 0)) if len(first_two) >= 2 else False
-            if has_supplier_marker or leading_pair_suspicious or (duplicated_cover and second_is_suspicious):
+
+            should_drop_pair = False
+            if len(source) >= 6 and (has_supplier_marker or leading_pair_suspicious or duplicated_cover):
+                should_drop_pair = True
+            elif len(source) == 5 and (has_supplier_marker or leading_pair_suspicious or (duplicated_cover and second_is_suspicious)):
+                should_drop_pair = True
+
+            if should_drop_pair:
                 pre = uniq[2:]
 
         filtered = [u for u in pre if _is_likely_product_image(u)]
