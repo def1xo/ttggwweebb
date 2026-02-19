@@ -133,8 +133,10 @@ export default function ProductPage() {
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const [related, setRelated] = useState<any[]>([]);
   const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
+  const [slideDir, setSlideDir] = useState<"next" | "prev">("next");
 
   const touchX = useRef<number | null>(null);
+  const viewerTouchX = useRef<number | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -268,6 +270,18 @@ export default function ProductPage() {
 
   const activeImage = images[activeIndex] || normalizeMediaUrl(product?.default_image) || "/logo_black.png";
 
+  const goToNextImage = () => {
+    if (images.length <= 1) return;
+    setSlideDir("next");
+    setActiveIndex((i) => (i + 1) % images.length);
+  };
+
+  const goToPrevImage = () => {
+    if (images.length <= 1) return;
+    setSlideDir("prev");
+    setActiveIndex((i) => (i - 1 + images.length) % images.length);
+  };
+
   const onTouchStart = (e: React.TouchEvent) => {
     touchX.current = e.touches?.[0]?.clientX ?? null;
   };
@@ -278,8 +292,24 @@ export default function ProductPage() {
     if (start == null || end == null) return;
     const dx = end - start;
     if (Math.abs(dx) < 40) return;
-    if (dx < 0) setActiveIndex((i) => Math.min(i + 1, Math.max(0, images.length - 1)));
-    else setActiveIndex((i) => Math.max(i - 1, 0));
+    if (dx < 0) goToNextImage();
+    else goToPrevImage();
+  };
+
+  const onViewerTouchStart = (e: React.TouchEvent) => {
+    viewerTouchX.current = e.touches?.[0]?.clientX ?? null;
+  };
+
+  const onViewerTouchEnd = (e: React.TouchEvent) => {
+    const start = viewerTouchX.current;
+    const end = e.changedTouches?.[0]?.clientX ?? null;
+    viewerTouchX.current = null;
+    if (start == null || end == null) return;
+    const dx = end - start;
+    if (Math.abs(dx) < 40) return;
+    e.stopPropagation();
+    if (dx < 0) goToNextImage();
+    else goToPrevImage();
   };
 
   const addToCart = () => {
@@ -393,7 +423,7 @@ export default function ProductPage() {
           onTouchStart={onTouchStart}
           onTouchEnd={onTouchEnd}
         >
-          <img className="product-detail-hero" src={activeImage} alt={product.title} style={{ cursor: "zoom-in" }} onClick={() => setIsImageViewerOpen(true)} />
+          <img key={`${activeImage}_${slideDir}`} className={`product-detail-hero product-detail-hero--${slideDir}`} src={activeImage} alt={product.title} style={{ cursor: "zoom-in" }} onClick={() => setIsImageViewerOpen(true)} />
 
           {images.length > 1 ? (
             <div className="thumb-grid" style={{ marginTop: 10 }}>
@@ -404,7 +434,10 @@ export default function ProductPage() {
                   src={u}
                   alt=""
                   style={{ outline: idx === activeIndex ? "2px solid var(--ring)" : "none" }}
-                  onClick={() => setActiveIndex(idx)}
+                  onClick={() => {
+                    setSlideDir(idx >= activeIndex ? "next" : "prev");
+                    setActiveIndex(idx);
+                  }}
                 />
               ))}
             </div>
@@ -494,6 +527,8 @@ export default function ProductPage() {
           role="dialog"
           aria-modal="true"
           onClick={() => setIsImageViewerOpen(false)}
+          onTouchStart={onViewerTouchStart}
+          onTouchEnd={onViewerTouchEnd}
           style={{
             position: "fixed",
             inset: 0,
@@ -530,7 +565,7 @@ export default function ProductPage() {
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                setActiveIndex((i) => (i - 1 + images.length) % images.length);
+                goToPrevImage();
               }}
               style={{
                 position: "fixed",
@@ -552,9 +587,11 @@ export default function ProductPage() {
           ) : null}
 
           <img
+            key={`viewer_${activeImage}_${slideDir}`}
             src={activeImage}
             alt={product.title}
             onClick={(e) => e.stopPropagation()}
+            className={`image-viewer__img image-viewer__img--${slideDir}`}
             style={{ maxWidth: "100%", maxHeight: "90vh", objectFit: "contain", borderRadius: 12 }}
           />
 
@@ -563,7 +600,7 @@ export default function ProductPage() {
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                setActiveIndex((i) => (i + 1) % images.length);
+                goToNextImage();
               }}
               style={{
                 position: "fixed",
