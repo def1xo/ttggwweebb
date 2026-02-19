@@ -199,6 +199,7 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
     color_hits: dict[str, int] = {}
     for _, key in analyzed:
         color_hits[key] = int(color_hits.get(key, 0) or 0) + 1
+    ranked = [k for k, _ in sorted(color_hits.items(), key=lambda x: x[1], reverse=True)]
     strong = [k for k, v in sorted(color_hits.items(), key=lambda x: x[1], reverse=True) if v >= 2]
     if strong:
         return strong[:1]
