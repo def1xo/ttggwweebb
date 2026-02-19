@@ -183,6 +183,14 @@ def _score_gallery_image(url: str | None) -> float:
                 std = float(stat.stddev[0] if stat.stddev else 0.0)
                 score += min(30.0, std * 0.8)
 
+                try:
+                    entropy = float(gray.entropy())
+                except Exception:
+                    entropy = 0.0
+                score += min(20.0, max(0.0, entropy - 4.0) * 4.0)
+                if entropy < 3.4:
+                    score -= 55.0
+
                 if pixels < 220_000:
                     score -= 70.0
                 elif pixels < 500_000:
@@ -1318,7 +1326,7 @@ def import_products_from_sources(
                 min_dropship = title_min_dropship.get(base_title_key)
                 cat_name = map_category(title)
                 category = get_or_create_category(cat_name)
-                effective_title = (title_for_group or title).strip()
+                effective_title = (title_for_group or title).strip()[:500]
                 slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
                 p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
@@ -1354,7 +1362,7 @@ def import_products_from_sources(
                     image_url = row_image_urls[0]
                 if not image_url and "t.me/" in src_url:
                     try:
-                        tg_limit = 12 if supplier_key == "shop_vkus" else 3
+                        tg_limit = 20 if supplier_key == "shop_vkus" else 3
                         tg_imgs = extract_image_urls_from_html_page(src_url, limit=tg_limit)
                         image_url = tg_imgs[0] if tg_imgs else None
                         if tg_imgs:
@@ -1395,7 +1403,7 @@ def import_products_from_sources(
                             else:
                                 telegram_media_expand_count += 1
                                 try:
-                                    tg_limit = 12 if supplier_key == "shop_vkus" else 8
+                                    tg_limit = 20 if supplier_key == "shop_vkus" else 8
                                     tg_media = extract_image_urls_from_html_page(cu, limit=tg_limit)
                                 except Exception:
                                     tg_media = []
@@ -1581,7 +1589,7 @@ def import_products_from_sources(
                 if len(color_tokens) <= 1:
                     color_tokens = [""]
 
-                size_tokens = split_size_tokens(it.get("size"))
+                size_tokens = [str(x).strip()[:16] for x in split_size_tokens(it.get("size")) if str(x).strip()[:16]]
 
                 raw_stock = it.get("stock") if isinstance(it, dict) else None
                 try:
