@@ -429,9 +429,11 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
             if not should_drop_leading_pair and any((not _is_likely_product_image(u)) or (_score_gallery_image(u) < 0) for u in first_two):
                 should_drop_leading_pair = True
 
-            # For shorter galleries, shop_vkus sometimes prepends preview + business-card frames.
-            # Keep old "all product photos" behavior intact unless we detect a clear hint.
-            if not should_drop_leading_pair and len(work) <= 5:
+            # For shop_vkus short/medium galleries (5+), first two frames are frequently
+            # preview/business-card and should be dropped.
+            if not should_drop_leading_pair and len(work) >= 5:
+                should_drop_leading_pair = True
+            elif not should_drop_leading_pair and len(work) <= 4:
                 has_supplier_marker = any(
                     ("shop_vkus" in str(u or "").lower()) or ("shop-vkus" in str(u or "").lower())
                     for u in first_two
@@ -1845,10 +1847,12 @@ def import_products_from_sources(
                 raw_stock = it.get("stock") if isinstance(it, dict) else None
                 raw_stock_str = str(raw_stock).strip() if raw_stock is not None else ""
                 has_explicit_stock = bool(raw_stock_str)
+                stock_qty_parse_failed = False
                 try:
                     stock_qty = int(raw_stock_str) if has_explicit_stock else 0
                 except Exception:
                     stock_qty = 0
+                    stock_qty_parse_failed = has_explicit_stock
                 if stock_qty < 0:
                     stock_qty = 0
 
@@ -1871,6 +1875,16 @@ def import_products_from_sources(
                         for sk, sv in shop_vkus_map.items():
                             merged_map[str(sk)] = max(int(merged_map.get(str(sk), 0) or 0), int(sv or 0))
                         stock_map = merged_map
+                if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
+                    # In shop_vkus plain size lists in stock cell mean available sizes with default open quantity.
+                    # Example: "42 43" / "41,42,44".
+                    qty_markers = bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", raw_stock_str))
+                    if stock_map and not qty_markers and all(int(v or 0) <= 1 for v in stock_map.values()):
+                        stock_map = {str(k): int(IMPORT_FALLBACK_STOCK_QTY) for k in stock_map.keys()}
+                    elif not stock_map and stock_qty_parse_failed:
+                        inferred_sizes = [str(x).strip()[:16] for x in split_size_tokens(raw_stock_str) if str(x).strip()[:16]]
+                        if inferred_sizes:
+                            stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in inferred_sizes}
 
                 if not size_tokens and stock_map:
                     size_tokens = sorted(
