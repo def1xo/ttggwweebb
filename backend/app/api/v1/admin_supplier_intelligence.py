@@ -1337,6 +1337,10 @@ def import_products_from_sources(
                 slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
                 p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
+                if image_urls:
+                    image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
+                    image_url = image_urls[0]
+
                 if not p:
                     p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
                 if not p and supplier_key:
