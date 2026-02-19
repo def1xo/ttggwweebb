@@ -1108,6 +1108,53 @@ def test_import_products_row_with_expanded_size_list_and_single_available_size_m
 
 
 
+def test_import_products_prefers_row_dropship_markup_over_rrc_discount(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-13a/htmlview",
+            supplier_name="def shop",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "РРЦ", "Размер", "Наличие", "Фото"],
+                    ["NIKE zoom vomero 5", "дроп 2099 / Слив:2000", "2400", "41-45", "42", "https://cdn.example.com/vomero.jpg"],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        product = db.query(models.Product).filter(models.Product.import_source_url == src.source_url).one()
+        assert int(float(product.base_price or 0)) == 2799
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+
+
 def test_import_products_shop_vkus_infers_single_colors_per_row_when_color_cell_empty(monkeypatch):
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)

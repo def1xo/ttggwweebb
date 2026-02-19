@@ -1431,12 +1431,14 @@ def import_products_from_sources(
         min_dropship_price: float | None = None,
         rrc_price: float | None = None,
     ) -> float:
-        base = float(min_dropship_price or 0) if float(min_dropship_price or 0) > 0 else float(dropship_price or 0)
-        if base <= 0:
-            base = float(dropship_price or 0)
+        current_ds = float(dropship_price or 0)
+        fallback_min_ds = float(min_dropship_price or 0)
+        # Price for current row must stay authoritative when present.
+        # Use minimal title-level dropship only as fallback for missing/invalid row price.
+        base = current_ds if current_ds > 0 else fallback_min_ds
 
-        # Top priority: supplier RRC/RRP minus fixed discount.
-        if rrc_price is not None:
+        # Use supplier RRC/RRP only when row dropship is missing; otherwise keep row-based markup flow.
+        if base <= 0 and rrc_price is not None:
             try:
                 rrc_val = float(rrc_price)
                 if rrc_val > 0:
