@@ -477,6 +477,24 @@ def _extract_size_stock_map(raw: Any) -> dict[str, int]:
     for pat in patterns:
         for sz, qty in re.findall(pat, txt):
             _push(sz, qty)
+
+    # shop_vkus often provides availability as plain size list in stock cell,
+    # e.g. "41,42,44" or "38" (without explicit qty). Treat listed sizes as in-stock.
+    if not out:
+        plain = _norm(raw).upper().replace("–", "-").replace("—", "-").replace("−", "-")
+        has_qty_markers = bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,3}\b|\b\d{2,3}\s*\(\s*\d{1,3}", plain))
+        list_like = bool(re.search(r"[,;/]", plain)) or bool(re.fullmatch(r"\s*\d{2,3}(?:[.,]5)?\s*", plain))
+        if list_like and not has_qty_markers:
+            for m in re.finditer(r"\b(\d{2,3}(?:[.,]5)?)\b", plain):
+                t = str(m.group(1) or "").replace(",", ".").strip()
+                try:
+                    val = float(t)
+                except Exception:
+                    continue
+                if val < 20 or val > 60:
+                    continue
+                key = str(int(val)) if float(val).is_integer() else t
+                out[key] = max(out.get(key, 0), 1)
     return out
 
 
@@ -1159,6 +1177,31 @@ def _normalize_telegram_post_url(raw_url: str) -> str:
     return u
 
 
+def _extract_tg_cdn_urls_from_blob(blob: str) -> list[str]:
+    txt = str(blob or "")
+    out: list[str] = []
+
+    def _push(u: str):
+        uu = str(u or "").strip().strip("\"'")
+        if not uu:
+            return
+        uu = uu.replace('\\/', '/')
+        if uu.startswith('//'):
+            uu = 'https:' + uu
+        if uu.startswith('http://') or uu.startswith('https://'):
+            if uu not in out:
+                out.append(uu)
+
+    for m in re.findall(r'https?://cdn\d?\.telesco\.pe/file/[^"\'\s<)]+', txt, flags=re.I):
+        _push(m)
+    for m in re.findall(r'https?:\\/\\/cdn\d?\.telesco\.pe\\/file\\/[^"\'\s<)]+', txt, flags=re.I):
+        _push(m)
+    for m in re.findall(r'url\(([^)]+)\)', txt, flags=re.I):
+        _push(m)
+
+    return out
+
+
 def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: int = 20) -> list[str]:
     url = _normalize_telegram_post_url(url)
     headers = {"User-Agent": "defshop-intel-bot/1.0"}
@@ -1204,10 +1247,25 @@ def extract_image_urls_from_html_page(url: str, timeout_sec: int = 20, limit: in
                 for m in re.findall(r"background-image:url\(([^)]+)\)", block, flags=re.I):
                     _push(m, tg_public)
 
-                for m in re.findall(r'https://cdn\d?\.telesco\.pe/file/[^"\'\s<)]+', block, flags=re.I):
+                for m in _extract_tg_cdn_urls_from_blob(block):
                     _push(m, tg_public)
         except Exception:
             pass
+
+    # fallback for Telegram pages where CDN links are escaped in scripts
+    if tg_m and len(urls) <= 1:
+        for m in _extract_tg_cdn_urls_from_blob(html):
+            _push(m, url)
+        if len(urls) <= 1:
+            try:
+                embed_url = _normalize_telegram_post_url(str(url).strip()) + "?embed=1&mode=tme"
+                embed_html = _http_get_with_retries(embed_url, timeout_sec=timeout_sec, headers=headers, max_attempts=2).text or ""
+                for m in _extract_tg_cdn_urls_from_blob(embed_html):
+                    _push(m, embed_url)
+                for m in re.findall(r"<img[^>]+src=[\"']([^\"']+)[\"']", embed_html, flags=re.I):
+                    _push(m, embed_url)
+            except Exception:
+                pass
 
     # og/twitter image meta
     for m in re.findall(r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]+content=["\']([^"\']+)["\']', html, flags=re.I):
