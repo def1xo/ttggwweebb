@@ -39,13 +39,17 @@ def list_products(
     for p in items:
         variants = []
         sizes = set()
+        in_stock_sizes = set()
         colors = set()
         min_variant_price: float | None = None
         has_stock = False
         for v in (p.variants or []):
             try:
                 if getattr(v, "size", None) and v.size and v.size.name:
-                    sizes.add(v.size.name)
+                    size_name = v.size.name
+                    sizes.add(size_name)
+                    if int(getattr(v, "stock_quantity", 0) or 0) > 0:
+                        in_stock_sizes.add(size_name)
                 if getattr(v, "color", None) and v.color and v.color.name:
                     colors.add(v.color.name)
             except Exception:
@@ -87,7 +91,7 @@ def list_products(
                 "category_id": p.category_id,
                 "min_variant_price": min_variant_price,
                 "has_stock": has_stock,
-                "sizes": sorted(list(sizes), key=lambda x: float(x) if str(x).replace('.', '', 1).isdigit() else str(x)),
+                "sizes": sorted(list(in_stock_sizes or sizes), key=lambda x: float(x) if str(x).replace('.', '', 1).isdigit() else str(x)),
                 "colors": sorted(list(colors)),
                 "variants": variants,
             }
@@ -106,7 +110,13 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
     except Exception:
         img_urls = []
 
-    sizes = sorted({(v.size.name if getattr(v, "size", None) and v.size else None) for v in (p.variants or []) if (getattr(v, "size", None) and v.size and v.size.name)}, key=lambda x: float(x) if str(x).replace('.', '', 1).isdigit() else str(x))
+    all_sizes = {(v.size.name if getattr(v, "size", None) and v.size else None) for v in (p.variants or []) if (getattr(v, "size", None) and v.size and v.size.name)}
+    in_stock_sizes = {
+        (v.size.name if getattr(v, "size", None) and v.size else None)
+        for v in (p.variants or [])
+        if (getattr(v, "size", None) and v.size and v.size.name and int(getattr(v, "stock_quantity", 0) or 0) > 0)
+    }
+    sizes = sorted((in_stock_sizes or all_sizes), key=lambda x: float(x) if str(x).replace('.', '', 1).isdigit() else str(x))
     colors = sorted({(v.color.name if getattr(v, "color", None) and v.color else None) for v in (p.variants or []) if (getattr(v, "color", None) and v.color and v.color.name)})
 
     return {
