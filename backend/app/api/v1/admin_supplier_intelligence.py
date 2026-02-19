@@ -1857,10 +1857,18 @@ def import_products_from_sources(
                     if matched_p is not None:
                         p = matched_p
 
-                # image-based analysis: same print with different colors -> same product, new color variants
+                # image-based analysis: same print with different colors -> same product, new color variants.
+                # Guard: do not cross-merge different models with coincidentally similar signatures.
                 same_print_product = find_product_by_signature(sig)
                 if same_print_product and (not p or p.id != same_print_product.id):
-                    p = same_print_product
+                    current_media_key = _title_media_key(title)
+                    matched_media_key = _title_media_key(getattr(same_print_product, "title", ""))
+                    same_supplier_ctx = (
+                        supplier_key
+                        and _supplier_key(getattr(same_print_product, "import_supplier_name", None)) == supplier_key
+                    )
+                    if current_media_key and matched_media_key and current_media_key == matched_media_key and same_supplier_ctx:
+                        p = same_print_product
                 elif sig and p:
                     signature_product_map[sig] = int(p.id)
 
