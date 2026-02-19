@@ -932,3 +932,25 @@ def test_extract_image_urls_from_html_page_reads_escaped_telescope_urls(monkeypa
         "https://cdn4.telesco.pe/file/a.jpg",
         "https://cdn4.telesco.pe/file/b.jpg",
     ]
+
+
+
+def test_rerank_gallery_images_prefers_higher_score(monkeypatch):
+    scores = {
+        "/uploads/products/a.jpg": 10.0,
+        "/uploads/products/b.jpg": 35.0,
+        "/uploads/products/c.jpg": -5.0,
+    }
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda u: scores.get(u, 0.0))
+
+    out = asi._rerank_gallery_images([
+        "/uploads/products/a.jpg",
+        "/uploads/products/b.jpg",
+        "/uploads/products/c.jpg",
+    ], supplier_key="shop_vkus")
+
+    assert out == [
+        "/uploads/products/b.jpg",
+        "/uploads/products/a.jpg",
+        "/uploads/products/c.jpg",
+    ]

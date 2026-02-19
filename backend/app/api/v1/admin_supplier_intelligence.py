@@ -146,6 +146,82 @@ def _resolve_source_image_url(raw_url: str | None, source_url: str) -> str | Non
         return raw
 
 
+def _score_gallery_image(url: str | None) -> float:
+    u = str(url or "").strip()
+    if not u:
+        return -1e9
+
+    low = u.lower()
+    score = 0.0
+
+    # URL-level heuristics
+    if any(k in low for k in ("logo", "avatar", "sticker", "emoji", "icon", "banner", "watermark")):
+        score -= 80.0
+    if any(k in low for k in ("shop-vkus", "shop_vkus")) and any(k in low for k in ("logo", "banner", "promo")):
+        score -= 60.0
+    if any(ext in low for ext in (".jpg", ".jpeg", ".png", ".webp", ".avif")):
+        score += 5.0
+
+    # Local-file quality heuristics (if localized and Pillow is available)
+    local_path: str | None = None
+    if low.startswith("/"):
+        local_path = u.lstrip("/")
+    elif low.startswith("uploads/"):
+        local_path = u
+
+    if local_path:
+        try:
+            from PIL import Image, ImageStat  # type: ignore
+            with Image.open(local_path) as img:
+                w, h = img.size
+                pixels = max(1, int(w) * int(h))
+                mp = pixels / 1_000_000.0
+                score += min(40.0, mp * 20.0)
+
+                gray = img.convert("L")
+                stat = ImageStat.Stat(gray)
+                std = float(stat.stddev[0] if stat.stddev else 0.0)
+                score += min(30.0, std * 0.8)
+
+                if pixels < 220_000:
+                    score -= 70.0
+                elif pixels < 500_000:
+                    score -= 20.0
+
+                ratio = (w / h) if h else 1.0
+                if ratio < 0.45 or ratio > 2.4:
+                    score -= 20.0
+                if 0.85 <= ratio <= 1.15 and std < 18:
+                    score -= 30.0
+        except Exception:
+            pass
+
+    return score
+
+
+def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = None) -> list[str]:
+    if not image_urls:
+        return []
+    uniq: list[str] = []
+    seen = set()
+    for u in image_urls:
+        uu = str(u or "").strip()
+        if not uu or uu in seen:
+            continue
+        seen.add(uu)
+        uniq.append(uu)
+
+    if len(uniq) <= 1:
+        return uniq
+
+    ranked = sorted(uniq, key=lambda x: _score_gallery_image(x), reverse=True)
+
+    # Keep at least one likely product photo in front for known problematic supplier.
+    if supplier_key == "shop_vkus":
+        return ranked[:12] if len(ranked) > 12 else ranked
+    return ranked
+
+
 def _prefer_local_image_url(url: str | None, *, title_hint: str | None = None, source_page_url: str | None = None) -> str | None:
     normalized_u = _resolve_source_image_url(url, source_page_url or "") or ""
     if not normalized_u:
@@ -1246,10 +1322,18 @@ def import_products_from_sources(
                 slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
                 p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
+                if image_urls:
+                    image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
+                    image_url = image_urls[0]
+
                 if not p:
                     p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
                 if not p and supplier_key:
                     p = _find_existing_supplier_product(supplier_key, getattr(src, "supplier_name", None), _title_key(effective_title))
+                if image_urls:
+                    image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
+                    image_url = image_urls[0]
+
                 if not p:
                     p = _find_existing_global_product(int(category.id), _title_key(effective_title))
 
@@ -1341,6 +1425,7 @@ def import_products_from_sources(
 
                 if localized_image_urls:
                     image_urls = localized_image_urls
+                    image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
                     image_url = image_urls[0]
 
                 # Last-resort quality step: if supplier didn't provide any image,
@@ -1358,6 +1443,7 @@ def import_products_from_sources(
                         if local_u and local_u not in image_urls:
                             image_urls.append(local_u)
                     if image_urls:
+                        image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
                         image_url = image_urls[0]
 
                 # auto-enrich item gallery with similar photos from known supplier pool
@@ -1379,6 +1465,10 @@ def import_products_from_sources(
                                 break
                     except Exception:
                         pass
+
+                if image_urls:
+                    image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
+                    image_url = image_urls[0]
 
                 if not p:
                     # unique slug fallback
