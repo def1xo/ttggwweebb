@@ -245,9 +245,13 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
 
     ranked = sorted(uniq, key=lambda x: _score_gallery_image(x), reverse=True)
 
-    # Keep at least one likely product photo in front for known problematic supplier.
+    # shop_vkus feed often starts with 1-2 noisy promo frames and then useful product photos.
+    # Product requirement: drop first 2 and keep only next 7 images.
     if supplier_key == "shop_vkus":
-        return ranked[:12] if len(ranked) > 12 else ranked
+        if len(ranked) > 7:
+            trimmed = ranked[2:] if len(ranked) > 2 else ranked
+            return trimmed[:7]
+        return ranked
     return ranked
 
 
@@ -1647,8 +1651,13 @@ def import_products_from_sources(
                         if kk and vv >= 0:
                             stock_map[kk] = vv
 
-                if supplier_key == "shop_vkus" and not stock_map and isinstance(it, dict):
-                    stock_map = _extract_shop_vkus_stock_map(it)
+                if supplier_key == "shop_vkus" and isinstance(it, dict):
+                    shop_vkus_map = _extract_shop_vkus_stock_map(it)
+                    if shop_vkus_map:
+                        merged_map = dict(stock_map)
+                        for sk, sv in shop_vkus_map.items():
+                            merged_map[str(sk)] = max(int(merged_map.get(str(sk), 0) or 0), int(sv or 0))
+                        stock_map = merged_map
 
                 if not size_tokens and stock_map:
                     size_tokens = sorted(
