@@ -249,6 +249,17 @@ def test_rerank_gallery_images_shop_vkus_drops_first_two_and_caps_to_seven():
     assert "https://cdn.example.com/2.jpg" not in out
 
 
+
+
+def test_rerank_gallery_images_shop_vkus_drops_first_two_even_when_total_five():
+    urls = [f"https://cdn.example.com/{i}.jpg" for i in range(1, 6)]
+    out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
+    assert out == [
+        "https://cdn.example.com/3.jpg",
+        "https://cdn.example.com/4.jpg",
+        "https://cdn.example.com/5.jpg",
+    ]
+
 def test_import_products_shop_vkus_detected_from_row_link_even_if_supplier_name_differs(monkeypatch):
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
