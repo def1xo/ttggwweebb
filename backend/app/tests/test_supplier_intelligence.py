@@ -970,6 +970,15 @@ def test_extract_shop_vkus_stock_map_does_not_treat_spaced_range_as_in_stock_lis
     assert got == {}
 
 
+def test_extract_shop_vkus_stock_map_reads_cyrillic_availability_keys():
+    item = {
+        "РАЗМЕРЫ": "41-45",
+        "НАЛИЧИЕ": "42 (1шт)",
+    }
+    got = asi._extract_shop_vkus_stock_map(item)
+    assert got == {"42": 1}
+
+
 
 def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
     item = {

@@ -129,11 +129,24 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
     return found[:1]
 
 def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
+    def _iter_stock_like_values(src: dict) -> list[str]:
+        vals: list[str] = []
+        for k, v in (src or {}).items():
+            if not isinstance(v, str) or not v.strip():
+                continue
+            key_low = str(k or "").strip().lower()
+            if key_low in {"stock", "stock_text", "availability", "наличие"} or any(
+                marker in key_low for marker in ("availability", "налич", "stock")
+            ):
+                vals.append(v)
+        return vals
+
     blob_parts: list[str] = []
     for key in ("size", "sizes", "stock", "stock_text", "title", "description", "text", "notes"):
         v = item.get(key)
         if isinstance(v, str) and v.strip():
             blob_parts.append(v)
+    blob_parts.extend(_iter_stock_like_values(item))
     blob = "\n".join(blob_parts)
     if not blob:
         return {}
@@ -213,11 +226,7 @@ def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
         if parsed_chunk:
             return parsed_chunk
 
-    stock_only_parts: list[str] = []
-    for key in ("stock", "stock_text", "availability"):
-        v = item.get(key)
-        if isinstance(v, str) and v.strip():
-            stock_only_parts.append(v)
+    stock_only_parts: list[str] = _iter_stock_like_values(item)
     if stock_only_parts:
         stock_blob = "\n".join(stock_only_parts)
         parsed_stock_only = _normalize_map(extract_size_stock_map(stock_blob))
