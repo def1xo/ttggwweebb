@@ -777,3 +777,59 @@ def test_import_products_shop_vkus_like_row_without_link_uses_availability_sizes
         db.close()
         Base.metadata.drop_all(engine)
 
+
+
+def test_import_products_shop_vkus_like_row_without_link_and_plain_size_list_uses_only_listed_sizes(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-12/htmlview",
+            supplier_name="def shop",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото"],
+                    ["ASICS GEL KAHANA 8", "4900", "41-45", "42,43,44", "https://cdn.example.com/a.jpg"],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        variants = db.query(models.ProductVariant).all()
+        by_size = {
+            (db.query(models.Size).filter(models.Size.id == v.size_id).one().name if v.size_id else ""): int(v.stock_quantity or 0)
+            for v in variants
+        }
+        assert by_size["42"] == 9999
+        assert by_size["43"] == 9999
+        assert by_size["44"] == 9999
+        assert by_size["41"] == 0
+        assert by_size["45"] == 0
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+

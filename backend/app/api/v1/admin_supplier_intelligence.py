@@ -287,8 +287,8 @@ def _is_shop_vkus_item_context(supplier_key: str | None, source_url: str, item: 
     stock_raw = str(item.get("stock_text") or item.get("availability") or item.get("stock") or "").strip()
     size_has_range = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", size_raw))
     stock_has_sizes = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\b", stock_raw))
-    stock_has_item_markers = bool(re.search(r"(?i)(шт|в\s*наличии|available|in\s*stock)", stock_raw))
-    if size_has_range and stock_has_sizes and stock_has_item_markers:
+    # Even without explicit words/units, shop_vkus-like sheets store remaining sizes in stock cell.
+    if size_has_range and stock_has_sizes:
         return True
 
     return False
@@ -1935,6 +1935,16 @@ def import_products_from_sources(
                     size_raw = str((it.get("size") if isinstance(it, dict) else "") or "").strip()
                     size_range_like = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", size_raw))
                     size_list_like = bool(re.search(r"[,;/\s]", size_raw))
+
+                    # Authoritative rule for size availability rows:
+                    # when stock cell explicitly lists sizes from the row size set,
+                    # keep only these sizes in stock.
+                    valid_sizes = {str(x).replace(",", ".").strip() for x in size_tokens if str(x).strip()}
+                    listed_in_stock_raw = [str(m.group(1) or "").replace(",", ".").strip() for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)(?!\d)", raw_stock_str)]
+                    listed_in_stock = [x for x in listed_in_stock_raw if x in valid_sizes]
+                    if listed_in_stock:
+                        stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(listed_in_stock)}
+
                     if stock_map and size_range_like and all(int(v or 0) <= 1 for v in stock_map.values()):
                         range_sizes = {str(x).replace(",", ".").strip() for x in split_size_tokens(size_raw) if str(x).strip()}
                         map_sizes = {str(k).replace(",", ".").strip() for k in stock_map.keys() if str(k).strip()}
