@@ -192,6 +192,15 @@ export default function ProductPage() {
     setActiveIndex(0);
   }, [activeIndex, images.length]);
 
+  useEffect(() => {
+    if (!isImageViewerOpen) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") setIsImageViewerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isImageViewerOpen]);
+
   const variants: any[] = useMemo(() => (product?.variants || []) as any[], [product]);
 
   const sizes = useMemo(() => {
@@ -572,23 +581,12 @@ export default function ProductPage() {
         >
           <button
             type="button"
+            className="image-viewer__close"
             onClick={() => setIsImageViewerOpen(false)}
-            style={{
-              position: "fixed",
-              top: 14,
-              right: 14,
-              width: 42,
-              height: 42,
-              borderRadius: 999,
-              border: "1px solid rgba(255,255,255,0.25)",
-              background: "rgba(18,18,18,0.7)",
-              color: "#fff",
-              fontSize: 22,
-              lineHeight: 1,
-            }}
-            aria-label="Закрыть фото"
+            onTouchEnd={(e) => e.stopPropagation()}
+            aria-label="Закрыть полноэкранный просмотр"
           >
-            ×
+            Закрыть ✕
           </button>
 
           {images.length > 1 ? (

@@ -120,7 +120,7 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
         except Exception:
             nm = None
         key = str(nm or "").strip().lower()
-        if not key or key in {"мульти", "серый"}:
+        if not key or key in {"мульти"}:
             continue
         color_hits[key] = int(color_hits.get(key, 0) or 0) + 1
     strong = [k for k, v in sorted(color_hits.items(), key=lambda x: x[1], reverse=True) if v >= 2]

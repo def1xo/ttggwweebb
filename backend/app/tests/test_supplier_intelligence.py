@@ -995,6 +995,12 @@ def test_extract_shop_vkus_stock_map_reads_cyrillic_availability_keys():
 
 
 
+def test_extract_shop_vkus_color_tokens_keeps_white_and_gray_from_images(monkeypatch):
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый" if u in {"a", "b"} else "серый")
+    got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
+    assert got == ["белый", "серый"]
+
+
 def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
     item = {
         "title": "Yeezy 350",
