@@ -1285,6 +1285,11 @@ def import_products_from_sources(
             continue
 
         for it in items:
+            # Keep media vars initialized for the whole item scope so any
+            # future early references cannot crash with UnboundLocalError.
+            image_url: str | None = None
+            row_image_urls: list[str] = []
+            image_urls: list[str] = []
             try:
                 title = normalize_title_for_supplier(str(it.get("title") or "").strip(), getattr(src, "supplier_name", None))
                 ds_price = float(it.get("dropship_price") or 0)
@@ -1369,7 +1374,7 @@ def import_products_from_sources(
                     except Exception:
                         image_url = None
 
-                image_urls: list[str] = []
+                image_urls = []
                 for u in [image_url, *row_image_urls]:
                     uu = _resolve_source_image_url(u, src_url)
                     if uu and uu not in image_urls:
