@@ -944,6 +944,116 @@ def test_import_products_shop_vkus_like_row_without_link_uses_availability_sizes
         Base.metadata.drop_all(engine)
 
 
+def test_import_products_shop_vkus_stock_text_with_specific_size_marks_only_that_size(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-10/htmlview",
+            supplier_name="shop_vkus",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото"],
+                    ["Nike SB Dunk", "4900", "41-45", "в наличии 42", "https://cdn.example.com/a.jpg"],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        variants = db.query(models.ProductVariant).all()
+        by_size = {
+            (db.query(models.Size).filter(models.Size.id == v.size_id).one().name if v.size_id else ""): int(v.stock_quantity or 0)
+            for v in variants
+        }
+        assert by_size["42"] == 9999
+        assert by_size["41"] == 0
+        assert by_size["43"] == 0
+        assert by_size["44"] == 0
+        assert by_size["45"] == 0
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+
+
+def test_import_products_shop_vkus_like_row_without_link_uses_availability_sizes_only(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-11/htmlview",
+            supplier_name="def shop",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото"],
+                    ["SB DUNK LOW REMASTERED", "4900", "41-45", "42 (1шт)", "https://cdn.example.com/a.jpg"],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        variants = db.query(models.ProductVariant).all()
+        by_size = {
+            (db.query(models.Size).filter(models.Size.id == v.size_id).one().name if v.size_id else ""): int(v.stock_quantity or 0)
+            for v in variants
+        }
+        assert by_size["42"] == 9999
+        assert by_size["41"] == 0
+        assert by_size["43"] == 0
+        assert by_size["44"] == 0
+        assert by_size["45"] == 0
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+
+
 
 def test_import_products_shop_vkus_like_row_without_link_and_plain_size_list_uses_only_listed_sizes(monkeypatch):
     engine = create_engine("sqlite:///:memory:", future=True)
@@ -1050,6 +1160,92 @@ def test_import_products_row_with_expanded_size_list_and_single_available_size_m
         assert by_size["41"] == 0
         assert by_size["43"] == 0
         assert by_size["44"] == 0
+        assert by_size["45"] == 0
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+
+
+
+def test_import_products_shop_vkus_overwrites_old_positive_sizes_not_listed_in_availability(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        cat = models.Category(name="Обувь", slug="obuv-stale")
+        db.add(cat)
+        db.flush()
+
+        p = models.Product(
+            title="Nike SB Dunk Low x Travis Scott Cactus",
+            slug="nike-sb-dunk-low-travis-scott-cactus-stale",
+            base_price=5000,
+            currency="RUB",
+            category_id=cat.id,
+            default_image="https://cdn.example.com/a.jpg",
+            visible=True,
+            import_supplier_name="shop_vkus",
+            import_source_kind="google_sheet",
+            import_source_url="https://docs.google.com/spreadsheets/d/test-sheet-14/htmlview",
+        )
+        db.add(p)
+        db.flush()
+
+        sizes = {}
+        for sn in ["41", "42", "43", "44", "45"]:
+            sz = models.Size(name=sn)
+            db.add(sz)
+            db.flush()
+            sizes[sn] = sz
+
+        # stale positives from previous bad import
+        db.add(models.ProductVariant(product_id=p.id, size_id=sizes["41"].id, color_id=None, price=4900, stock_quantity=9999))
+        db.add(models.ProductVariant(product_id=p.id, size_id=sizes["45"].id, color_id=None, price=4900, stock_quantity=9999))
+        db.commit()
+
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-14/htmlview",
+            supplier_name="shop_vkus",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["№", "название", "фото", "ЦЕНА ДРОП/ШТУЧНО", "РАЗМЕРЫ", "НАЛИЧИЕ", "Ссылка"],
+                    ["2", "Nike SB Dunk Low x Travis Scott Cactus", "", "2000", "41-45", "42 (1шт)", "https://t.me/shop_vkus/15972?single"],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "extract_image_urls_from_html_page", lambda *a, **k: ["https://cdn.example.com/a.jpg"])
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 0
+        variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
+        by_size = {
+            (db.query(models.Size).filter(models.Size.id == v.size_id).one().name if v.size_id else ""): int(v.stock_quantity or 0)
+            for v in variants
+        }
+        assert by_size["42"] == 9999
+        assert by_size["41"] == 0
         assert by_size["45"] == 0
     finally:
         db.close()

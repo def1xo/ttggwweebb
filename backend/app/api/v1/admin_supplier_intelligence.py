@@ -2014,8 +2014,10 @@ def import_products_from_sources(
                 base_stock = stock_qty // combinations if stock_qty > 0 and combinations > 1 else stock_qty
                 remainder_stock = stock_qty % combinations if stock_qty > 0 and combinations > 1 else 0
 
+                row_color_ids: set[int | None] = set()
                 for color_name in color_tokens:
                     color = get_or_create_color(color_name) if color_name else None
+                    row_color_ids.add(color.id if color else None)
                     for size_name in size_tokens:
                         size = get_or_create_size(size_name) if size_name else None
                         size_key = str(size_name or "").strip()
@@ -2102,6 +2104,25 @@ def import_products_from_sources(
                                     variant.images = desired_variant_images
                             db.add(variant)
 
+                if has_stock_map:
+                    allowed_sizes = {str(k).replace(",", ".").strip() for k in stock_map.keys() if str(k).strip()}
+                    if allowed_sizes:
+                        row_variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
+                        size_cache: dict[int, str] = {}
+                        for vv in row_variants:
+                            if vv.color_id not in row_color_ids:
+                                continue
+                            sz_name = ""
+                            if vv.size_id:
+                                sid = int(vv.size_id)
+                                if sid not in size_cache:
+                                    sz_obj = db.query(models.Size).filter(models.Size.id == sid).one_or_none()
+                                    size_cache[sid] = str(getattr(sz_obj, "name", "") or "")
+                                sz_name = size_cache.get(sid, "")
+                            size_key_norm = str(sz_name).replace(",", ".").strip()
+                            if size_key_norm not in allowed_sizes and int(vv.stock_quantity or 0) > 0:
+                                vv.stock_quantity = 0
+                                db.add(vv)
 
                 report.imported += 1
                 # persist each processed item immediately so long imports
