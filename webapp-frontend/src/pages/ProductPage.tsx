@@ -133,8 +133,11 @@ export default function ProductPage() {
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
   const [related, setRelated] = useState<any[]>([]);
   const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
+  const [slideDir, setSlideDir] = useState<"next" | "prev">("next");
 
   const touchX = useRef<number | null>(null);
+  const viewerTouchX = useRef<number | null>(null);
+  const prevSelectedSizeRef = useRef<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -189,6 +192,15 @@ export default function ProductPage() {
     setActiveIndex(0);
   }, [activeIndex, images.length]);
 
+  useEffect(() => {
+    if (!isImageViewerOpen) return;
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") setIsImageViewerOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isImageViewerOpen]);
+
   const variants: any[] = useMemo(() => (product?.variants || []) as any[], [product]);
 
   const sizes = useMemo(() => {
@@ -215,6 +227,34 @@ export default function ProductPage() {
     }
     return out;
   }, [variants]);
+
+  const colorAvailabilityBySelectedSize = useMemo(() => {
+    const out: Record<string, boolean> = {};
+    if (!selectedSize) {
+      for (const c of colors) out[c] = true;
+      return out;
+    }
+    for (const c of colors) {
+      const hasForSize = variants.some((v) => {
+        const s = String(v?.size?.name || v?.size || "").trim();
+        const vc = String(v?.color?.name || v?.color || "");
+        return s === selectedSize && vc === c && getVariantStock(v) > 0;
+      });
+      out[c] = hasForSize;
+    }
+    return out;
+  }, [colors, variants, selectedSize]);
+
+  useEffect(() => {
+    const prevSize = prevSelectedSizeRef.current;
+    prevSelectedSizeRef.current = selectedSize;
+    if (prevSize === selectedSize) return;
+    if (!selectedSize || !colors.length) return;
+    const currentStillAvailable = selectedColor ? Boolean(colorAvailabilityBySelectedSize[selectedColor]) : false;
+    if (currentStillAvailable) return;
+    const bestColor = colors.find((c) => colorAvailabilityBySelectedSize[c]);
+    if (bestColor) setSelectedColor(bestColor);
+  }, [selectedSize, colors, selectedColor, colorAvailabilityBySelectedSize]);
 
   const sizeAvailability = useMemo(() => {
     const out: Record<string, boolean> = {};
@@ -268,6 +308,18 @@ export default function ProductPage() {
 
   const activeImage = images[activeIndex] || normalizeMediaUrl(product?.default_image) || "/logo_black.png";
 
+  const goToNextImage = () => {
+    if (images.length <= 1) return;
+    setSlideDir("next");
+    setActiveIndex((i) => (i + 1) % images.length);
+  };
+
+  const goToPrevImage = () => {
+    if (images.length <= 1) return;
+    setSlideDir("prev");
+    setActiveIndex((i) => (i - 1 + images.length) % images.length);
+  };
+
   const onTouchStart = (e: React.TouchEvent) => {
     touchX.current = e.touches?.[0]?.clientX ?? null;
   };
@@ -278,8 +330,24 @@ export default function ProductPage() {
     if (start == null || end == null) return;
     const dx = end - start;
     if (Math.abs(dx) < 40) return;
-    if (dx < 0) setActiveIndex((i) => Math.min(i + 1, Math.max(0, images.length - 1)));
-    else setActiveIndex((i) => Math.max(i - 1, 0));
+    if (dx < 0) goToNextImage();
+    else goToPrevImage();
+  };
+
+  const onViewerTouchStart = (e: React.TouchEvent) => {
+    viewerTouchX.current = e.touches?.[0]?.clientX ?? null;
+  };
+
+  const onViewerTouchEnd = (e: React.TouchEvent) => {
+    const start = viewerTouchX.current;
+    const end = e.changedTouches?.[0]?.clientX ?? null;
+    viewerTouchX.current = null;
+    if (start == null || end == null) return;
+    const dx = end - start;
+    if (Math.abs(dx) < 40) return;
+    e.stopPropagation();
+    if (dx < 0) goToNextImage();
+    else goToPrevImage();
   };
 
   const addToCart = () => {
@@ -393,7 +461,7 @@ export default function ProductPage() {
           onTouchStart={onTouchStart}
           onTouchEnd={onTouchEnd}
         >
-          <img className="product-detail-hero" src={activeImage} alt={product.title} style={{ cursor: "zoom-in" }} onClick={() => setIsImageViewerOpen(true)} />
+          <img key={`${activeImage}_${slideDir}`} className={`product-detail-hero product-detail-hero--${slideDir}`} src={activeImage} alt={product.title} style={{ cursor: "zoom-in" }} onClick={() => setIsImageViewerOpen(true)} />
 
           {images.length > 1 ? (
             <div className="thumb-grid" style={{ marginTop: 10 }}>
@@ -404,7 +472,10 @@ export default function ProductPage() {
                   src={u}
                   alt=""
                   style={{ outline: idx === activeIndex ? "2px solid var(--ring)" : "none" }}
-                  onClick={() => setActiveIndex(idx)}
+                  onClick={() => {
+                    setSlideDir(idx >= activeIndex ? "next" : "prev");
+                    setActiveIndex(idx);
+                  }}
                 />
               ))}
             </div>
@@ -435,6 +506,8 @@ export default function ProductPage() {
                     alignItems: "center",
                     gap: 8,
                     borderColor: selectedColor === c ? "var(--ring)" : undefined,
+                    opacity: selectedSize && !colorAvailabilityBySelectedSize[c] ? 0.45 : 1,
+                    filter: selectedSize && !colorAvailabilityBySelectedSize[c] ? "grayscale(0.35)" : "none",
                   }}
                 >
                   <ColorSwatch name={c} size={16} />
@@ -494,6 +567,8 @@ export default function ProductPage() {
           role="dialog"
           aria-modal="true"
           onClick={() => setIsImageViewerOpen(false)}
+          onTouchStart={onViewerTouchStart}
+          onTouchEnd={onViewerTouchEnd}
           style={{
             position: "fixed",
             inset: 0,
@@ -506,23 +581,12 @@ export default function ProductPage() {
         >
           <button
             type="button"
+            className="image-viewer__close"
             onClick={() => setIsImageViewerOpen(false)}
-            style={{
-              position: "fixed",
-              top: 14,
-              right: 14,
-              width: 42,
-              height: 42,
-              borderRadius: 999,
-              border: "1px solid rgba(255,255,255,0.25)",
-              background: "rgba(18,18,18,0.7)",
-              color: "#fff",
-              fontSize: 22,
-              lineHeight: 1,
-            }}
-            aria-label="Закрыть фото"
+            onTouchEnd={(e) => e.stopPropagation()}
+            aria-label="Закрыть полноэкранный просмотр"
           >
-            ×
+            Закрыть ✕
           </button>
 
           {images.length > 1 ? (
@@ -530,7 +594,7 @@ export default function ProductPage() {
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                setActiveIndex((i) => (i - 1 + images.length) % images.length);
+                goToPrevImage();
               }}
               style={{
                 position: "fixed",
@@ -552,9 +616,11 @@ export default function ProductPage() {
           ) : null}
 
           <img
+            key={`viewer_${activeImage}_${slideDir}`}
             src={activeImage}
             alt={product.title}
             onClick={(e) => e.stopPropagation()}
+            className={`image-viewer__img image-viewer__img--${slideDir}`}
             style={{ maxWidth: "100%", maxHeight: "90vh", objectFit: "contain", borderRadius: 12 }}
           />
 
@@ -563,7 +629,7 @@ export default function ProductPage() {
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                setActiveIndex((i) => (i + 1) % images.length);
+                goToNextImage();
               }}
               style={{
                 position: "fixed",

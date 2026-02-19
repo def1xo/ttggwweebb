@@ -198,6 +198,49 @@ def test_split_size_tokens_supports_lists_and_ranges():
     assert split_size_tokens("42-44") == ["42", "43", "44"]
 
 
+
+
+def test_extract_catalog_items_preserves_non_numeric_stock_text():
+    rows = [
+        ["Товар", "Цена дроп", "Размер", "Наличие"],
+        ["Nike SB Dunk", "4900", "41-45", "в наличии"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["stock"] in (None, 42)
+    assert items[0]["stock_text"] == "в наличии"
+
+
+
+
+
+def test_extract_catalog_items_detects_header_on_second_row_and_keeps_availability():
+    rows = [
+        ["Прайс на 12.01", ""],
+        ["№", "Название", "ЦЕНА ДРОП", "РАЗМЕРЫ", "НАЛИЧИЕ", "Фото"],
+        ["1", "Nike SB Dunk", "4900", "41-45", "42 (1шт)", "https://cdn.example.com/a.jpg"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["title"] == "Nike SB Dunk"
+    assert items[0]["stock_text"] == "42 (1шт)"
+
+def test_extract_catalog_items_infers_stock_cell_when_stock_header_missing():
+    rows = [
+        ["Товар", "Цена дроп", "Размер", "Комментарий", "Фото"],
+        ["Nike SB Dunk", "4900", "41-45", "в наличии 42", "https://cdn.example.com/a.jpg"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["stock_text"] == "в наличии 42"
+    assert items[0]["stock"] in (None, 42)
+
 def test_find_similar_images_filters_by_hamming_distance(monkeypatch):
     signatures = {
         "https://ref/img.jpg": "aaaa",
@@ -941,6 +984,21 @@ def test_extract_shop_vkus_stock_map_does_not_treat_spaced_range_as_in_stock_lis
     got = asi._extract_shop_vkus_stock_map(item)
     assert got == {}
 
+
+def test_extract_shop_vkus_stock_map_reads_cyrillic_availability_keys():
+    item = {
+        "РАЗМЕРЫ": "41-45",
+        "НАЛИЧИЕ": "42 (1шт)",
+    }
+    got = asi._extract_shop_vkus_stock_map(item)
+    assert got == {"42": 1}
+
+
+
+def test_extract_shop_vkus_color_tokens_keeps_white_and_gray_from_images(monkeypatch):
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый" if u in {"a", "b"} else "серый")
+    got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
+    assert got == ["белый", "серый"]
 
 
 def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
