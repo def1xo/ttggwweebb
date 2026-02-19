@@ -1977,6 +1977,12 @@ def import_products_from_sources(
                     if listed_in_stock and len(valid_sizes) >= 2 and not range_only_stock:
                         stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(listed_in_stock)}
                         availability_sizes_locked = True
+                    # Single explicit size token like "43.5" with matching row size should be treated as in stock.
+                    elif (not listed_in_stock and len(valid_sizes) == 1 and stock_qty_parse_failed and re.fullmatch(r"\d{2,3}(?:[.,]5)?", raw_stock_str or "")):
+                        token = str(raw_stock_str or "").replace(",", ".").strip()
+                        if token in valid_sizes:
+                            stock_map = {token: int(IMPORT_FALLBACK_STOCK_QTY)}
+                            availability_sizes_locked = True
 
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
                     shop_vkus_map = _extract_shop_vkus_stock_map(it if isinstance(it, dict) else {})
