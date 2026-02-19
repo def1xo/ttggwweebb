@@ -325,3 +325,96 @@ def test_import_products_shop_vkus_detected_from_row_link_even_if_supplier_name_
     finally:
         db.close()
         Base.metadata.drop_all(engine)
+
+
+def test_rerank_gallery_images_shop_vkus_drops_outlier_signature_cluster(monkeypatch):
+    urls = [
+        "https://cdn.example.com/main-1.jpg",
+        "https://cdn.example.com/main-2.jpg",
+        "https://cdn.example.com/main-3.jpg",
+        "https://cdn.example.com/main-4.jpg",
+        "https://cdn.example.com/outlier-1.jpg",
+        "https://cdn.example.com/outlier-2.jpg",
+    ]
+
+    sig_map = {
+        "https://cdn.example.com/main-1.jpg": "aaaa",
+        "https://cdn.example.com/main-2.jpg": "aaab",
+        "https://cdn.example.com/main-3.jpg": "aaac",
+        "https://cdn.example.com/main-4.jpg": "aaad",
+        "https://cdn.example.com/outlier-1.jpg": "ffff",
+        "https://cdn.example.com/outlier-2.jpg": "fffe",
+    }
+
+    monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: sig_map.get(u))
+    monkeypatch.setattr(
+        asi,
+        "print_signature_hamming",
+        lambda a, b: 1 if (str(a).startswith("a") and str(b).startswith("a")) or (str(a).startswith("f") and str(b).startswith("f")) else 16,
+    )
+
+    out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
+    assert out == [
+        "https://cdn.example.com/main-1.jpg",
+        "https://cdn.example.com/main-2.jpg",
+        "https://cdn.example.com/main-3.jpg",
+        "https://cdn.example.com/main-4.jpg",
+    ]
+
+
+def test_import_products_shop_vkus_extracts_sizes_from_description_when_size_cell_empty(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-6/htmlview",
+            supplier_name="shop_vkus",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Описание", "Фото"],
+                    [
+                        "Adidas Campus",
+                        "3900",
+                        "",
+                        "",
+                        "Размеры: 41 42 43",
+                        "https://cdn.example.com/campus.jpg",
+                    ],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        variants = db.query(models.ProductVariant).all()
+        names = sorted(
+            (db.query(models.Size).filter(models.Size.id == v.size_id).one().name if v.size_id else "")
+            for v in variants
+        )
+        assert names == ["41", "42", "43"]
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)

@@ -941,6 +941,20 @@ def test_extract_shop_vkus_stock_map_does_not_treat_spaced_range_as_in_stock_lis
     got = asi._extract_shop_vkus_stock_map(item)
     assert got == {}
 
+
+
+def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
+    item = {
+        "title": "Yeezy 350",
+        "description": "доступны цвета black white",
+    }
+    got = asi._extract_shop_vkus_color_tokens(item, image_urls=["u1", "u2"])
+    assert "black" in got and "white" in got
+
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "черный" if u in {"a", "b"} else "белый")
+    got2 = asi._extract_shop_vkus_color_tokens({"title": "Yeezy 350"}, image_urls=["a", "b", "c", "d"])
+    assert got2 == ["черный", "белый"]
+
 def test_extract_image_urls_from_html_page_reads_escaped_telescope_urls(monkeypatch):
     html_single = '<html><head><meta property="og:image" content="https://cdn4.telesco.pe/file/single.jpg"></head></html>'
     html_public = (
