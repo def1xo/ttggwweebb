@@ -1937,6 +1937,9 @@ def import_products_from_sources(
                             if remainder_stock > 0:
                                 per_variant_stock += 1
                                 remainder_stock -= 1
+                        elif _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_key:
+                            # shop_vkus default: listed sizes are available unless explicitly out of stock.
+                            per_variant_stock = int(IMPORT_FALLBACK_STOCK_QTY)
                         else:
                             # Unknown stock should not become "all sizes in stock".
                             per_variant_stock = 0
