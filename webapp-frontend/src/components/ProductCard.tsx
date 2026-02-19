@@ -92,7 +92,8 @@ export default function ProductCard({ product }: Props) {
     const inStock = Boolean(product?.has_stock ?? (variantList || []).some((v) => Number(v?.stock || 0) > 0));
     const galleryCount = Number(product?.gallery_count || (Array.isArray(imgs) ? imgs.length : 0));
 
-    return { sizes, colors, sizeLabel, isNew, inStock, galleryCount };
+    const showColorMeta = colors.length > 1;
+    return { sizes, colors, sizeLabel, isNew, inStock, galleryCount, showColorMeta };
   }, [product, variantList, imgs]);
 
 
@@ -141,18 +142,18 @@ export default function ProductCard({ product }: Props) {
             {price.toLocaleString("ru-RU")} ₽
           </div>
 
-          {(meta.sizeLabel || meta.colors.length) ? (
+          {(meta.sizeLabel || meta.showColorMeta || meta.galleryCount > 1 || !meta.inStock) ? (
             <div className="mini-row">
               <div className="chips">
                 {meta.sizeLabel ? <span className="chip">{meta.sizeLabel}</span> : null}
-                {meta.colors.length ? <span className="chip">{meta.colors.length} цвет(а)</span> : null}
+                {meta.showColorMeta ? <span className="chip">{meta.colors.length} цвет(а)</span> : null}
                 {meta.galleryCount > 1 ? <span className="chip">{meta.galleryCount} фото</span> : null}
                 {!meta.inStock ? <span className="chip">нет в наличии</span> : null}
               </div>
               <div style={{ display: "flex", gap: 6 }}>
-                {meta.colors.slice(0, 2).map((c) => (
+                {meta.showColorMeta ? meta.colors.slice(0, 2).map((c) => (
                   <ColorSwatch key={c} name={c} size={14} />
-                ))}
+                )) : null}
               </div>
             </div>
           ) : null}

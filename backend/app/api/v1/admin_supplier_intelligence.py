@@ -120,20 +120,40 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
         except Exception:
             nm = None
         key = str(nm or "").strip().lower()
-        if not key or key in {"мульти", "серый"}:
+        if not key or key in {"мульти"}:
             continue
         color_hits[key] = int(color_hits.get(key, 0) or 0) + 1
+    ranked = [k for k, _ in sorted(color_hits.items(), key=lambda x: x[1], reverse=True)]
     strong = [k for k, v in sorted(color_hits.items(), key=lambda x: x[1], reverse=True) if v >= 2]
     if len(strong) >= 2:
         return strong[:3]
-    return found[:1]
+    if strong:
+        return strong[:1]
+    if found:
+        return found[:1]
+    if ranked:
+        return ranked[:1]
+    return []
 
 def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
+    def _iter_stock_like_values(src: dict) -> list[str]:
+        vals: list[str] = []
+        for k, v in (src or {}).items():
+            if not isinstance(v, str) or not v.strip():
+                continue
+            key_low = str(k or "").strip().lower()
+            if key_low in {"stock", "stock_text", "availability", "наличие"} or any(
+                marker in key_low for marker in ("availability", "налич", "stock")
+            ):
+                vals.append(v)
+        return vals
+
     blob_parts: list[str] = []
     for key in ("size", "sizes", "stock", "stock_text", "title", "description", "text", "notes"):
         v = item.get(key)
         if isinstance(v, str) and v.strip():
             blob_parts.append(v)
+    blob_parts.extend(_iter_stock_like_values(item))
     blob = "\n".join(blob_parts)
     if not blob:
         return {}
@@ -190,21 +210,35 @@ def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
             out[key] = 1
         return out
 
+    def _is_plain_range_only(text: str) -> bool:
+        raw = str(text or "").strip()
+        if not raw:
+            return False
+        has_range = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", raw))
+        if not has_range:
+            return False
+        # Treat comma/semicolon/slash lists as explicit available sizes; plain range is ambiguous.
+        has_list_delimiter = bool(re.search(r"[,;/]", raw))
+        has_qty_markers = bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", raw))
+        return has_range and not has_list_delimiter and not has_qty_markers
+
     for chunk in availability_chunks:
-        parsed_chunk = _normalize_map(extract_size_stock_map(chunk))
-        if parsed_chunk:
-            return parsed_chunk
         plain_available_chunk = _parse_plain_available_sizes(chunk)
         if plain_available_chunk:
             return plain_available_chunk
+        # Do not expand ambiguous ranges like "41-45" from availability text into all sizes in stock.
+        if _is_plain_range_only(chunk):
+            continue
+        parsed_chunk = _normalize_map(extract_size_stock_map(chunk))
+        if parsed_chunk:
+            return parsed_chunk
 
-    stock_only_parts: list[str] = []
-    for key in ("stock", "stock_text", "availability"):
-        v = item.get(key)
-        if isinstance(v, str) and v.strip():
-            stock_only_parts.append(v)
+    stock_only_parts: list[str] = _iter_stock_like_values(item)
     if stock_only_parts:
-        parsed_stock_only = _normalize_map(extract_size_stock_map("\n".join(stock_only_parts)))
+        stock_blob = "\n".join(stock_only_parts)
+        parsed_stock_only = _normalize_map(extract_size_stock_map(stock_blob))
+        if _is_plain_range_only(stock_blob):
+            parsed_stock_only = {}
         if parsed_stock_only:
             return parsed_stock_only
         plain_available_stock_only = _parse_plain_available_sizes("\n".join(stock_only_parts))
@@ -261,6 +295,18 @@ def _is_shop_vkus_item_context(supplier_key: str | None, source_url: str, item: 
     for u in (item.get("image_urls") or []):
         if "shop_vkus" in str(u or "").lower():
             return True
+
+    # Heuristic fallback for feeds without explicit shop_vkus link/label:
+    # rows with footwear size range and per-item availability sizes in stock cell
+    # should be parsed like shop_vkus (keep only listed sizes in stock).
+    size_raw = str(item.get("size") or "").strip()
+    stock_raw = str(item.get("stock_text") or item.get("availability") or item.get("stock") or "").strip()
+    size_has_range = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", size_raw))
+    stock_has_sizes = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\b", stock_raw))
+    # Even without explicit words/units, shop_vkus-like sheets store remaining sizes in stock cell.
+    if size_has_range and stock_has_sizes:
+        return True
+
     return False
 
 
@@ -404,11 +450,12 @@ def _filter_gallery_main_signature_cluster(image_urls: list[str]) -> list[str]:
 def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = None) -> list[str]:
     if not image_urls:
         return []
+    raw_norm: list[str] = [str(u or "").strip() for u in image_urls if str(u or "").strip()]
+
     uniq: list[str] = []
     seen = set()
-    for u in image_urls:
-        uu = str(u or "").strip()
-        if not uu or uu in seen:
+    for uu in raw_norm:
+        if uu in seen:
             continue
         seen.add(uu)
         uniq.append(uu)
@@ -417,14 +464,29 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
         return uniq
 
     if supplier_key == "shop_vkus":
-        # For shop_vkus feeds, 5+ image sets usually prepend 2 service frames.
-        # Drop them deterministically from original ordering first.
-        pre = uniq[2:] if len(uniq) >= 5 else list(uniq)
+        # shop_vkus feeds often prepend two service frames in longer galleries.
+        pre = list(uniq)
+        source = raw_norm or uniq
+        if len(source) >= 7:
+            pre = uniq[2:]
+        elif len(source) > 2:
+            first_two = source[:2]
+            rest = source[2:]
+            has_supplier_marker = any(
+                ("shop_vkus" in str(u or "").lower()) or ("shop-vkus" in str(u or "").lower())
+                for u in first_two
+            )
+            leading_pair_suspicious = any((not _is_likely_product_image(u)) or (_score_gallery_image(u) < 0) for u in first_two)
+            duplicated_cover = bool(first_two and first_two[0] in rest)
+            second_is_suspicious = bool((not _is_likely_product_image(first_two[1])) or (_score_gallery_image(first_two[1]) < 0)) if len(first_two) >= 2 else False
 
-        if len(uniq) > 2 and len(uniq) < 5:
-            first_two = uniq[:2]
-            has_supplier_marker = any(("shop_vkus" in str(u or "").lower()) or ("shop-vkus" in str(u or "").lower()) for u in first_two)
-            if has_supplier_marker:
+            should_drop_pair = False
+            if len(source) >= 6 and (has_supplier_marker or leading_pair_suspicious or duplicated_cover):
+                should_drop_pair = True
+            elif len(source) == 5 and (has_supplier_marker or leading_pair_suspicious or (duplicated_cover and second_is_suspicious)):
+                should_drop_pair = True
+
+            if should_drop_pair:
                 pre = uniq[2:]
 
         filtered = [u for u in pre if _is_likely_product_image(u)]
@@ -1369,12 +1431,14 @@ def import_products_from_sources(
         min_dropship_price: float | None = None,
         rrc_price: float | None = None,
     ) -> float:
-        base = float(min_dropship_price or 0) if float(min_dropship_price or 0) > 0 else float(dropship_price or 0)
-        if base <= 0:
-            base = float(dropship_price or 0)
+        current_ds = float(dropship_price or 0)
+        fallback_min_ds = float(min_dropship_price or 0)
+        # Price for current row must stay authoritative when present.
+        # Use minimal title-level dropship only as fallback for missing/invalid row price.
+        base = current_ds if current_ds > 0 else fallback_min_ds
 
-        # Top priority: supplier RRC/RRP minus fixed discount.
-        if rrc_price is not None:
+        # Use supplier RRC/RRP only when row dropship is missing; otherwise keep row-based markup flow.
+        if base <= 0 and rrc_price is not None:
             try:
                 rrc_val = float(rrc_price)
                 if rrc_val > 0:
@@ -1793,10 +1857,18 @@ def import_products_from_sources(
                     if matched_p is not None:
                         p = matched_p
 
-                # image-based analysis: same print with different colors -> same product, new color variants
+                # image-based analysis: same print with different colors -> same product, new color variants.
+                # Guard: do not cross-merge different models with coincidentally similar signatures.
                 same_print_product = find_product_by_signature(sig)
                 if same_print_product and (not p or p.id != same_print_product.id):
-                    p = same_print_product
+                    current_media_key = _title_media_key(title)
+                    matched_media_key = _title_media_key(getattr(same_print_product, "title", ""))
+                    same_supplier_ctx = (
+                        supplier_key
+                        and _supplier_key(getattr(same_print_product, "import_supplier_name", None)) == supplier_key
+                    )
+                    if current_media_key and matched_media_key and current_media_key == matched_media_key and same_supplier_ctx:
+                        p = same_print_product
                 elif sig and p:
                     signature_product_map[sig] = int(p.id)
 
@@ -1814,12 +1886,12 @@ def import_products_from_sources(
                 color_tokens = _split_color_tokens(src_color)
                 if len(color_tokens) <= 1 and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
                     inferred_colors = _extract_shop_vkus_color_tokens(it if isinstance(it, dict) else {}, image_urls=image_urls)
-                    if len(inferred_colors) >= 2:
+                    if len(inferred_colors) >= 1:
                         color_tokens = inferred_colors
-                if len(color_tokens) <= 1:
+                if len(color_tokens) == 0:
                     color_tokens = [""]
 
-                size_tokens = [str(x).strip()[:16] for x in split_size_tokens(it.get("size")) if str(x).strip()[:16]]
+                size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
                     numeric_sizes = [s for s in size_tokens if re.fullmatch(r"\d{2,3}(?:[.,]5)?", s)]
                     if numeric_sizes:
@@ -1829,14 +1901,29 @@ def import_products_from_sources(
                         size_tokens = []
                 if not size_tokens and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
                     blob_parts: list[str] = []
-                    for key in ("title", "description", "text", "notes", "stock", "stock_text", "availability"):
+                    for key in ("title", "description", "text", "notes"):
                         v = it.get(key) if isinstance(it, dict) else None
                         if isinstance(v, str) and v.strip():
                             blob_parts.append(v)
                     fallback_sizes = split_size_tokens(" ".join(blob_parts))
                     size_tokens = [str(x).strip()[:16] for x in fallback_sizes if str(x).strip()[:16]]
+                    if size_tokens:
+                        numeric_sizes = [s for s in size_tokens if re.fullmatch(r"\d{2,3}(?:[.,]5)?", s)]
+                        if numeric_sizes:
+                            size_tokens = numeric_sizes
+                        elif all(not re.search(r"\d", s) for s in size_tokens):
+                            size_tokens = []
 
                 raw_stock = it.get("stock") if isinstance(it, dict) else None
+                has_any_stock_signal = False
+                if isinstance(it, dict):
+                    has_any_stock_signal = any(bool(str(it.get(k) or "").strip()) for k in ("stock", "stock_text", "availability", "наличие"))
+                if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and (raw_stock is None or not str(raw_stock).strip()):
+                    for k in ("stock_text", "availability", "наличие"):
+                        v = it.get(k) if isinstance(it, dict) else None
+                        if isinstance(v, str) and v.strip():
+                            raw_stock = v
+                            break
                 raw_stock_str = str(raw_stock).strip() if raw_stock is not None else ""
                 has_explicit_stock = bool(raw_stock_str)
                 stock_qty_parse_failed = False
@@ -1850,6 +1937,7 @@ def import_products_from_sources(
 
                 stock_map_raw = (it.get("stock_map") if isinstance(it, dict) else None) or {}
                 stock_map: dict[str, int] = {}
+                availability_sizes_locked = False
                 if isinstance(stock_map_raw, dict):
                     for k, v in stock_map_raw.items():
                         kk = str(k or "").strip()
@@ -1859,6 +1947,50 @@ def import_products_from_sources(
                             continue
                         if kk and vv >= 0:
                             stock_map[kk] = vv
+
+                # Guard: parser may map plain ranges like "41-45" into endpoint-only stock_map (41,45).
+                # Such ambiguous ranges must not create in-stock sizes.
+                raw_plain_range_only = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", raw_stock_str)) and not bool(re.search(r"[,;/]", raw_stock_str)) and not bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", raw_stock_str))
+                if raw_plain_range_only and stock_map:
+                    map_keys_norm = {str(k).replace(',', '.').strip() for k in stock_map.keys() if str(k).strip()}
+                    range_tokens_norm = {str(x).replace(',', '.').strip() for x in split_size_tokens(raw_stock_str) if str(x).strip()}
+                    if map_keys_norm and map_keys_norm.issubset(range_tokens_norm):
+                        stock_map = {}
+
+                # Generic per-row availability rule:
+                # if row size set is explicit and stock cell lists specific sizes,
+                # keep only listed sizes as available (default qty 9999 each).
+                if size_tokens:
+                    valid_sizes = {str(x).replace(",", ".").strip() for x in size_tokens if str(x).strip()}
+                    stock_detail_parts: list[str] = []
+                    if isinstance(it, dict):
+                        for k in ("stock_text", "availability", "наличие"):
+                            v = it.get(k)
+                            if isinstance(v, str) and v.strip():
+                                stock_detail_parts.append(v.strip())
+                    if raw_stock_str:
+                        stock_detail_parts.append(raw_stock_str)
+                    stock_detail = " ".join(stock_detail_parts).strip()
+                    range_only_stock = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", stock_detail)) and not bool(re.search(r"[,;/]", stock_detail)) and not bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", stock_detail))
+                    listed_in_stock_raw = [str(m.group(1) or "").replace(",", ".").strip() for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)(?!\d)", stock_detail)]
+                    listed_in_stock_raw = [x for x in listed_in_stock_raw if re.fullmatch(r"\d{2,3}(?:[.,]5)?", x)]
+                    listed_in_stock_raw = [x for x in listed_in_stock_raw if 20 <= float(x) <= 60]
+                    plain_range_only = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", stock_detail)) and not bool(re.search(r"[,;/]", stock_detail)) and not bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", stock_detail))
+                    if plain_range_only:
+                        listed_in_stock_raw = []
+                    listed_in_stock = [x for x in listed_in_stock_raw if x in valid_sizes] if valid_sizes else list(listed_in_stock_raw)
+                    if not listed_in_stock and listed_in_stock_raw and len(valid_sizes) >= 2:
+                        # If row size parsing is imperfect, still trust explicit availability sizes.
+                        listed_in_stock = list(listed_in_stock_raw)
+                    if listed_in_stock and len(valid_sizes) >= 2 and not range_only_stock:
+                        stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(listed_in_stock)}
+                        availability_sizes_locked = True
+                    # Single explicit size token like "43.5" with matching row size should be treated as in stock.
+                    elif (not listed_in_stock and len(valid_sizes) == 1 and stock_qty_parse_failed and re.fullmatch(r"\d{2,3}(?:[.,]5)?", raw_stock_str or "")):
+                        token = str(raw_stock_str or "").replace(",", ".").strip()
+                        if token in valid_sizes:
+                            stock_map = {token: int(IMPORT_FALLBACK_STOCK_QTY)}
+                            availability_sizes_locked = True
 
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
                     shop_vkus_map = _extract_shop_vkus_stock_map(it if isinstance(it, dict) else {})
@@ -1871,7 +2003,36 @@ def import_products_from_sources(
                     # In shop_vkus plain size lists in stock cell mean available sizes with default open quantity.
                     # Example: "42 43" / "41,42,44".
                     qty_markers = bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", raw_stock_str))
-                    if stock_map and not qty_markers and all(int(v or 0) <= 1 for v in stock_map.values()):
+                    size_raw = str((it.get("size") if isinstance(it, dict) else "") or "").strip()
+                    size_range_like = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", size_raw))
+                    size_list_like = bool(re.search(r"[,;/\s]", size_raw))
+
+                    # Authoritative rule for size availability rows:
+                    # when stock cell explicitly lists sizes from the row size set,
+                    # keep only these sizes in stock.
+                    valid_sizes = {str(x).replace(",", ".").strip() for x in size_tokens if str(x).strip()}
+                    listed_in_stock_raw = [str(m.group(1) or "").replace(",", ".").strip() for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)(?!\d)", raw_stock_str)]
+                    listed_in_stock_raw = [x for x in listed_in_stock_raw if re.fullmatch(r"\d{2,3}(?:[.,]5)?", x)]
+                    listed_in_stock_raw = [x for x in listed_in_stock_raw if 20 <= float(x) <= 60]
+                    plain_range_only = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", raw_stock_str)) and not bool(re.search(r"[,;/]", raw_stock_str)) and not bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", raw_stock_str))
+                    if plain_range_only:
+                        listed_in_stock_raw = []
+                    listed_in_stock = [x for x in listed_in_stock_raw if x in valid_sizes] if valid_sizes else list(listed_in_stock_raw)
+                    if not listed_in_stock and listed_in_stock_raw and len(valid_sizes) >= 2:
+                        listed_in_stock = list(listed_in_stock_raw)
+                    if listed_in_stock:
+                        stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(listed_in_stock)}
+                        availability_sizes_locked = True
+
+                    if stock_map and size_range_like and all(int(v or 0) <= 1 for v in stock_map.values()):
+                        range_sizes = {str(x).replace(",", ".").strip() for x in split_size_tokens(size_raw) if str(x).strip()}
+                        map_sizes = {str(k).replace(",", ".").strip() for k in stock_map.keys() if str(k).strip()}
+                        stock_mentions_specific_sizes = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\b", raw_stock_str))
+                        generic_in_stock = bool(raw_stock_str and re.search(r"(?i)\b(в\s*наличии|есть|in\s*stock|available)\b", raw_stock_str))
+                        if map_sizes and map_sizes.issubset(range_sizes) and (generic_in_stock or raw_stock_str == ""):
+                            # Generic stock text with a size range should not auto-enable all range sizes.
+                            stock_map = {}
+                    if stock_map and all(int(v or 0) <= 1 for v in stock_map.values()):
                         stock_map = {str(k): int(IMPORT_FALLBACK_STOCK_QTY) for k in stock_map.keys()}
                     elif not stock_map and stock_qty_parse_failed:
                         # Only treat plain separated size lists as "in stock" fallback.
@@ -1879,16 +2040,23 @@ def import_products_from_sources(
                         list_like = bool(re.search(r"[,;/]", raw_stock_str))
                         range_like = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", raw_stock_str))
                         if list_like and not range_like:
-                            inferred_sizes = [str(x).strip()[:16] for x in split_size_tokens(raw_stock_str) if str(x).strip()[:16]]
+                            inferred_sizes = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", raw_stock_str)) if str(x).strip()[:16]]
                             if inferred_sizes:
                                 stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in inferred_sizes}
 
+                    # Single numeric stock token in shop_vkus is usually a specific available size (not quantity).
+                    if not stock_map and raw_stock_str and re.fullmatch(r"\d{2,3}(?:[.,]5)?", raw_stock_str):
+                        token = str(raw_stock_str).replace(",", ".").strip()
+                        normalized_sizes = {str(x).replace(",", ".").strip() for x in size_tokens if str(x).strip()}
+                        if token in normalized_sizes and (size_range_like or len(normalized_sizes) >= 1):
+                            stock_map = {token: int(IMPORT_FALLBACK_STOCK_QTY)}
+
                     # If supplier says generic "in stock" and row has explicit numeric size list,
-                    # apply default stock to those sizes only.
+                    # apply default stock to those sizes only (do not expand numeric ranges).
                     if not stock_map and raw_stock_str and re.search(r"(?i)\b(в\s*наличии|есть|in\s*stock|available)\b", raw_stock_str):
-                        listed_sizes = [str(x).strip()[:16] for x in split_size_tokens(it.get("size")) if str(x).strip()[:16]]
+                        listed_sizes = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                         listed_sizes = [s for s in listed_sizes if re.fullmatch(r"\d{2,3}(?:[.,]5)?", s)]
-                        if listed_sizes:
+                        if listed_sizes and size_list_like and not size_range_like:
                             stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in listed_sizes}
 
                 if not size_tokens and stock_map:
@@ -1905,8 +2073,10 @@ def import_products_from_sources(
                 base_stock = stock_qty // combinations if stock_qty > 0 and combinations > 1 else stock_qty
                 remainder_stock = stock_qty % combinations if stock_qty > 0 and combinations > 1 else 0
 
+                row_color_ids: set[int | None] = set()
                 for color_name in color_tokens:
                     color = get_or_create_color(color_name) if color_name else None
+                    row_color_ids.add(color.id if color else None)
                     for size_name in size_tokens:
                         size = get_or_create_size(size_name) if size_name else None
                         size_key = str(size_name or "").strip()
@@ -1917,7 +2087,7 @@ def import_products_from_sources(
                             if remainder_stock > 0:
                                 per_variant_stock += 1
                                 remainder_stock -= 1
-                        elif _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_key:
+                        elif _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_key and not has_any_stock_signal:
                             # shop_vkus default: listed sizes are available unless explicitly out of stock.
                             per_variant_stock = int(IMPORT_FALLBACK_STOCK_QTY)
                         else:
@@ -1993,6 +2163,25 @@ def import_products_from_sources(
                                     variant.images = desired_variant_images
                             db.add(variant)
 
+                if has_stock_map:
+                    allowed_sizes = {str(k).replace(",", ".").strip() for k in stock_map.keys() if str(k).strip()}
+                    if allowed_sizes:
+                        row_variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
+                        size_cache: dict[int, str] = {}
+                        for vv in row_variants:
+                            if not availability_sizes_locked and vv.color_id not in row_color_ids:
+                                continue
+                            sz_name = ""
+                            if vv.size_id:
+                                sid = int(vv.size_id)
+                                if sid not in size_cache:
+                                    sz_obj = db.query(models.Size).filter(models.Size.id == sid).one_or_none()
+                                    size_cache[sid] = str(getattr(sz_obj, "name", "") or "")
+                                sz_name = size_cache.get(sid, "")
+                            size_key_norm = str(sz_name).replace(",", ".").strip()
+                            if size_key_norm not in allowed_sizes and int(vv.stock_quantity or 0) > 0:
+                                vv.stock_quantity = 0
+                                db.add(vv)
 
                 report.imported += 1
                 # persist each processed item immediately so long imports
