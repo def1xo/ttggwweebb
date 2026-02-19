@@ -506,3 +506,64 @@ def test_rerank_gallery_images_shop_vkus_keeps_clean_seven_gallery():
     urls = [f"https://cdn.example.com/{i}.jpg" for i in range(1, 8)]
     out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
     assert out == urls
+
+
+def test_rerank_gallery_images_shop_vkus_drops_first_two_when_cover_duplicated_in_five_plus():
+    urls = [
+        "https://cdn.example.com/cover.jpg",
+        "https://cdn.example.com/clean2.jpg",
+        "https://cdn.example.com/p2.jpg",
+        "https://cdn.example.com/p3.jpg",
+        "https://cdn.example.com/cover.jpg",
+        "https://cdn.example.com/p4.jpg",
+    ]
+    out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
+    assert "https://cdn.example.com/clean2.jpg" not in out
+
+
+def test_import_products_shop_vkus_stock_range_does_not_auto_mark_all_sizes_in_stock(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-8/htmlview",
+            supplier_name="shop_vkus",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото"],
+                    ["Nike SB Dunk", "4900", "", "41-45", "https://cdn.example.com/a.jpg"],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        variants = db.query(models.ProductVariant).all()
+        assert variants
+        assert all(int(v.stock_quantity or 0) == 0 for v in variants)
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)

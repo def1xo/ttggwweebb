@@ -171,6 +171,10 @@ def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
         # Do not treat ranges like "41-45" as stock map.
         if not re.search(r"[,;/\s]", raw):
             return {}
+        has_list_delimiter = bool(re.search(r"[,;/]", raw))
+        has_range = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", raw))
+        if has_range and not has_list_delimiter:
+            return {}
         out: dict[str, int] = {}
         for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)(?!\d)", raw):
             token = str(m.group(1) or "").replace(",", ".").strip()
@@ -440,7 +444,7 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
                 )
                 duplicated_cover = bool(first_two and first_two[0] in rest)
                 second_is_suspicious = bool((not _is_likely_product_image(first_two[1])) or (_score_gallery_image(first_two[1]) < 0)) if len(first_two) >= 2 else False
-                if has_supplier_marker or (duplicated_cover and second_is_suspicious):
+                if has_supplier_marker or (duplicated_cover and (second_is_suspicious or len(work) >= 5)):
                     should_drop_leading_pair = True
 
             if should_drop_leading_pair:
@@ -1836,6 +1840,13 @@ def import_products_from_sources(
                     color_tokens = [""]
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(it.get("size")) if str(x).strip()[:16]]
+                if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
+                    numeric_sizes = [s for s in size_tokens if re.fullmatch(r"\d{2,3}(?:[.,]5)?", s)]
+                    if numeric_sizes:
+                        size_tokens = numeric_sizes
+                    elif all(not re.search(r"\d", s) for s in size_tokens):
+                        # Avoid taking letter tokens from model names (e.g. "SB") as shoe sizes.
+                        size_tokens = []
                 if not size_tokens and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
                     blob_parts: list[str] = []
                     for key in ("title", "description", "text", "notes", "stock", "stock_text", "availability"):
@@ -1883,9 +1894,14 @@ def import_products_from_sources(
                     if stock_map and not qty_markers and all(int(v or 0) <= 1 for v in stock_map.values()):
                         stock_map = {str(k): int(IMPORT_FALLBACK_STOCK_QTY) for k in stock_map.keys()}
                     elif not stock_map and stock_qty_parse_failed:
-                        inferred_sizes = [str(x).strip()[:16] for x in split_size_tokens(raw_stock_str) if str(x).strip()[:16]]
-                        if inferred_sizes:
-                            stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in inferred_sizes}
+                        # Only treat plain separated size lists as "in stock" fallback.
+                        # Avoid ranges like "41-45" turning all sizes into available.
+                        list_like = bool(re.search(r"[,;/]", raw_stock_str))
+                        range_like = bool(re.search(r"\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?", raw_stock_str))
+                        if list_like and not range_like:
+                            inferred_sizes = [str(x).strip()[:16] for x in split_size_tokens(raw_stock_str) if str(x).strip()[:16]]
+                            if inferred_sizes:
+                                stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in inferred_sizes}
 
                 if not size_tokens and stock_map:
                     size_tokens = sorted(

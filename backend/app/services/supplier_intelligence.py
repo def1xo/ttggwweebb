@@ -1014,7 +1014,14 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
         if not size and stock_map:
             size = " ".join(sorted(stock_map.keys(), key=lambda x: float(str(x).replace(",", "."))))
 
-        stock = _to_int(stock_raw) if stock_raw else None
+        stock: int | None = None
+        if stock_raw:
+            raw_stock_for_int = str(stock_raw)
+            looks_like_size_range = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", raw_stock_for_int))
+            looks_like_size_list = bool(re.search(r"[,;/]", raw_stock_for_int)) and bool(re.search(r"\b\d{2,3}(?:[.,]5)?\b", raw_stock_for_int))
+            has_qty_markers = bool(re.search(r"(?i)(шт|pcs|pc|qty|остат|налич)|[:=]", raw_stock_for_int))
+            if not looks_like_size_range and (not looks_like_size_list or has_qty_markers):
+                stock = _to_int(stock_raw)
         if stock_map:
             stock = int(sum(max(0, int(v)) for v in stock_map.values()))
         elif explicit_out_of_stock:
