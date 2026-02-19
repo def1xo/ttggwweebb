@@ -704,9 +704,11 @@ def _new_source_report(source_id: int, source_url: str) -> ImportSourceReport:
     return ImportSourceReport(source_id=source_id, url=source_url)
 
 
-def _register_source_error(report: ImportSourceReport, exc: Exception) -> None:
+def _register_source_error(report: ImportSourceReport, exc: Exception, context: str | None = None) -> None:
     code = _classify_import_error(exc)
     message = _normalize_error_message(exc)
+    if context:
+        message = f"{context}: {message}"
     report.errors += 1
     report.last_error_message = message
     report.error_codes[code] = int(report.error_codes.get(code) or 0) + 1
@@ -1699,7 +1701,14 @@ def import_products_from_sources(
             except Exception as exc:
                 if not payload.dry_run:
                     db.rollback()
-                _register_source_error(report, exc)
+                try:
+                    ctx_title = str((it or {}).get("title") or "").strip()[:120] if isinstance(it, dict) else ""
+                    ctx_image = str((it or {}).get("image_url") or "").strip()[:120] if isinstance(it, dict) else ""
+                    ctx = f"item title='{ctx_title}' image='{ctx_image}'"
+                except Exception:
+                    ctx = None
+                logger.exception("supplier import item failed source_id=%s url=%s", src.id, src_url)
+                _register_source_error(report, exc, context=ctx)
 
         if not payload.dry_run and src_kind in {"google_sheet", "moysklad_catalog", "generic_html"} and items:
             stale_q = db.query(models.Product).filter(models.Product.import_source_url == src_url)
