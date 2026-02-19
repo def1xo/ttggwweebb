@@ -990,6 +990,35 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
                         break
 
         stock_raw = _norm(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else ""
+        if not stock_raw:
+            # Fallback: infer availability cell when stock column was not detected reliably.
+            parsed_row_sizes = set(split_size_tokens(size)) if size else set()
+            ignored_cols = {x for x in [idx_title, idx_price, idx_rrc, idx_color, idx_size] if x is not None}
+            ignored_cols.update(idx_image_cols or [])
+            for ci, cell in enumerate(row):
+                if ci in ignored_cols:
+                    continue
+                txt = _norm(cell)
+                if not txt:
+                    continue
+                low = txt.lower()
+                if _split_image_urls(txt):
+                    continue
+                # skip likely prices
+                if _to_float(txt) and float(_to_float(txt) or 0) >= 500:
+                    continue
+                size_hits = [str(m.group(1) or "").replace(",", ".") for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)(?!\d)", txt)]
+                size_hits = [x for x in size_hits if 20 <= float(x) <= 60]
+                if not size_hits:
+                    continue
+                has_markers = bool(re.search(r"(?i)(налич|остат|шт|pcs|pc|available|in\s*stock)", low)) or bool(re.search(r"[,;/()]", txt))
+                if parsed_row_sizes and any(h in {str(x).replace(',', '.') for x in parsed_row_sizes} for h in size_hits):
+                    stock_raw = txt
+                    break
+                if has_markers:
+                    stock_raw = txt
+                    break
+
         stock_map = _extract_size_stock_map(stock_raw)
         explicit_out_of_stock = _explicit_out_of_stock(stock_raw)
 

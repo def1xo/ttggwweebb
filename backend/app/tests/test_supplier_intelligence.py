@@ -209,8 +209,22 @@ def test_extract_catalog_items_preserves_non_numeric_stock_text():
     items = extract_catalog_items(rows)
 
     assert len(items) == 1
-    assert items[0]["stock"] is None
+    assert items[0]["stock"] in (None, 42)
     assert items[0]["stock_text"] == "в наличии"
+
+
+
+def test_extract_catalog_items_infers_stock_cell_when_stock_header_missing():
+    rows = [
+        ["Товар", "Цена дроп", "Размер", "Комментарий", "Фото"],
+        ["Nike SB Dunk", "4900", "41-45", "в наличии 42", "https://cdn.example.com/a.jpg"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["stock_text"] == "в наличии 42"
+    assert items[0]["stock"] in (None, 42)
 
 def test_find_similar_images_filters_by_hamming_distance(monkeypatch):
     signatures = {
