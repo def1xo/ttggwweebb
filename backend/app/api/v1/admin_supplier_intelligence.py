@@ -1340,9 +1340,6 @@ def import_products_from_sources(
                     p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
                 if not p and supplier_key:
                     p = _find_existing_supplier_product(supplier_key, getattr(src, "supplier_name", None), _title_key(effective_title))
-                if image_urls:
-                    image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
-                    image_url = image_urls[0]
 
                 if not p:
                     p = _find_existing_global_product(int(category.id), _title_key(effective_title))
