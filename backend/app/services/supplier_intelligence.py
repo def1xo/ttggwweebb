@@ -349,6 +349,16 @@ def _to_float(raw: Any) -> float | None:
         return None
 
 
+
+def _extract_sliv_price(raw: Any) -> float | None:
+    s = _norm(raw)
+    if not s:
+        return None
+    m = re.search(r"(?i)слив\s*[:=\-]?\s*(-?\d[\d\s.,]*)", s)
+    if not m:
+        return None
+    return _to_float(m.group(1))
+
 def _price_candidates_from_row(row: list[Any], exclude_indices: set[int] | None = None) -> list[float]:
     ex = exclude_indices or set()
     out: list[float] = []
@@ -942,7 +952,12 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
                     prev["image_url"] = prev_urls[0]
             continue
 
-        raw_price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
+        raw_price = None
+        if idx_price is not None and idx_price < len(row):
+            raw_cell = row[idx_price]
+            raw_price = _extract_sliv_price(raw_cell)
+            if raw_price is None:
+                raw_price = _to_float(raw_cell)
         excluded = {x for x in [idx_title, idx_size, idx_stock] if x is not None}
         price = _coerce_row_price(raw_price, row, exclude_indices=excluded)
         if price is None or price < MIN_ABSOLUTE_DROPSHIP_PRICE:

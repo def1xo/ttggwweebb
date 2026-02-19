@@ -1108,6 +1108,64 @@ def test_import_products_row_with_expanded_size_list_and_single_available_size_m
 
 
 
+def test_import_products_shop_vkus_infers_single_colors_per_row_when_color_cell_empty(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-13b/htmlview",
+            supplier_name="shop_vkus",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото"],
+                    ["ADIDAS NITEBALL", "2700", "41-45", "42", "https://cdn.example.com/white.jpg"],
+                    ["ADIDAS NITEBALL", "2700", "41-45", "42", "https://cdn.example.com/black.jpg"],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+        monkeypatch.setattr(
+            asi,
+            "dominant_color_name_from_url",
+            lambda u: "белый" if "white" in str(u or "") else "черный",
+        )
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        variants = db.query(models.ProductVariant).all()
+        color_names = {
+            (db.query(models.Color).filter(models.Color.id == v.color_id).one().name if v.color_id else "")
+            for v in variants
+        }
+        assert "белый" in color_names
+        assert "черный" in color_names
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+
+
 def test_import_products_shop_vkus_overwrites_old_positive_sizes_not_listed_in_availability(monkeypatch):
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)

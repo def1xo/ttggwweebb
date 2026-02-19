@@ -123,10 +123,17 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
         if not key or key in {"мульти"}:
             continue
         color_hits[key] = int(color_hits.get(key, 0) or 0) + 1
+    ranked = [k for k, _ in sorted(color_hits.items(), key=lambda x: x[1], reverse=True)]
     strong = [k for k, v in sorted(color_hits.items(), key=lambda x: x[1], reverse=True) if v >= 2]
     if len(strong) >= 2:
         return strong[:3]
-    return found[:1]
+    if strong:
+        return strong[:1]
+    if found:
+        return found[:1]
+    if ranked:
+        return ranked[:1]
+    return []
 
 def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
     def _iter_stock_like_values(src: dict) -> list[str]:
@@ -1869,9 +1876,9 @@ def import_products_from_sources(
                 color_tokens = _split_color_tokens(src_color)
                 if len(color_tokens) <= 1 and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
                     inferred_colors = _extract_shop_vkus_color_tokens(it if isinstance(it, dict) else {}, image_urls=image_urls)
-                    if len(inferred_colors) >= 2:
+                    if len(inferred_colors) >= 1:
                         color_tokens = inferred_colors
-                if len(color_tokens) <= 1:
+                if len(color_tokens) == 0:
                     color_tokens = [""]
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]

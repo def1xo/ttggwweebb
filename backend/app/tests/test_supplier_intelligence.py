@@ -229,6 +229,18 @@ def test_extract_catalog_items_detects_header_on_second_row_and_keeps_availabili
     assert items[0]["title"] == "Nike SB Dunk"
     assert items[0]["stock_text"] == "42 (1шт)"
 
+def test_extract_catalog_items_prefers_sliv_price_from_price_cell():
+    rows = [
+        ["Товар", "Дроп цена", "Размер", "Наличие"],
+        ["NIKE zoom vomero 5", "дроп 2099 / Слив:2000", "41-45", "42"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 2000.0
+
+
 def test_extract_catalog_items_infers_stock_cell_when_stock_header_missing():
     rows = [
         ["Товар", "Цена дроп", "Размер", "Комментарий", "Фото"],
