@@ -785,6 +785,18 @@ def test_extract_catalog_items_reads_stock_map_from_stock_column():
     assert items[0]["stock_map"] == {"42": 1, "43": 2}
 
 
+
+
+def test_extract_catalog_items_reads_plain_size_list_from_stock_column_as_stock_map():
+    rows = [
+        ["Товар", "Дроп цена", "Размер", "Наличие"],
+        ["NB 574", "2999", "41-45", "41,42,44"],
+    ]
+    items = extract_catalog_items(rows)
+    assert len(items) == 1
+    assert items[0]["stock"] == 3
+    assert items[0]["stock_map"] == {"41": 1, "42": 1, "44": 1}
+
 def test_extract_catalog_items_stock_map_does_not_read_size_ranges_as_qty():
     rows = [
         ["Товар", "Дроп цена", "Размер", "Наличие"],
@@ -899,13 +911,13 @@ def test_extract_shop_vkus_stock_map_from_text_blob():
     assert got == {"41": 0, "42": 1, "43": 0}
 
 
-def test_extract_shop_vkus_stock_map_empty_when_no_size_qty_pairs():
+def test_extract_shop_vkus_stock_map_marks_plain_available_sizes_as_in_stock():
     item = {
         "title": "Кроссы",
-        "description": "Размеры: 41,42,43 без указания остатков",
+        "description": "Размеры: 41-45 Наличие: 41,42,44",
     }
     got = asi._extract_shop_vkus_stock_map(item)
-    assert got == {}
+    assert got == {"41": 1, "42": 1, "44": 1}
 
 
 

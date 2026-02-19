@@ -99,10 +99,9 @@ def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
     if not blob:
         return {}
 
-    parsed = extract_size_stock_map(blob)
-    if parsed:
+    def _normalize_map(raw_map: dict[str, int]) -> dict[str, int]:
         out: dict[str, int] = {}
-        for k, v in parsed.items():
+        for k, v in (raw_map or {}).items():
             kk = str(k or "").strip().replace(",", ".")
             try:
                 vv = max(0, int(v))
@@ -110,8 +109,29 @@ def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
                 continue
             if kk:
                 out[kk] = vv
-        if out:
-            return out
+        return out
+
+    # Prefer explicit availability fragments to avoid mixing in full size ranges
+    # from neighboring text like "Размеры: 41-45".
+    availability_chunks = [
+        str(m.group(1) or "").strip()
+        for m in re.finditer(r"(?i)(?:наличие|в\s*наличии|stock)\s*[:\-]?\s*([^\n]+)", blob)
+        if str(m.group(1) or "").strip()
+    ]
+    for chunk in availability_chunks:
+        parsed_chunk = _normalize_map(extract_size_stock_map(chunk))
+        if parsed_chunk:
+            return parsed_chunk
+
+    stock_only_parts: list[str] = []
+    for key in ("stock", "stock_text", "availability"):
+        v = item.get(key)
+        if isinstance(v, str) and v.strip():
+            stock_only_parts.append(v)
+    if stock_only_parts:
+        parsed_stock_only = _normalize_map(extract_size_stock_map("\n".join(stock_only_parts)))
+        if parsed_stock_only:
+            return parsed_stock_only
 
     strict: dict[str, int] = {}
     for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)\s*\(\s*(\d{1,4})\s*(?:шт|pcs|pc)?\s*\)", blob, flags=re.IGNORECASE):
@@ -123,6 +143,7 @@ def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
         if sz:
             strict[sz] = qty
     return strict
+
 def _resolve_source_image_url(raw_url: str | None, source_url: str) -> str | None:
     raw = str(raw_url or "").strip()
     if not raw:

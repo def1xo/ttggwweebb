@@ -477,6 +477,24 @@ def _extract_size_stock_map(raw: Any) -> dict[str, int]:
     for pat in patterns:
         for sz, qty in re.findall(pat, txt):
             _push(sz, qty)
+
+    # shop_vkus often provides availability as plain size list in stock cell,
+    # e.g. "41,42,44" or "38" (without explicit qty). Treat listed sizes as in-stock.
+    if not out:
+        plain = _norm(raw).upper().replace("–", "-").replace("—", "-").replace("−", "-")
+        has_qty_markers = bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,3}\b|\b\d{2,3}\s*\(\s*\d{1,3}", plain))
+        list_like = bool(re.search(r"[,;/]", plain)) or bool(re.fullmatch(r"\s*\d{2,3}(?:[.,]5)?\s*", plain))
+        if list_like and not has_qty_markers:
+            for m in re.finditer(r"\b(\d{2,3}(?:[.,]5)?)\b", plain):
+                t = str(m.group(1) or "").replace(",", ".").strip()
+                try:
+                    val = float(t)
+                except Exception:
+                    continue
+                if val < 20 or val > 60:
+                    continue
+                key = str(int(val)) if float(val).is_integer() else t
+                out[key] = max(out.get(key, 0), 1)
     return out
 
 
