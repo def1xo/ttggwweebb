@@ -3,6 +3,7 @@
 import os
 import re
 import logging
+from urllib.parse import urljoin, urlparse, parse_qsl, urlencode, urlunparse
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Optional, Any
@@ -17,7 +18,12 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import models
 from app.db.session import SessionLocal
-from app.services.supplier_intelligence import split_size_tokens, _extract_size_stock_map as _sheet_extract_size_stock_map
+from app.services.supplier_intelligence import (
+    split_size_tokens,
+    _extract_size_stock_map as _sheet_extract_size_stock_map,
+    extract_image_urls_from_html_page,
+)
+from app.services import media_store
 
 logger = logging.getLogger("tg_importer")
 logger.setLevel(logging.INFO)
@@ -36,9 +42,11 @@ COLOR_RE = re.compile(r'цвет(?:а|ов)?[:\s]*([A-Za-zА-Яа-яЁё0-9,#\s\
 HASHTAG_RE = re.compile(r'#([\w\-А-Яа-яёЁ]+)', flags=re.UNICODE)
 STOCK_RE = re.compile(r'(?:остаток|в\s*наличии|наличие|stock|склад|qty|кол-?во|количество)[:\s\-]*([0-9]{1,5})', flags=re.IGNORECASE)
 RRC_KEYWORDS_RE = re.compile(r'(?:ррц|rrc|мрц|mrc|розниц(?:а|ная)?\s*цена|retail)[:\s\-]*([0-9][0-9\s,.\u00A0]*)', flags=re.IGNORECASE)
+URL_RE = re.compile(r'https?://[^\s<>"\']+', flags=re.IGNORECASE)
 
 IMPORT_FALLBACK_STOCK_QTY = 9_999
 RRC_DISCOUNT_RUB = Decimal("300")
+LOCALIZE_IMPORTED_IMAGES = str(os.getenv("LOCALIZE_IMPORTED_IMAGES", "1")).strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _send_telegram_message(chat_id: str, text: str) -> Optional[Dict[str, Any]]:
@@ -180,11 +188,18 @@ def _extract_sizes(text: Optional[str]) -> List[str]:
         chunk = re.split(r'\b(?:цвет(?:а|ов)?|цена|наличие|остаток|склад|арт(?:икул)?|код)\b', chunk, maxsplit=1, flags=re.IGNORECASE)[0].strip(" ,.;:-")
         if not chunk:
             continue
-        tokens = split_size_tokens(chunk)
+
+        inline_size_stock_map = _sheet_extract_size_stock_map(chunk)
+        if inline_size_stock_map:
+            found.extend(list(inline_size_stock_map.keys()))
+            continue
+
+        cleaned_chunk = re.sub(r"\((?:\s*\d+\s*(?:шт|pcs|pc)?\s*)\)", "", chunk, flags=re.IGNORECASE)
+        tokens = split_size_tokens(cleaned_chunk)
         if tokens:
             found.extend(tokens)
             continue
-        parts = re.split(r'[;,/\\\n]', chunk)
+        parts = re.split(r'[;,/\\\n]', cleaned_chunk)
         for p in parts:
             token = re.sub(r'\s+', ' ', p).strip()
             if token:
@@ -201,7 +216,26 @@ def _extract_sizes(text: Optional[str]) -> List[str]:
 
 
 def _extract_size_stock_map(text: Optional[str]) -> Dict[str, int]:
-    return _sheet_extract_size_stock_map(text)
+    parsed = _sheet_extract_size_stock_map(text)
+    if parsed:
+        return parsed
+    if not text:
+        return {}
+
+    # Conservative fallback for patterns like "41(0шт), 42(1шт)".
+    # Keep this strict to avoid treating price lines as size-stock rows.
+    out: Dict[str, int] = {}
+    for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)\s*\(\s*(\d{1,4})\s*(?:шт|pcs|pc)?\s*\)", text, flags=re.IGNORECASE):
+        size = str(m.group(1) or "").replace(",", ".").strip()
+        qty_raw = str(m.group(2) or "").strip()
+        if not size or not qty_raw:
+            continue
+        try:
+            qty = max(0, int(qty_raw))
+        except Exception:
+            continue
+        out[size] = qty
+    return out
 
 
 def _extract_colors(text: Optional[str]) -> List[str]:
@@ -243,32 +277,221 @@ def _extract_stock_quantity(text: Optional[str], payload: Optional[Dict[str, Any
             return None
     return None
 
+
+def _extract_urls_from_text(text: Optional[str]) -> List[str]:
+    if not text:
+        return []
+    out: List[str] = []
+    seen = set()
+    for m in URL_RE.finditer(text):
+        u = str(m.group(0) or "").strip().rstrip(").,;!")
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        out.append(u)
+    return out
+
+
+def _detect_supplier_from_payload(payload: Dict[str, Any], text: Optional[str] = None) -> Optional[str]:
+    raw_candidates: List[str] = []
+    for key in ("supplier", "supplier_name", "import_supplier_name"):
+        v = payload.get(key)
+        if isinstance(v, str) and v.strip():
+            raw_candidates.append(v.strip().lower())
+    txt = str(text or payload.get("text") or payload.get("caption") or "").lower()
+    all_links = _split_image_candidates(payload.get("image_urls")) + _split_image_candidates(payload.get("image")) + _extract_urls_from_text(txt)
+    raw_candidates.extend(all_links)
+    raw_candidates.append(txt)
+
+    for c in raw_candidates:
+        if "shop_vkus" in c or "shop-vkus" in c or "shopvkus" in c or "t.me/shop_vkus" in c:
+            return "shop_vkus"
+    return None
+
+def _split_image_candidates(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        out: List[str] = []
+        for item in raw:
+            out.extend(_split_image_candidates(item))
+        return out
+    if isinstance(raw, dict):
+        out: List[str] = []
+        for key in ("url", "file_url", "photo_url", "src", "image", "image_url", "thumb"):
+            if key in raw:
+                out.extend(_split_image_candidates(raw.get(key)))
+        return out
+    value = str(raw or "").strip()
+    if not value:
+        return []
+    parts = [p.strip() for p in re.split(r"[\n\r\t,;|\s]+", value) if p and p.strip()]
+    if len(parts) <= 1:
+        return [value]
+    return [p for p in parts if re.match(r"(?i)^https?://", p) or p.startswith("/")]
+
+
+def _looks_like_thumbnail(url: str) -> bool:
+    u = str(url or "").lower()
+    if not u:
+        return False
+    if any(x in u for x in ("thumb", "thumbnail", "preview", "_small", "/small/")):
+        return True
+    return bool(re.search(r"(?:^|[?&])(w|width|h|height|q|quality|size|name)=", u))
+
+
+def _is_probable_image_url(url: str) -> bool:
+    u = str(url or "").lower()
+    return bool(re.search(r"\.(?:jpe?g|png|webp|gif|avif)(?:[?#].*)?$", u))
+
+
+def _strip_gallery_single_param(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        pairs = [
+            (k, v)
+            for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+            if k.lower() not in {"single", "single_image", "img", "photo"}
+        ]
+        query = urlencode(pairs, doseq=True)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, parsed.fragment))
+    except Exception:
+        return url
+
+
+def _upgrade_image_url_quality(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        pairs = [
+            (k, v)
+            for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+            if k.lower() not in {"w", "width", "h", "height", "q", "quality", "size", "name", "single"}
+        ]
+        query = urlencode(pairs, doseq=True)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, parsed.fragment))
+    except Exception:
+        return url
+
+
+def _extract_images_from_html(base_url: str, html: str) -> List[str]:
+    urls: List[str] = []
+    for m in re.finditer(r'(?:src|data-src|href|content)\s*=\s*["\']([^"\']+)["\']', html, flags=re.IGNORECASE):
+        cand = (m.group(1) or "").strip()
+        if not cand:
+            continue
+        if cand.startswith("//"):
+            cand = f"https:{cand}"
+        cand = urljoin(base_url, cand)
+        if _is_probable_image_url(cand):
+            urls.append(cand)
+    for m in re.finditer(r'["\'](https?://[^"\']+\.(?:jpg|jpeg|png|webp|avif|gif)(?:\?[^"\']*)?)["\']', html, flags=re.IGNORECASE):
+        urls.append((m.group(1) or "").strip())
+    out: List[str] = []
+    seen = set()
+    for u in urls:
+        uq = _upgrade_image_url_quality(u)
+        if uq and uq not in seen:
+            seen.add(uq)
+            out.append(uq)
+    return out
+
+
+def _expand_gallery_url_to_images(url: str) -> List[str]:
+    clean_url = _strip_gallery_single_param(url)
+    candidates = [clean_url]
+    if clean_url != url:
+        candidates.append(url)
+
+    # Supplier-specific strategy: shop_vkus pages are often JS-heavy.
+    # Reuse robust extractor from supplier_intelligence first.
+    if any(x in clean_url.lower() for x in ("shop_vkus", "shop-vkus", "shopvkus")):
+        try:
+            rich = extract_image_urls_from_html_page(clean_url, timeout_sec=20, limit=20)
+            if rich:
+                return [_upgrade_image_url_quality(x) for x in rich if str(x or "").strip()]
+        except Exception:
+            logger.exception("shop_vkus specific image expansion failed: %s", clean_url)
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; TGImporter/1.0)"}
+    for target in candidates:
+        try:
+            resp = requests.get(target, timeout=8, headers=headers)
+            if int(getattr(resp, "status_code", 0) or 0) >= 400:
+                continue
+            html = resp.text or ""
+            found = _extract_images_from_html(target, html)
+            if found:
+                return found
+        except Exception:
+            continue
+    return []
+
+
 def _normalize_image_urls(payload: Dict[str, Any]) -> List[str]:
     urls: List[str] = []
-    if isinstance(payload.get("image_urls"), list):
-        urls.extend([u for u in payload["image_urls"] if isinstance(u, str)])
-    if isinstance(payload.get("photos"), list):
-        urls.extend([u for u in payload["photos"] if isinstance(u, str)])
+    urls.extend(_split_image_candidates(payload.get("image_urls")))
+    urls.extend(_split_image_candidates(payload.get("photos")))
     if isinstance(payload.get("media"), list):
         for mi in payload["media"]:
-            if isinstance(mi, dict):
-                for key in ("url", "file_url", "photo_url", "thumb", "src"):
-                    v = mi.get(key)
-                    if isinstance(v, str) and v:
-                        urls.append(v)
-            elif isinstance(mi, str):
-                urls.append(mi)
-    if isinstance(payload.get("image"), str):
-        urls.append(payload["image"])
+            urls.extend(_split_image_candidates(mi))
+    urls.extend(_split_image_candidates(payload.get("image")))
+
+    expanded_urls: List[str] = []
+    for u in urls:
+        cu = str(u or "").strip()
+        if not cu:
+            continue
+        if _is_probable_image_url(cu):
+            expanded_urls.append(_upgrade_image_url_quality(cu))
+            continue
+        gallery_images = _expand_gallery_url_to_images(cu)
+        if gallery_images:
+            expanded_urls.extend(gallery_images)
+        else:
+            expanded_urls.append(_upgrade_image_url_quality(cu))
+
     seen = set()
     out: List[str] = []
-    for u in urls:
+    thumbs: List[str] = []
+    for u in expanded_urls:
         if not u:
             continue
-        if u not in seen:
-            seen.add(u)
+        if u in seen:
+            continue
+        seen.add(u)
+        if _looks_like_thumbnail(u):
+            thumbs.append(u)
+        else:
             out.append(u)
+    if not out:
+        out = thumbs
     return out
+
+def _localize_image_urls(urls: List[str], title_hint: Optional[str] = None) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for idx, u in enumerate(urls or []):
+        cand = str(u or "").strip()
+        if not cand:
+            continue
+        localized = cand
+        if LOCALIZE_IMPORTED_IMAGES and cand.lower().startswith(("http://", "https://")):
+            try:
+                localized = media_store.save_remote_image_to_local(
+                    cand,
+                    folder="products",
+                    timeout_sec=20,
+                    filename_hint=(title_hint or f"imported-{idx+1}"),
+                    referer=cand,
+                )
+            except Exception:
+                logger.exception("Could not localize imported image url: %s", cand)
+                localized = cand
+        if localized not in seen:
+            seen.add(localized)
+            out.append(localized)
+    return out
+
 
 
 def _get_or_create_category(db: Session, tag: str):
@@ -324,7 +547,13 @@ def _get_or_create_size(db: Session, label: str):
 
 def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = False) -> Optional[models.Product]:
     text = (payload.get("text") or payload.get("caption") or "") or ""
-    images = _normalize_image_urls(payload)
+    payload_with_text_links = dict(payload or {})
+    text_links = _extract_urls_from_text(text)
+    if text_links:
+        merged = list(payload_with_text_links.get("image_urls") or []) + text_links
+        payload_with_text_links["image_urls"] = merged
+    images = _normalize_image_urls(payload_with_text_links)
+    images = _localize_image_urls(images, title_hint=(payload.get("title") or ""))
     title = None
     for line in (text.splitlines() if text else []):
         ln = line.strip()
@@ -348,6 +577,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
     colors = _extract_colors(text)
     hashtags = _extract_hashtags(text)
     stock_quantity = _extract_stock_quantity(text, payload)
+    supplier_name = _detect_supplier_from_payload(payload_with_text_links, text=text)
     effective_stock_quantity = max(0, int(stock_quantity)) if stock_quantity is not None else IMPORT_FALLBACK_STOCK_QTY
     visible = False if (is_draft or len(hashtags) == 0) else True
     category = None
@@ -383,6 +613,8 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                     pass
             if hasattr(existing, "updated_at"):
                 existing.updated_at = datetime.utcnow()
+            if supplier_name and hasattr(existing, "import_supplier_name"):
+                existing.import_supplier_name = supplier_name
             existing.visible = visible
             if category:
                 if hasattr(existing, "category"):
@@ -463,6 +695,8 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
             "visible": visible,
             "created_at": now,
             "updated_at": now,
+            "import_supplier_name": supplier_name,
+            "import_source_kind": "telegram_channel_post",
         }
         if hasattr(models.Product, "description"):
             prod_kwargs["description"] = text[:4000]
@@ -497,7 +731,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
         if sizes and colors:
             for s in sizes:
                 size_obj = _get_or_create_size(db, s)
-                per_size_stock = max(0, int(size_stock_map.get(str(s), effective_stock_quantity))) if size_stock_map else effective_stock_quantity
+                per_size_stock = max(0, int(size_stock_map.get(str(s), 0))) if size_stock_map else effective_stock_quantity
                 for c in colors:
                     color_obj = _get_or_create_color(db, c)
                     v_kwargs = {
@@ -516,7 +750,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
         elif sizes:
             for s in sizes:
                 size_obj = _get_or_create_size(db, s)
-                per_size_stock = max(0, int(size_stock_map.get(str(s), effective_stock_quantity))) if size_stock_map else effective_stock_quantity
+                per_size_stock = max(0, int(size_stock_map.get(str(s), 0))) if size_stock_map else effective_stock_quantity
                 v_kwargs = {
                     "product_id": prod.id,
                     "price": sale_price,
