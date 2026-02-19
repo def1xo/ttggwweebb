@@ -1524,7 +1524,11 @@ def import_products_from_sources(
                     if sale_price > 0 and (current_base <= 0 or should_fix_low_price or sale_price < current_base):
                         p.base_price = Decimal(str(sale_price))
                         changed = True
-                    if image_url and not p.default_image:
+                    if image_url and (
+                        not p.default_image
+                        or "t.me/" in str(p.default_image)
+                        or "telegram.me/" in str(p.default_image)
+                    ):
                         p.default_image = image_url
                         changed = True
                     if not getattr(p, "import_source_url", None):
@@ -1537,22 +1541,27 @@ def import_products_from_sources(
                         p.import_supplier_name = getattr(src, "supplier_name", None)
                         changed = True
                     if image_urls:
-                        existing_urls = {
-                            str(x.url).strip()
-                            for x in db.query(models.ProductImage).filter(models.ProductImage.product_id == p.id).all()
-                            if str(x.url).strip()
-                        }
-                        next_sort = int(
-                            db.query(models.ProductImage)
-                            .filter(models.ProductImage.product_id == p.id)
-                            .count()
+                        existing_rows = db.query(models.ProductImage).filter(models.ProductImage.product_id == p.id).all()
+                        existing_urls = [str(x.url).strip() for x in existing_rows if str(x.url).strip()]
+                        should_reset_gallery = (
+                            len(existing_urls) <= 1 and len(image_urls) >= 2
                         )
-                        for img_u in image_urls[:8]:
-                            if img_u in existing_urls:
-                                continue
-                            db.add(models.ProductImage(product_id=p.id, url=img_u, sort=next_sort))
-                            next_sort += 1
+                        if should_reset_gallery:
+                            for row in existing_rows:
+                                db.delete(row)
+                            db.flush()
+                            for idx, img_u in enumerate(image_urls[:8]):
+                                db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
                             changed = True
+                        else:
+                            known_urls = set(existing_urls)
+                            next_sort = len(existing_urls)
+                            for img_u in image_urls[:8]:
+                                if img_u in known_urls:
+                                    continue
+                                db.add(models.ProductImage(product_id=p.id, url=img_u, sort=next_sort))
+                                next_sort += 1
+                                changed = True
                     if changed:
                         db.add(p)
                         updated_products += 1
@@ -1596,10 +1605,12 @@ def import_products_from_sources(
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(it.get("size")) if str(x).strip()[:16]]
 
                 raw_stock = it.get("stock") if isinstance(it, dict) else None
+                raw_stock_str = str(raw_stock).strip() if raw_stock is not None else ""
+                has_explicit_stock = bool(raw_stock_str)
                 try:
-                    stock_qty = int(raw_stock) if raw_stock is not None else IMPORT_FALLBACK_STOCK_QTY
+                    stock_qty = int(raw_stock_str) if has_explicit_stock else 0
                 except Exception:
-                    stock_qty = IMPORT_FALLBACK_STOCK_QTY
+                    stock_qty = 0
                 if stock_qty < 0:
                     stock_qty = 0
 
@@ -1628,6 +1639,7 @@ def import_products_from_sources(
 
                 combinations = max(1, len(size_tokens) * len(color_tokens))
                 has_stock_map = bool(stock_map)
+                has_explicit_stock_data = bool(has_stock_map or has_explicit_stock)
                 base_stock = stock_qty // combinations if stock_qty > 0 and combinations > 1 else stock_qty
                 remainder_stock = stock_qty % combinations if stock_qty > 0 and combinations > 1 else 0
 
@@ -1638,11 +1650,14 @@ def import_products_from_sources(
                         size_key = str(size_name or "").strip()
                         if has_stock_map:
                             per_variant_stock = int(stock_map.get(size_key, 0) or 0)
-                        else:
+                        elif has_explicit_stock:
                             per_variant_stock = int(base_stock)
                             if remainder_stock > 0:
                                 per_variant_stock += 1
                                 remainder_stock -= 1
+                        else:
+                            # Unknown stock should not become "all sizes in stock".
+                            per_variant_stock = 0
 
                         variant = (
                             db.query(models.ProductVariant)
@@ -1683,14 +1698,19 @@ def import_products_from_sources(
                             # - when stock map is explicit, always trust and overwrite;
                             # - when row has explicit zero stock, propagate zero;
                             # - otherwise keep previous positive stock unless empty.
-                            if has_stock_map or stock_qty == 0:
+                            if has_explicit_stock_data:
                                 variant.stock_quantity = max(0, int(per_variant_stock))
-                            elif per_variant_stock > 0 and int(variant.stock_quantity or 0) <= 0:
-                                variant.stock_quantity = per_variant_stock
 
-                            if image_urls and not variant.images:
-                                variant.images = image_urls
-                            elif image_url and not variant.images:
+                            existing_variant_images = [str(x).strip() for x in (variant.images or []) if str(x).strip()]
+                            if image_urls:
+                                should_replace_variant_images = (
+                                    not existing_variant_images
+                                    or len(existing_variant_images) < len(image_urls)
+                                    or any(("t.me/" in u or "telegram.me/" in u) for u in existing_variant_images)
+                                )
+                                if should_replace_variant_images:
+                                    variant.images = image_urls
+                            elif image_url and not existing_variant_images:
                                 variant.images = [image_url]
                             db.add(variant)
 
