@@ -35,6 +35,65 @@ body {
   background: rgba(255,255,255,0.04);
 }
 
+.product-detail-hero--next {
+  animation: productImageSlideNext 260ms ease;
+}
+
+.product-detail-hero--prev {
+  animation: productImageSlidePrev 260ms ease;
+}
+
+.image-viewer__img {
+  will-change: transform, opacity;
+}
+
+.image-viewer__img--next {
+  animation: productImageSlideNext 260ms ease;
+}
+
+.image-viewer__img--prev {
+  animation: productImageSlidePrev 260ms ease;
+}
+
+.image-viewer__close {
+  position: fixed;
+  top: calc(12px + env(safe-area-inset-top));
+  right: 12px;
+  z-index: 10001;
+  min-height: 42px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.38);
+  background: rgba(12,12,12,0.78);
+  backdrop-filter: blur(6px);
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1;
+}
+
+@keyframes productImageSlideNext {
+  from {
+    opacity: 0.55;
+    transform: translateX(18px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
+@keyframes productImageSlidePrev {
+  from {
+    opacity: 0.55;
+    transform: translateX(-18px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+
 .thumb-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));

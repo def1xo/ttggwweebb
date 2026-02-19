@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import colorsys
 import csv
 import io
 import json
@@ -348,6 +349,16 @@ def _to_float(raw: Any) -> float | None:
     except Exception:
         return None
 
+
+
+def _extract_sliv_price(raw: Any) -> float | None:
+    s = _norm(raw)
+    if not s:
+        return None
+    m = re.search(r"(?i)слив\s*[:=\-]?\s*(-?\d[\d\s.,]*)", s)
+    if not m:
+        return None
+    return _to_float(m.group(1))
 
 def _price_candidates_from_row(row: list[Any], exclude_indices: set[int] | None = None) -> list[float]:
     ex = exclude_indices or set()
@@ -897,7 +908,11 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             for key in ("idx_title", "idx_price", "idx_size", "idx_stock", "idx_color")
             if dynamic_layout.get(key) is not None
         ) + (1 if len(dynamic_layout["size_header_cols"]) >= 2 else 0)
-        looks_like_header_row = header_score >= 2 and not _looks_like_title(" ".join(row_cells[:2]))
+        header_keyword_hits = len(re.findall(r"(?i)(товар|назв|price|цена|размер|size|налич|stock|цвет|color|фото|image)", " ".join(row_cells)))
+        looks_like_header_row = (
+            (header_score >= 2 and not _looks_like_title(" ".join(row_cells[:2])))
+            or (len(out) == 0 and header_score >= 1 and header_keyword_hits >= 2)
+        )
         if looks_like_header_row:
             for k, v in dynamic_layout.items():
                 if v is None:
@@ -938,7 +953,12 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
                     prev["image_url"] = prev_urls[0]
             continue
 
-        raw_price = _to_float(row[idx_price]) if idx_price is not None and idx_price < len(row) else None
+        raw_price = None
+        if idx_price is not None and idx_price < len(row):
+            raw_cell = row[idx_price]
+            raw_price = _extract_sliv_price(raw_cell)
+            if raw_price is None:
+                raw_price = _to_float(raw_cell)
         excluded = {x for x in [idx_title, idx_size, idx_stock] if x is not None}
         price = _coerce_row_price(raw_price, row, exclude_indices=excluded)
         if price is None or price < MIN_ABSOLUTE_DROPSHIP_PRICE:
@@ -990,6 +1010,35 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
                         break
 
         stock_raw = _norm(row[idx_stock]) if idx_stock is not None and idx_stock < len(row) else ""
+        if not stock_raw:
+            # Fallback: infer availability cell when stock column was not detected reliably.
+            parsed_row_sizes = set(split_size_tokens(size)) if size else set()
+            ignored_cols = {x for x in [idx_title, idx_price, idx_rrc, idx_color, idx_size] if x is not None}
+            ignored_cols.update(idx_image_cols or [])
+            for ci, cell in enumerate(row):
+                if ci in ignored_cols:
+                    continue
+                txt = _norm(cell)
+                if not txt:
+                    continue
+                low = txt.lower()
+                if _split_image_urls(txt):
+                    continue
+                # skip likely prices
+                if _to_float(txt) and float(_to_float(txt) or 0) >= 500:
+                    continue
+                size_hits = [str(m.group(1) or "").replace(",", ".") for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)(?!\d)", txt)]
+                size_hits = [x for x in size_hits if 20 <= float(x) <= 60]
+                if not size_hits:
+                    continue
+                has_markers = bool(re.search(r"(?i)(налич|остат|шт|pcs|pc|available|in\s*stock)", low)) or bool(re.search(r"[,;/()]", txt))
+                if parsed_row_sizes and any(h in {str(x).replace(',', '.') for x in parsed_row_sizes} for h in size_hits):
+                    stock_raw = txt
+                    break
+                if has_markers:
+                    stock_raw = txt
+                    break
+
         stock_map = _extract_size_stock_map(stock_raw)
         explicit_out_of_stock = _explicit_out_of_stock(stock_raw)
 
@@ -1046,6 +1095,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             "rrc_price": float(rrc_price) if rrc_price and rrc_price > 0 else None,
             "size": size or None,
             "stock": stock,
+            "stock_text": stock_raw or None,
             "stock_map": stock_map or None,
             "image_url": image_url,
             "image_urls": image_urls,
@@ -1324,24 +1374,7 @@ def image_print_signature_from_url(url: str, timeout_sec: int = 20) -> str | Non
 
 
 def dominant_color_name_from_url(url: str, timeout_sec: int = 20) -> str | None:
-    try:
-        img = _load_image_for_analysis(_download_image_bytes(url, timeout_sec=timeout_sec))
-
-        small = img.resize((64, 64))
-        rs = gs = bs = 0
-        n = 0
-        for (rr, gg, bb) in list(small.getdata()):
-            rs += int(rr)
-            gs += int(gg)
-            bs += int(bb)
-            n += 1
-        if n <= 0:
-            return None
-        r_avg = rs / n
-        g_avg = gs / n
-        b_avg = bs / n
-
-        # coarse color naming
+    def _classify_rgb(r_avg: float, g_avg: float, b_avg: float) -> str:
         mx = max(r_avg, g_avg, b_avg)
         mn = min(r_avg, g_avg, b_avg)
         if mx < 45:
@@ -1361,6 +1394,42 @@ def dominant_color_name_from_url(url: str, timeout_sec: int = 20) -> str | None:
         if r_avg > 135 and b_avg > 120 and g_avg < 120:
             return "фиолетовый"
         return "мульти"
+
+    try:
+        img = _load_image_for_analysis(_download_image_bytes(url, timeout_sec=timeout_sec))
+
+        small = img.resize((64, 64))
+        pixels = list(small.getdata())
+        n = len(pixels)
+        if n <= 0:
+            return None
+
+        rs = gs = bs = 0
+        for (rr, gg, bb) in pixels:
+            rs += int(rr)
+            gs += int(gg)
+            bs += int(bb)
+        r_avg = rs / n
+        g_avg = gs / n
+        b_avg = bs / n
+        coarse = _classify_rgb(r_avg, g_avg, b_avg)
+
+        # Accent-aware fallback: if global mean is neutral, try vivid pixels only.
+        if coarse in {"черный", "белый", "серый", "мульти"}:
+            vivid: list[tuple[int, int, int]] = []
+            for (rr, gg, bb) in pixels:
+                h, s, v = colorsys.rgb_to_hsv(rr / 255.0, gg / 255.0, bb / 255.0)
+                if s >= 0.22 and v >= 0.18:
+                    vivid.append((rr, gg, bb))
+            if len(vivid) >= max(40, int(n * 0.03)):
+                vr = sum(int(r) for r, _, _ in vivid) / len(vivid)
+                vg = sum(int(g) for _, g, _ in vivid) / len(vivid)
+                vb = sum(int(b) for _, _, b in vivid) / len(vivid)
+                vivid_name = _classify_rgb(vr, vg, vb)
+                if vivid_name not in {"черный", "белый", "серый", "мульти"}:
+                    return vivid_name
+
+        return coarse
     except Exception:
         return None
 
