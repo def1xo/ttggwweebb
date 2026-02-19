@@ -214,6 +214,21 @@ def test_extract_catalog_items_preserves_non_numeric_stock_text():
 
 
 
+
+
+def test_extract_catalog_items_detects_header_on_second_row_and_keeps_availability():
+    rows = [
+        ["Прайс на 12.01", ""],
+        ["№", "Название", "ЦЕНА ДРОП", "РАЗМЕРЫ", "НАЛИЧИЕ", "Фото"],
+        ["1", "Nike SB Dunk", "4900", "41-45", "42 (1шт)", "https://cdn.example.com/a.jpg"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["title"] == "Nike SB Dunk"
+    assert items[0]["stock_text"] == "42 (1шт)"
+
 def test_extract_catalog_items_infers_stock_cell_when_stock_header_missing():
     rows = [
         ["Товар", "Цена дроп", "Размер", "Комментарий", "Фото"],

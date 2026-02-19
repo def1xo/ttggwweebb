@@ -897,7 +897,11 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             for key in ("idx_title", "idx_price", "idx_size", "idx_stock", "idx_color")
             if dynamic_layout.get(key) is not None
         ) + (1 if len(dynamic_layout["size_header_cols"]) >= 2 else 0)
-        looks_like_header_row = header_score >= 2 and not _looks_like_title(" ".join(row_cells[:2]))
+        header_keyword_hits = len(re.findall(r"(?i)(товар|назв|price|цена|размер|size|налич|stock|цвет|color|фото|image)", " ".join(row_cells)))
+        looks_like_header_row = (
+            (header_score >= 2 and not _looks_like_title(" ".join(row_cells[:2])))
+            or (len(out) == 0 and header_score >= 1 and header_keyword_hits >= 2)
+        )
         if looks_like_header_row:
             for k, v in dynamic_layout.items():
                 if v is None:
