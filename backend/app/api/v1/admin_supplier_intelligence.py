@@ -434,7 +434,7 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
                 should_drop_leading_pair = True
 
             # shop_vkus known pattern: many 5+ photo sets prepend 2 service frames.
-            if not should_drop_leading_pair and len(work) >= 5:
+            if not should_drop_leading_pair and len(uniq) >= 5 and len(work) > 2:
                 should_drop_leading_pair = True
 
             if not should_drop_leading_pair:
@@ -444,7 +444,7 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
                 )
                 duplicated_cover = bool(first_two and first_two[0] in rest)
                 second_is_suspicious = bool((not _is_likely_product_image(first_two[1])) or (_score_gallery_image(first_two[1]) < 0)) if len(first_two) >= 2 else False
-                if has_supplier_marker or (duplicated_cover and (second_is_suspicious or len(work) >= 5)):
+                if has_supplier_marker or (duplicated_cover and (second_is_suspicious or len(uniq) >= 5)):
                     should_drop_leading_pair = True
 
             if should_drop_leading_pair:
