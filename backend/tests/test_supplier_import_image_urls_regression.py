@@ -59,7 +59,7 @@ def test_import_products_does_not_fail_when_source_item_uses_only_image_url(monk
 
 
 
-def test_import_products_unknown_stock_does_not_mark_all_sizes_in_stock(monkeypatch):
+def test_import_products_unknown_stock_shop_vkus_marks_listed_sizes_as_default_in_stock(monkeypatch):
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -101,7 +101,7 @@ def test_import_products_unknown_stock_does_not_mark_all_sizes_in_stock(monkeypa
         assert out.created_products >= 1
         variants = db.query(models.ProductVariant).all()
         assert variants
-        assert all(int(v.stock_quantity or 0) == 0 for v in variants)
+        assert all(int(v.stock_quantity or 0) == 9999 for v in variants)
     finally:
         db.close()
         Base.metadata.drop_all(engine)
