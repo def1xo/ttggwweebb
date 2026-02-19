@@ -1922,6 +1922,15 @@ def import_products_from_sources(
                         if kk and vv >= 0:
                             stock_map[kk] = vv
 
+                # Guard: parser may map plain ranges like "41-45" into endpoint-only stock_map (41,45).
+                # Such ambiguous ranges must not create in-stock sizes.
+                raw_plain_range_only = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", raw_stock_str)) and not bool(re.search(r"[,;/]", raw_stock_str)) and not bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", raw_stock_str))
+                if raw_plain_range_only and stock_map:
+                    map_keys_norm = {str(k).replace(',', '.').strip() for k in stock_map.keys() if str(k).strip()}
+                    range_tokens_norm = {str(x).replace(',', '.').strip() for x in split_size_tokens(raw_stock_str) if str(x).strip()}
+                    if map_keys_norm and map_keys_norm.issubset(range_tokens_norm):
+                        stock_map = {}
+
                 # Generic per-row availability rule:
                 # if row size set is explicit and stock cell lists specific sizes,
                 # keep only listed sizes as available (default qty 9999 each).
@@ -1938,7 +1947,15 @@ def import_products_from_sources(
                     stock_detail = " ".join(stock_detail_parts).strip()
                     range_only_stock = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", stock_detail)) and not bool(re.search(r"[,;/]", stock_detail)) and not bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", stock_detail))
                     listed_in_stock_raw = [str(m.group(1) or "").replace(",", ".").strip() for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)(?!\d)", stock_detail)]
-                    listed_in_stock = [x for x in listed_in_stock_raw if x in valid_sizes]
+                    listed_in_stock_raw = [x for x in listed_in_stock_raw if re.fullmatch(r"\d{2,3}(?:[.,]5)?", x)]
+                    listed_in_stock_raw = [x for x in listed_in_stock_raw if 20 <= float(x) <= 60]
+                    plain_range_only = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", stock_detail)) and not bool(re.search(r"[,;/]", stock_detail)) and not bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", stock_detail))
+                    if plain_range_only:
+                        listed_in_stock_raw = []
+                    listed_in_stock = [x for x in listed_in_stock_raw if x in valid_sizes] if valid_sizes else list(listed_in_stock_raw)
+                    if not listed_in_stock and listed_in_stock_raw and len(valid_sizes) >= 2:
+                        # If row size parsing is imperfect, still trust explicit availability sizes.
+                        listed_in_stock = list(listed_in_stock_raw)
                     if listed_in_stock and len(valid_sizes) >= 2 and not range_only_stock:
                         stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(listed_in_stock)}
                         availability_sizes_locked = True
@@ -1963,7 +1980,14 @@ def import_products_from_sources(
                     # keep only these sizes in stock.
                     valid_sizes = {str(x).replace(",", ".").strip() for x in size_tokens if str(x).strip()}
                     listed_in_stock_raw = [str(m.group(1) or "").replace(",", ".").strip() for m in re.finditer(r"(?<!\d)(\d{2,3}(?:[.,]5)?)(?!\d)", raw_stock_str)]
-                    listed_in_stock = [x for x in listed_in_stock_raw if x in valid_sizes]
+                    listed_in_stock_raw = [x for x in listed_in_stock_raw if re.fullmatch(r"\d{2,3}(?:[.,]5)?", x)]
+                    listed_in_stock_raw = [x for x in listed_in_stock_raw if 20 <= float(x) <= 60]
+                    plain_range_only = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\b", raw_stock_str)) and not bool(re.search(r"[,;/]", raw_stock_str)) and not bool(re.search(r"\b\d{2,3}\s*[:=]\s*\d{1,4}\b|\b\d{2,3}\s*\(\s*\d{1,4}", raw_stock_str))
+                    if plain_range_only:
+                        listed_in_stock_raw = []
+                    listed_in_stock = [x for x in listed_in_stock_raw if x in valid_sizes] if valid_sizes else list(listed_in_stock_raw)
+                    if not listed_in_stock and listed_in_stock_raw and len(valid_sizes) >= 2:
+                        listed_in_stock = list(listed_in_stock_raw)
                     if listed_in_stock:
                         stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(listed_in_stock)}
                         availability_sizes_locked = True
