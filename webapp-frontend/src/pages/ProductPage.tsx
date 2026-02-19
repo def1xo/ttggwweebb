@@ -297,7 +297,8 @@ export default function ProductPage() {
     }) || null;
   }, [variants, selectedSize, selectedColor]);
 
-  const selectionMissing = (sizeOptions.length > 0 && !selectedSize) || (colors.length > 0 && !selectedColor);
+  const showColorPicker = colors.length > 1;
+  const selectionMissing = (sizeOptions.length > 0 && !selectedSize) || (showColorPicker && !selectedColor);
 
   const price = useMemo(() => {
     const base = Number(product?.price ?? product?.base_price ?? 0);
@@ -489,7 +490,7 @@ export default function ProductPage() {
 
         {product.description ? <p style={{ marginTop: 10, color: "var(--text)" }}>{product.description}</p> : null}
 
-        {colors.length ? (
+        {showColorPicker ? (
           <div style={{ marginTop: 14 }}>
             <div className="muted" style={{ fontWeight: 800, marginBottom: 8 }}>
               Цвет
