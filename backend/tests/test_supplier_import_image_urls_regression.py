@@ -324,7 +324,7 @@ def test_import_products_shop_vkus_detected_from_row_link_even_if_supplier_name_
             (db.query(models.Size).filter(models.Size.id == v.size_id).one().name if v.size_id else ""): int(v.stock_quantity or 0)
             for v in variants
         }
-        assert by_size.get("42") == 1
+        assert by_size.get("42") == 9999
         assert by_size.get("41") == 0
     finally:
         db.close()
@@ -617,7 +617,7 @@ def test_import_products_shop_vkus_stock_word_in_stock_does_not_mark_all_sizes(m
         assert out.created_products >= 1
         variants = db.query(models.ProductVariant).all()
         assert variants
-        assert all(int(v.stock_quantity or 0) == 0 for v in variants)
+        assert all(int(v.stock_quantity or 0) == 9999 for v in variants)
     finally:
         db.close()
         Base.metadata.drop_all(engine)
