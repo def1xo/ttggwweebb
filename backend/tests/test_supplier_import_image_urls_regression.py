@@ -266,10 +266,14 @@ def test_rerank_gallery_images_shop_vkus_drops_first_two_for_short_gallery_when_
     ]
 
 
-def test_rerank_gallery_images_shop_vkus_keeps_clean_five_gallery():
+def test_rerank_gallery_images_shop_vkus_drops_first_two_when_total_five():
     urls = [f"https://cdn.example.com/{i}.jpg" for i in range(1, 6)]
     out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
-    assert out == urls
+    assert out == [
+        "https://cdn.example.com/3.jpg",
+        "https://cdn.example.com/4.jpg",
+        "https://cdn.example.com/5.jpg",
+    ]
 
 def test_import_products_shop_vkus_detected_from_row_link_even_if_supplier_name_differs(monkeypatch):
     engine = create_engine("sqlite:///:memory:", future=True)
@@ -495,7 +499,7 @@ def test_rerank_gallery_images_shop_vkus_drops_first_two_when_second_suspicious_
 
     out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
     assert "https://cdn.example.com/card.jpg" not in out
-    assert "https://cdn.example.com/cover.jpg" in out
+    assert "https://cdn.example.com/cover.jpg" not in out
 
 
 def test_rerank_gallery_images_shop_vkus_keeps_clean_seven_gallery():

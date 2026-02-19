@@ -429,8 +429,10 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
             if not should_drop_leading_pair and any((not _is_likely_product_image(u)) or (_score_gallery_image(u) < 0) for u in first_two):
                 should_drop_leading_pair = True
 
-            # shop_vkus: drop first two only when they look like service pair.
-            # Keep clean 5/7-photo galleries intact.
+            # shop_vkus known pattern: many 5-photo sets prepend 2 service frames.
+            if not should_drop_leading_pair and len(work) == 5:
+                should_drop_leading_pair = True
+
             if not should_drop_leading_pair:
                 has_supplier_marker = any(
                     ("shop_vkus" in str(u or "").lower()) or ("shop-vkus" in str(u or "").lower())
