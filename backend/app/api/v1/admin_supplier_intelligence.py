@@ -1469,17 +1469,36 @@ def import_products_from_sources(
                 existing_product_by_global_title[cache_key] = cand
                 return cand
         return None
-    def get_or_create_category(name: str) -> models.Category:
+    def ensure_category(raw_category: str | None, title_hint: str | None = None) -> models.Category:
         nonlocal created_categories
-        n = (name or "Разное").strip()[:255] or "Разное"
+        category_name = (raw_category or "").strip()
+        if not category_name:
+            category_name = map_category(str(title_hint or "").strip())
+        n = (category_name or "Разное").strip()[:255] or "Разное"
         slug = (slugify(n) or n.lower().replace(" ", "-"))[:255]
         c = db.query(models.Category).filter(models.Category.slug == slug).one_or_none()
         if not c:
             c = db.query(models.Category).filter(models.Category.name == n).one_or_none()
+
         if c:
+            if hasattr(c, "is_active") and getattr(c, "is_active", None) is not True:
+                c.is_active = True
+                db.add(c)
+            if hasattr(c, "visible") and getattr(c, "visible", None) is not True:
+                c.visible = True
+                db.add(c)
+            if hasattr(c, "is_published") and getattr(c, "is_published", None) is not True:
+                c.is_published = True
+                db.add(c)
             return c
 
         c = models.Category(name=n, slug=slug)
+        if hasattr(c, "is_active"):
+            c.is_active = True
+        if hasattr(c, "visible"):
+            c.visible = True
+        if hasattr(c, "is_published"):
+            c.is_published = True
         try:
             with db.begin_nested():
                 db.add(c)
@@ -1798,7 +1817,7 @@ def import_products_from_sources(
                         if not it.get("description") and matched_item.get("description"):
                             it["description"] = matched_item.get("description")
 
-                if not title or ds_price <= 0:
+                if not title:
                     # keep unresolved placeholders out of catalog; they are only media donors
                     continue
 
@@ -1854,6 +1873,10 @@ def import_products_from_sources(
                 if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title):
                     ds_price = max(float(ds_price or 0), 1800.0)
                 sale_price = pick_sale_price(title, ds_price, min_dropship_price=min_dropship, rrc_price=(it.get("rrc_price") if isinstance(it, dict) else None))
+                if sale_price <= 0:
+                    report.skipped_count = int(getattr(report, "skipped_count", 0) or 0) + 1
+                    report.meta["skipped_count"] = int(report.meta.get("skipped_count", 0) or 0) + 1
+                    continue
                 row_image_urls = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
                 image_url = str(it.get("image_url") or "").strip() or None
                 if not image_url and row_image_urls:
