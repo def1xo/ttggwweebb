@@ -3,14 +3,16 @@ from __future__ import annotations
 import hashlib
 import os
 import random
-import re
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Iterable
+from datetime import datetime, timezone
 
 import requests
 
-_GENERATOR_CACHE = None
+PLACEHOLDER_SIGNATURES = (
+    "лучший выбор для вашего гардероба",
+    "стильный вариант на каждый день",
+    "качественный материал и удобная посадка",
+)
 
 
 @dataclass
@@ -21,224 +23,89 @@ class DescriptionPayload:
     colors: list[str] | None = None
     key_features: list[str] | None = None
     materials: list[str] | None = None
-    season_style: list[str] | None = None
-
-
-def _norm(v: str | None) -> str:
-    return " ".join(str(v or "").strip().split())
-
-
-def _norm_list(values: Iterable[str] | None) -> list[str]:
-    out: list[str] = []
-    for x in (values or []):
-        s = _norm(str(x))
-        if s and s not in out:
-            out.append(s)
-    return out
-
-
-def description_hash(text: str | None) -> str:
-    payload = _norm(text).lower().encode("utf-8", errors="ignore")
-    return hashlib.sha1(payload).hexdigest()
-
-
-_PLACEHOLDER_PATTERNS = [
-    re.compile(r"вайбов", re.I),
-    re.compile(r"стрит-стайл", re.I),
-    re.compile(r"каждый день без заморочек", re.I),
-]
-
-
-def is_placeholder_description(text: str | None) -> bool:
-    t = _norm(text)
-    if not t:
-        return True
-    for p in _PLACEHOLDER_PATTERNS:
-        if p.search(t):
-            return True
-    return False
+    season: str | None = None
+    style: str | None = None
 
 
 class TemplateDescriptionGenerator:
-    source = "template"
-
-    _opens = [
-        "{title} — модель для аккуратного повседневного образа.",
-        "{title} — практичный вариант на каждый день.",
-        "{title} — универсальная пара для города.",
-    ]
-    _middles = [
-        "Силуэт легко сочетается с базовым гардеробом и спортивными вещами.",
-        "Посадка и форма рассчитаны на комфорт в течение дня.",
-        "Дизайн без лишней перегрузки, поэтому модель легко комбинировать.",
-    ]
-    _features = [
-        "Материалы: {materials}.",
-        "Ключевые детали: {features}.",
-        "По цвету: {colors}.",
-        "Подходит под сезон/стиль: {style}.",
-    ]
-    _closers = [
-        "Хорошо работает и в повседневных, и в более собранных образах.",
-        "Подойдёт для активного ритма и долгой носки в течение дня.",
-        "Оптимальный выбор, если нужен чистый и понятный силуэт без перегибов.",
-    ]
-
     def generate(self, payload: DescriptionPayload) -> str:
-        title = _norm(payload.title) or "Товар"
-        brand = _norm(payload.brand)
-        category = _norm(payload.category)
-        colors = _norm_list(payload.colors)
-        features = _norm_list(payload.key_features)
-        materials = _norm_list(payload.materials)
-        style = _norm_list(payload.season_style)
-
-        seed_src = "|".join([
-            title.lower(),
-            brand.lower(),
-            category.lower(),
-            ",".join(colors).lower(),
-            ",".join(features).lower(),
-            ",".join(materials).lower(),
-            ",".join(style).lower(),
-        ])
-        rnd = random.Random(int(hashlib.sha1(seed_src.encode("utf-8")).hexdigest()[:10], 16))
-
-        line1 = rnd.choice(self._opens).format(title=title)
-        if brand:
-            line1 = f"{line1} Бренд: {brand}."
-        if category:
-            line1 = f"{line1} Категория: {category.lower()}."
-
-        parts = [line1, rnd.choice(self._middles)]
-
-        feature_pool = []
-        if materials:
-            feature_pool.append(self._features[0].format(materials=", ".join(materials[:3])))
-        if features:
-            feature_pool.append(self._features[1].format(features=", ".join(features[:3])))
-        if colors:
-            feature_pool.append(self._features[2].format(colors=", ".join(colors[:3])))
-        if style:
-            feature_pool.append(self._features[3].format(style=", ".join(style[:2])))
-
-        if feature_pool:
-            parts.append(rnd.choice(feature_pool))
-
-        parts.append(rnd.choice(self._closers))
-        text = " ".join(parts)
-        text = re.sub(r"\s+", " ", text).strip()
-        return text
+        seed = int(hashlib.sha256((payload.title or "").encode("utf-8")).hexdigest()[:8], 16)
+        rnd = random.Random(seed)
+        mood = rnd.choice(["лаконичный", "аккуратный", "практичный", "современный"])
+        color = ", ".join(payload.colors or []) or "базовой палитре"
+        material = rnd.choice(payload.materials or ["износостойких материалов", "мягкого текстиля", "плотной основы"])
+        feature = rnd.choice(payload.key_features or ["удобная посадка", "чистый силуэт", "комфорт на каждый день"])
+        cat = payload.category or "товар"
+        return (
+            f"{payload.title} — {mood} {cat.lower()} в {color}. "
+            f"Модель выполнена из {material} и делает акцент на {feature}. "
+            f"Подходит для повседневных образов{f' в стиле {payload.style}' if payload.style else ''}."
+        )
 
 
 class OllamaDescriptionGenerator:
-    source = "ollama"
-
-    def __init__(self, ollama_url: str, model: str = "llama3.1:8b", timeout_sec: float = 8.0):
-        self.ollama_url = ollama_url.rstrip("/")
+    def __init__(self, base_url: str, model: str = "llama3.1", timeout_sec: int = 8) -> None:
+        self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_sec = timeout_sec
-        self.template_fallback = TemplateDescriptionGenerator()
 
     def generate(self, payload: DescriptionPayload) -> str:
-        prompt = {
-            "title": _norm(payload.title),
-            "brand": _norm(payload.brand),
-            "category": _norm(payload.category),
-            "colors": _norm_list(payload.colors),
-            "key_features": _norm_list(payload.key_features),
-            "materials": _norm_list(payload.materials),
-            "season_style": _norm_list(payload.season_style),
-            "rules": [
-                "Пиши по-русски",
-                "2-4 предложения",
-                "без повторов и воды",
-                "без матерщины",
-                "без рискованных обещаний типа 100% оригинал",
-                "без слова вайбовый",
-            ],
-        }
-        try:
-            resp = requests.post(
-                f"{self.ollama_url}/api/generate",
-                timeout=(2.5, self.timeout_sec),
-                json={
-                    "model": self.model,
-                    "stream": False,
-                    "prompt": f"Сгенерируй описание товара. Данные: {prompt}",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json() if resp.content else {}
-            text = _norm(str(data.get("response") or ""))
-            if not text:
-                return self.template_fallback.generate(payload)
-            return text
-        except Exception:
-            return self.template_fallback.generate(payload)
-
-
-def build_description_generator():
-    enabled = str(os.getenv("OLLAMA_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
-    ollama_url = str(os.getenv("OLLAMA_URL", "")).strip()
-    if enabled or ollama_url:
-        return OllamaDescriptionGenerator(
-            ollama_url=ollama_url or "http://localhost:11434",
-            model=str(os.getenv("OLLAMA_MODEL", "llama3.1:8b")).strip() or "llama3.1:8b",
-            timeout_sec=float(os.getenv("OLLAMA_TIMEOUT_SEC", "8") or 8),
+        prompt = (
+            "Напиши описание товара на русском языке: 2-4 предложения, без воды и повторов, "
+            "без рискованных заявлений. Данные: "
+            f"title={payload.title}; brand={payload.brand or ''}; category={payload.category or ''}; "
+            f"colors={', '.join(payload.colors or [])}; materials={', '.join(payload.materials or [])}; "
+            f"features={', '.join(payload.key_features or [])}; season={payload.season or ''}; style={payload.style or ''}."
         )
-    return TemplateDescriptionGenerator()
-
-
-def should_regenerate_description(
-    current_description: str | None,
-    current_hash: str | None,
-    *,
-    force_regen: bool = False,
-) -> bool:
-    if force_regen:
-        return True
-    if not _norm(current_description):
-        return True
-    if is_placeholder_description(current_description):
-        return True
-    if current_hash and current_hash == description_hash(current_description):
-        return False
-    return False
-
-
-def generated_meta(text: str, source: str) -> dict[str, str]:
-    return {
-        "description_hash": description_hash(text),
-        "description_source": source,
-        "description_generated_at": datetime.utcnow().isoformat(),
-    }
+        r = requests.post(
+            f"{self.base_url}/api/generate",
+            json={"model": self.model, "prompt": prompt, "stream": False},
+            timeout=self.timeout_sec,
+        )
+        r.raise_for_status()
+        text = str((r.json() or {}).get("response") or "").strip()
+        if not text:
+            raise RuntimeError("empty ollama response")
+        return text
 
 
 def get_description_generator():
-    global _GENERATOR_CACHE
-    if _GENERATOR_CACHE is None:
-        _GENERATOR_CACHE = build_description_generator()
-    return _GENERATOR_CACHE
+    enabled = str(os.getenv("OLLAMA_ENABLED", "")).lower() in {"1", "true", "yes"}
+    url = str(os.getenv("OLLAMA_URL", "")).strip()
+    if enabled or url:
+        return OllamaDescriptionGenerator(base_url=url or "http://localhost:11434", model=os.getenv("OLLAMA_MODEL", "llama3.1"))
+    return TemplateDescriptionGenerator()
 
 
-def safe_generate_description(payload: DescriptionPayload) -> tuple[str | None, str]:
-    """Never raise: returns (text, source)."""
+def description_hash(value: str | None) -> str | None:
+    t = str(value or "").strip()
+    if not t:
+        return None
+    return hashlib.sha256(t.lower().encode("utf-8")).hexdigest()
+
+
+def is_placeholder_description(value: str | None) -> bool:
+    t = str(value or "").strip().lower()
+    if not t:
+        return True
+    if any(sig in t for sig in PLACEHOLDER_SIGNATURES):
+        return True
+    return len(t) < 40
+
+
+def should_regenerate_description(current: str | None, force_regen: bool = False) -> bool:
+    if force_regen:
+        return True
+    return is_placeholder_description(current)
+
+
+def generate_description(payload: DescriptionPayload) -> tuple[str, str, str, datetime]:
+    fallback = TemplateDescriptionGenerator()
+    generator = get_description_generator()
     try:
-        gen = get_description_generator()
-        text = gen.generate(payload)
-        text = _norm(text)
-        if text:
-            return text, getattr(gen, "source", "template")
+        text = generator.generate(payload)
+        source = "ollama" if isinstance(generator, OllamaDescriptionGenerator) else "template"
     except Exception:
-        pass
-
-    try:
-        fb = TemplateDescriptionGenerator()
-        text = _norm(fb.generate(payload))
-        if text:
-            return text, "template"
-    except Exception:
-        pass
-
-    return None, "none"
+        text = fallback.generate(payload)
+        source = "template"
+    return text, source, description_hash(text) or "", datetime.now(timezone.utc)

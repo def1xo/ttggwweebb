@@ -31,6 +31,8 @@ from app.services.description_generator import (
 )
 from app.services import media_store
 from app.services.supplier_profiles import normalize_title_for_supplier
+from app.services.color_normalization import normalize_color
+from app.services.description_generator import DescriptionPayload, generate_description, should_regenerate_description
 from app.services.supplier_importers import (
     ImporterContext,
     get_importer_for_source,
@@ -97,9 +99,10 @@ def _split_color_tokens(raw: str | None) -> list[str]:
     out: list[str] = []
     for part in re.split(r"[,;/|]+|\s{2,}|\s+-\s+", txt):
         token = " ".join(part.strip().split())
-        normalized = normalize_color(token)
-        if normalized and normalized not in out and normalized != "unknown":
-            out.append(normalized)
+        canon = normalize_color(token) if token else None
+        val = canon or token
+        if val and val not in out:
+            out.append(val)
     return out
 
 
@@ -1019,8 +1022,9 @@ class ImportProductsIn(BaseModel):
     dry_run: bool = True
     publish_visible: bool = False
     ai_style_description: bool = True
-    ai_description_provider: str = Field(default="disabled", max_length=64)
+    ai_description_provider: str = Field(default="template", max_length=64)
     ai_description_enabled: bool = True
+    force_regen: bool = False
     ai_color_distribution_enabled: bool = False
     ai_color_distribution_provider: str = Field(default="disabled", max_length=64)
     force_regen_descriptions: bool = False
@@ -1514,8 +1518,8 @@ def import_products_from_sources(
             raise
 
     def get_or_create_color(name: str | None) -> models.Color | None:
-        nm = normalize_color((name or "").strip())
-        if not nm or nm == "unknown":
+        nm = normalize_color((name or "").strip()) or (name or "").strip()
+        if not nm:
             return None
         s = (slugify(nm) or nm.lower())[:128]
         x = db.query(models.Color).filter((models.Color.slug == s) | (models.Color.name == nm)).first()
@@ -1846,28 +1850,19 @@ def import_products_from_sources(
 
                 supplier_desc = str(it.get("description") or "").strip()
                 desc = supplier_desc
-                desc_meta: dict[str, str] = {}
-                payload_desc = DescriptionPayload(
-                    title=title,
-                    brand=None,
-                    category=cat_name,
-                    colors=_split_color_tokens(it.get("color")),
-                    key_features=[str(it.get("notes") or "").strip()] if str(it.get("notes") or "").strip() else [],
-                    materials=[],
-                    season_style=[],
-                )
-                if payload.ai_style_description and not supplier_desc:
-                    try:
-                        desc, src_name = safe_generate_description(payload_desc)
-                        if desc:
-                            desc_meta = generated_meta(desc, src_name)
-                    except Exception as gen_exc:
-                        logger.warning(
-                            "description generation failed (create path) supplier=%s title=%s err=%s",
-                            getattr(src, "supplier_name", None),
-                            title,
-                            str(gen_exc),
-                        )
+                desc_source = None
+                desc_hash = None
+                desc_generated_at = None
+                if p and not supplier_desc and should_regenerate_description(getattr(p, "description", None), force_regen=bool(getattr(payload, "force_regen", False))):
+                    generated_desc, desc_source, desc_hash, desc_generated_at = generate_description(
+                        DescriptionPayload(title=title, category=cat_name, colors=_split_color_tokens(it.get("color")))
+                    )
+                    desc = generated_desc
+                elif (not p) and not supplier_desc:
+                    generated_desc, desc_source, desc_hash, desc_generated_at = generate_description(
+                        DescriptionPayload(title=title, category=cat_name, colors=_split_color_tokens(it.get("color")))
+                    )
+                    desc = generated_desc
                 # Guard against anomalously low supplier price parse (e.g. 799 for sneakers).
                 # For footwear-like titles enforce a minimal wholesale floor before retail pricing.
                 if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title):
@@ -2020,9 +2015,9 @@ def import_products_from_sources(
                         title=effective_title,
                         slug=slug,
                         description=desc or None,
-                        description_source=(desc_meta.get("description_source") if desc_meta else ("supplier" if supplier_desc else None)),
-                        description_hash=(desc_meta.get("description_hash") if desc_meta else (description_hash(supplier_desc) if supplier_desc else None)),
-                        description_generated_at=(datetime.fromisoformat(desc_meta.get("description_generated_at")) if desc_meta.get("description_generated_at") else None),
+                        description_source=desc_source,
+                        description_hash=desc_hash,
+                        description_generated_at=desc_generated_at,
                         base_price=Decimal(str(sale_price)),
                         currency="RUB",
                         category_id=category.id,
@@ -2042,29 +2037,14 @@ def import_products_from_sources(
                     report.meta["upsert_products_created"] = int(report.meta.get("upsert_products_created", 0) or 0) + 1
                 else:
                     changed = False
-                    if supplier_desc and not p.description:
+                    if supplier_desc and supplier_desc != p.description:
                         p.description = supplier_desc
-                        p.description_source = "supplier"
-                        p.description_hash = description_hash(supplier_desc)
-                    elif payload.ai_style_description and should_regenerate_description(getattr(p, "description", None), getattr(p, "description_hash", None), force_regen=bool(payload.force_regen_descriptions)):
-
-                        try:
-                            generated, src_name = safe_generate_description(payload_desc)
-                            if generated:
-                                p.description = generated
-                                meta = generated_meta(generated, src_name)
-                                p.description_source = meta.get("description_source")
-                                p.description_hash = meta.get("description_hash")
-                                if meta.get("description_generated_at"):
-                                    p.description_generated_at = datetime.fromisoformat(meta.get("description_generated_at"))
-                                changed = True
-                        except Exception as gen_exc:
-                            logger.warning(
-                                "description generation failed (update path) supplier=%s title=%s err=%s",
-                                getattr(src, "supplier_name", None),
-                                title,
-                                str(gen_exc),
-                            )
+                    elif desc and should_regenerate_description(p.description, force_regen=bool(getattr(payload, "force_regen", False))):
+                        p.description = desc
+                        p.description_source = desc_source
+                        p.description_hash = desc_hash
+                        p.description_generated_at = desc_generated_at
+                        changed = True
                     current_base = float(p.base_price or 0)
                     should_fix_low_price = bool(
                         current_base > 0
@@ -2168,41 +2148,22 @@ def import_products_from_sources(
                 # - for shop_vkus, allow fallback color inference from item text/gallery only when 2+ strong colors are detected.
                 src_color = it.get("color")
                 color_tokens = _split_color_tokens(src_color)
-                if color_tokens:
-                    report.meta["colors_from_source"] = int(report.meta.get("colors_from_source", 0) or 0) + len(color_tokens)
-
-                # If supplier did not provide color, allow variant-level color only when rows clearly have different photo sets.
-                title_key = (_supplier_key(getattr(src, "supplier_name", None) or ""), _title_key(title))
-                row_sig = _photoset_signature(image_urls)
-                seen_sigs = title_seen_photosets.setdefault(title_key, set())
-                has_other_sig = bool(row_sig and seen_sigs and row_sig not in seen_sigs)
-                if not color_tokens and has_other_sig and image_urls:
-                    guessed = normalize_color(dominant_color_name_from_url(image_urls[0]))
-                    if guessed and guessed != "unknown":
-                        color_tokens = [guessed]
-                        report.meta["consolidation_reason"] = "variant_color_from_distinct_photoset"
-                if row_sig:
-                    seen_sigs.add(row_sig)
-
-                if len(color_tokens) <= 1 and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
-                    inferred_colors = _extract_shop_vkus_color_tokens(it if isinstance(it, dict) else {}, image_urls=image_urls)
-                    if len(inferred_colors) >= 1:
-                        color_tokens = inferred_colors
-
-                    if payload.ai_color_distribution_enabled:
-                        ai_colors = infer_colors_with_ai(
-                            title=title,
-                            image_urls=image_urls,
-                            provider=payload.ai_color_distribution_provider,
-                            max_colors=3,
-                        )
-                        if len(ai_colors) >= 1:
-                            color_tokens = ai_colors
-                if any(c for c in color_tokens if c and c != "unknown"):
-                    report.meta["colors_detected"] = int(report.meta.get("colors_detected", 0) or 0) + len([c for c in color_tokens if c and c != "unknown"])
+                colors_from_source = bool(color_tokens)
                 if len(color_tokens) == 0:
-                    color_tokens = [""]
-                report.meta["colors_final"] = int(report.meta.get("colors_final", 0) or 0) + len([c for c in color_tokens if c])
+                    detected_single = normalize_color(getattr(p, "detected_color", None) if p else None)
+                    color_tokens = [detected_single or ""]
+                colors_final = [c for c in color_tokens if c]
+                consolidation_reason = "source_colors" if colors_from_source else "detected_single_fallback"
+                if len(image_urls) == 5 and len(colors_final) <= 1:
+                    consolidation_reason = "single_photoset"
+                logger.info(
+                    "supplier_color_resolution supplier=%s title=%s colors_from_source=%s colors_final=%s reason=%s",
+                    supplier_key,
+                    title[:120],
+                    color_tokens if colors_from_source else [],
+                    colors_final,
+                    consolidation_reason,
+                )
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
@@ -2523,6 +2484,7 @@ def import_products_from_sources(
                 except Exception:
                     ctx = None
                 logger.exception("supplier import item failed source_id=%s url=%s", src.id, src_url)
+                report.skipped_count = int(getattr(report, "skipped_count", 0) or 0) + 1
                 _register_source_error(report, exc, context=ctx)
                 report.skipped_count = int(getattr(report, "skipped_count", 0) or 0) + 1
                 report.meta["skipped_count"] = int(report.meta.get("skipped_count", 0) or 0) + 1
@@ -2559,31 +2521,7 @@ def import_products_from_sources(
             pass
         source_reports.append(report)
         logger.info(
-            "supplier_import_diagnostics supplier_name=%s source_id=%s fetched_rows_count=%s parsed_items_count=%s normalized_items_count=%s grouped_products_count=%s upsert_products_created=%s upsert_products_updated=%s upsert_variants_created=%s upsert_variants_updated=%s categories_created=%s categories_linked=%s commit_ok=%s commit_count=%s skipped_count=%s db_url=%s db_name=%s elapsed_ms=%s supplier_products_count=%s categories_total_count=%s",
-            getattr(src, "supplier_name", None),
-            int(src.id),
-            int((report.meta or {}).get("fetched_rows_count", 0) if isinstance(report.meta, dict) else 0),
-            int((report.meta or {}).get("parsed_items_count", 0) if isinstance(report.meta, dict) else 0),
-            int((report.meta or {}).get("normalized_items_count", 0) if isinstance(report.meta, dict) else 0),
-            int((report.meta or {}).get("grouped_products_count", 0) if isinstance(report.meta, dict) else 0),
-            int((report.meta or {}).get("upsert_products_created", 0) if isinstance(report.meta, dict) else 0),
-            int((report.meta or {}).get("upsert_products_updated", 0) if isinstance(report.meta, dict) else 0),
-            int((report.meta or {}).get("upsert_variants_created", 0) if isinstance(report.meta, dict) else 0),
-            int((report.meta or {}).get("upsert_variants_updated", 0) if isinstance(report.meta, dict) else 0),
-            int((report.meta or {}).get("categories_created", 0) if isinstance(report.meta, dict) else 0),
-            int((report.meta or {}).get("categories_linked", 0) if isinstance(report.meta, dict) else 0),
-            bool((report.meta or {}).get("commit_ok", True) if isinstance(report.meta, dict) else True),
-            int((report.meta or {}).get("commit_count", 0) if isinstance(report.meta, dict) else 0),
-            int(getattr(report, "skipped_count", 0) or 0),
-            db_url_safe,
-            db_name,
-            elapsed_ms,
-            supplier_products_count,
-            categories_total_count,
-        )
-
-        logger.info(
-            "supplier_import_source_done supplier_name=%s source_id=%s imported_count=%s updated_count=%s skipped_count=%s created_variants=%s updated_variants=%s errors=%s error_samples=%s colors_detected=%s colors_from_source=%s colors_final=%s consolidation=%s",
+            "supplier_import_source_done supplier_name=%s source_id=%s created_products=%s updated_products=%s created_variants=%s updated_variants=%s imported_items=%s skipped_count=%s errors=%s",
             getattr(src, "supplier_name", None),
             int(src.id),
             report.imported,
@@ -2591,6 +2529,8 @@ def import_products_from_sources(
             int(getattr(report, "skipped_count", 0) or 0),
             created_variants,
             updated_variants,
+            report.imported,
+            report.skipped_count,
             report.errors,
             list((report.error_samples or [])[:5]),
             int((report.meta or {}).get("colors_detected", 0) if isinstance(report.meta, dict) else 0),

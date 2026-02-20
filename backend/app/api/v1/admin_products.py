@@ -10,7 +10,7 @@ from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
 from app.services import media_store
 from app.services.importer_notifications import slugify
-from app.services.description_generator import DescriptionPayload, build_description_generator, generated_meta, should_regenerate_description
+from app.services.description_generator import DescriptionPayload, generate_description
 
 router = APIRouter(tags=["admin_products"])
 
@@ -197,6 +197,8 @@ def list_products(db: Session = Depends(get_db), admin: models.User = Depends(ge
             "description_source": getattr(p, "description_source", None),
             "description_generated_at": (getattr(p, "description_generated_at", None).isoformat() if getattr(p, "description_generated_at", None) else None),
             "default_image": p.default_image,
+            "description_source": getattr(p, "description_source", None),
+            "description_generated_at": (getattr(p, "description_generated_at", None).isoformat() if getattr(p, "description_generated_at", None) else None),
             "import_source_url": getattr(p, "import_source_url", None),
             "import_source_kind": getattr(p, "import_source_kind", None),
             "import_supplier_name": getattr(p, "import_supplier_name", None),
@@ -371,6 +373,8 @@ def create_product(
             "title": p.title,
             "base_price": float(p.base_price or 0),
             "default_image": p.default_image,
+            "description_source": getattr(p, "description_source", None),
+            "description_generated_at": (getattr(p, "description_generated_at", None).isoformat() if getattr(p, "description_generated_at", None) else None),
             "category_id": p.category_id,
             "sizes": size_list,
             "colors": [c.name for c in color_objs],
@@ -552,6 +556,8 @@ def update_product(
             "title": p.title,
             "base_price": float(p.base_price or 0),
             "default_image": p.default_image,
+            "description_source": getattr(p, "description_source", None),
+            "description_generated_at": (getattr(p, "description_generated_at", None).isoformat() if getattr(p, "description_generated_at", None) else None),
             "category_id": p.category_id,
             "sizes": sizes_out,
             "colors": colors_out,
@@ -599,3 +605,23 @@ def delete_category(category_id: int, db: Session = Depends(get_db), admin: mode
     db.delete(c)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/products/{product_id}/regenerate-description")
+def regenerate_product_description(
+    product_id: int,
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(get_current_admin_user),
+):
+    p = db.query(models.Product).filter(models.Product.id == int(product_id)).first()
+    if not p:
+        raise HTTPException(404, detail="product not found")
+    colors = sorted({(v.color.name if getattr(v, "color", None) and v.color else None) for v in (p.variants or []) if (getattr(v, "color", None) and v.color and v.color.name)})
+    text, source, desc_hash, generated_at = generate_description(DescriptionPayload(title=p.title, category=(p.category.name if getattr(p, "category", None) else None), colors=[c for c in colors if c]))
+    p.description = text
+    p.description_source = source
+    p.description_hash = desc_hash
+    p.description_generated_at = generated_at
+    db.add(p)
+    db.commit()
+    return {"ok": True, "description": p.description, "description_source": p.description_source, "description_generated_at": p.description_generated_at.isoformat() if p.description_generated_at else None}

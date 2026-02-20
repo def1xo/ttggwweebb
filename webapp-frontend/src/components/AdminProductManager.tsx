@@ -64,6 +64,17 @@ export default function AdminProductManager() {
     await load();
   }
 
+
+  async function regenerateDescription(id?: number) {
+    if (!id) return;
+    try {
+      await fetch(`/api/admin/products/${id}/regenerate-description`, { method: "POST", credentials: "include" });
+      await load();
+    } catch (e: any) {
+      setErr(e?.message || "Ошибка регенерации описания");
+    }
+  }
+
   async function remove(id?: number) {
     if (!id) return;
     if (!confirm("Удалить товар?")) return;
@@ -141,10 +152,11 @@ export default function AdminProductManager() {
                     Импорт: {(p as any).import_supplier_name || "—"} • {(p as any).import_source_kind || "—"} • {(p as any).import_source_url || "—"}
                   </div>
                   <div className="small-muted" style={{ marginTop: 4 }}>
-                    Описание: {(p as any).description_source || "—"} • {(p as any).description_generated_at || "—"}
+                    Источник описания: {(p as any).description_source || "—"} • Дата: {(p as any).description_generated_at || "—"}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
+                  <button className="btn ghost" onClick={() => regenerateDescription(p.id)}>Перегенерировать описание</button>
                   <button className="btn ghost" onClick={() => setEditing(p)}>Ред.</button>
                   <button className="btn ghost" onClick={() => regenDescription(p.id)}>Перегенерировать описание</button>
                   <button className="btn ghost" onClick={() => remove(p.id)}>Удалить</button>
