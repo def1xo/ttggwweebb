@@ -182,27 +182,34 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
                 top_color, _ = max(ch.items(), key=lambda kv: int(kv[1] or 0))
                 cluster_colors.append((str(top_color), int(cl.get("count") or 0)))
 
-            if cluster_colors:
-                if len(cluster_colors) >= 2:
-                    lead = cluster_colors[0][1]
-                    second = cluster_colors[1][1]
-                    # expose 2 colors only when second cluster is substantial.
-                    if second >= 2 and second * 10 >= lead * 6:
-                        out: list[str] = []
-                        for color_name, _ in cluster_colors[:3]:
-                            if color_name not in out:
-                                out.append(color_name)
-                        if out:
-                            return out
-                return [cluster_colors[0][0]]
+            if cluster_colors and len(cluster_colors) >= 2:
+                lead = cluster_colors[0][1]
+                second = cluster_colors[1][1]
+                # expose 2 colors only when second cluster is substantial.
+                if second >= 2 and second * 10 >= lead * 6:
+                    out: list[str] = []
+                    for color_name, _ in cluster_colors[:3]:
+                        if color_name not in out:
+                            out.append(color_name)
+                    if out:
+                        return out
 
     color_hits: dict[str, int] = {}
     for _, key in analyzed:
         color_hits[key] = int(color_hits.get(key, 0) or 0) + 1
-    ranked = [k for k, _ in sorted(color_hits.items(), key=lambda x: x[1], reverse=True)]
-    strong = [k for k, v in sorted(color_hits.items(), key=lambda x: x[1], reverse=True) if v >= 2]
+    ranked_hits = sorted(color_hits.items(), key=lambda x: int(x[1] or 0), reverse=True)
+    if len(ranked_hits) >= 2:
+        lead_color, lead_cnt = ranked_hits[0]
+        second_color, second_cnt = ranked_hits[1]
+        # Secondary fallback when signature grouping is fragmented by angle,
+        # but two stable colors are repeatedly seen in gallery.
+        if int(second_cnt) >= 2 and int(second_cnt) * 10 >= int(lead_cnt) * 5:
+            return [str(lead_color), str(second_color)]
+    strong = [k for k, v in ranked_hits if int(v or 0) >= 2]
     if strong:
         return strong[:1]
+    if ranked_hits:
+        return [str(ranked_hits[0][0])]
     if found:
         return found[:1]
     return []

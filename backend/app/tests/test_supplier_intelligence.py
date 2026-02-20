@@ -1024,11 +1024,43 @@ def test_dominant_color_name_from_url_prefers_vivid_accent_over_gray(monkeypatch
     assert got == "фиолетовый"
 
 
+
+
+def test_dominant_color_name_from_url_prefers_center_over_red_background(monkeypatch):
+    from PIL import Image
+    import io
+
+    img = Image.new("RGB", (80, 80), (220, 40, 40))
+    for y in range(16, 64):
+        for x in range(16, 64):
+            img.putpixel((x, y), (25, 25, 25))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    payload = buf.getvalue()
+
+    monkeypatch.setattr(si, "_download_image_bytes", lambda *a, **k: payload)
+    got = si.dominant_color_name_from_url("https://cdn.example.com/test-center-black.png")
+    assert got == "черный"
+
+
+def test_extract_shop_vkus_color_tokens_two_repeated_colors_without_signature_clusters(monkeypatch):
+    palette = {
+        "a1": "черный",
+        "a2": "черный",
+        "a3": "черный",
+        "b1": "бежевый",
+        "b2": "бежевый",
+    }
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: palette.get(str(u), "серый"))
+    monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
+
+    got = asi._extract_shop_vkus_color_tokens({"title": "Zoom Vomero"}, image_urls=["a1", "a2", "a3", "b1", "b2"])
+    assert got == ["черный", "бежевый"]
 def test_extract_shop_vkus_color_tokens_keeps_white_and_gray_from_images(monkeypatch):
     monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый" if u in {"a", "b"} else "серый")
     monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
     got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
-    assert got == ["белый"]
+    assert got == ["белый", "серый"]
 
 
 def test_extract_shop_vkus_color_tokens_keeps_two_colors_for_two_strong_signature_clusters(monkeypatch):
@@ -1049,7 +1081,7 @@ def test_extract_shop_vkus_color_tokens_normalizes_english_color_names(monkeypat
     monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
 
     got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
-    assert got == ["белый"]
+    assert got == ["белый", "серый"]
 
 
 def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):

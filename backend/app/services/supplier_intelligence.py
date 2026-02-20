@@ -1404,27 +1404,40 @@ def dominant_color_name_from_url(url: str, timeout_sec: int = 20) -> str | None:
         if n <= 0:
             return None
 
-        rs = gs = bs = 0
-        for (rr, gg, bb) in pixels:
-            rs += int(rr)
-            gs += int(gg)
-            bs += int(bb)
-        r_avg = rs / n
-        g_avg = gs / n
-        b_avg = bs / n
-        coarse = _classify_rgb(r_avg, g_avg, b_avg)
+        def _avg_color(px: list[tuple[int, int, int]]) -> tuple[float, float, float]:
+            if not px:
+                return (0.0, 0.0, 0.0)
+            nn = len(px)
+            rs = sum(int(rr) for rr, _, _ in px)
+            gs = sum(int(gg) for _, gg, _ in px)
+            bs = sum(int(bb) for _, _, bb in px)
+            return (rs / nn, gs / nn, bs / nn)
 
-        # Accent-aware fallback: if global mean is neutral, try vivid pixels only.
-        if coarse in {"черный", "белый", "серый", "мульти"}:
+        r_avg, g_avg, b_avg = _avg_color(pixels)
+        coarse_global = _classify_rgb(r_avg, g_avg, b_avg)
+
+        # Central crop is usually the product body; it avoids background boxes/walls bias.
+        center_pixels: list[tuple[int, int, int]] = []
+        for y in range(12, 52):
+            row = y * 64
+            for x in range(12, 52):
+                center_pixels.append(pixels[row + x])
+        cr, cg, cb = _avg_color(center_pixels)
+        coarse_center = _classify_rgb(cr, cg, cb)
+
+        coarse = coarse_center
+        if coarse_center in {"белый", "серый", "мульти"} and coarse_global in {"черный", "коричневый", "бежевый", "синий", "зеленый", "фиолетовый", "желтый", "оранжевый"}:
+            coarse = coarse_global
+
+        # Accent-aware fallback: if mean is neutral, try vivid pixels only.
+        if coarse in {"белый", "серый", "мульти"}:
             vivid: list[tuple[int, int, int]] = []
-            for (rr, gg, bb) in pixels:
-                h, s, v = colorsys.rgb_to_hsv(rr / 255.0, gg / 255.0, bb / 255.0)
-                if s >= 0.22 and v >= 0.18:
+            for (rr, gg, bb) in center_pixels or pixels:
+                h, ss, v = colorsys.rgb_to_hsv(rr / 255.0, gg / 255.0, bb / 255.0)
+                if ss >= 0.26 and v >= 0.2:
                     vivid.append((rr, gg, bb))
-            if len(vivid) >= max(40, int(n * 0.03)):
-                vr = sum(int(r) for r, _, _ in vivid) / len(vivid)
-                vg = sum(int(g) for _, g, _ in vivid) / len(vivid)
-                vb = sum(int(b) for _, _, b in vivid) / len(vivid)
+            if len(vivid) >= max(30, int(n * 0.02)):
+                vr, vg, vb = _avg_color(vivid)
                 vivid_name = _classify_rgb(vr, vg, vb)
                 if vivid_name not in {"черный", "белый", "серый", "мульти"}:
                     return vivid_name

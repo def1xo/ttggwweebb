@@ -33,28 +33,14 @@ function sortSizes(values: string[]) {
 }
 
 
-function preferHigherQualityImageUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.toLowerCase();
-    if (!host.includes("telesco.pe")) return url;
-    const lowQualityKeys = ["w", "width", "h", "height", "q", "quality", "name", "size"];
-    for (const key of lowQualityKeys) parsed.searchParams.delete(key);
-    return parsed.toString();
-  } catch {
-    return url;
-  }
-}
-
 function normalizeMediaUrl(raw: unknown): string | null {
   if (!raw) return null;
   const url = String(raw).trim();
   if (!url) return null;
-  if (/^https?:\/\//i.test(url)) return preferHigherQualityImageUrl(url);
+  if (/^https?:\/\//i.test(url)) return url;
   const base = String((import.meta as any).env?.VITE_BACKEND_URL || (import.meta as any).env?.VITE_API_URL || "").trim().replace(/\/+$/, "").replace(/\/api$/, "");
   if (url.startsWith("/")) return base ? `${base}${url}` : url;
-  const resolved = base ? `${base}/${url}` : url;
-  return preferHigherQualityImageUrl(resolved);
+  return base ? `${base}/${url}` : url;
 }
 
 function splitImageCandidates(raw: unknown): string[] {
