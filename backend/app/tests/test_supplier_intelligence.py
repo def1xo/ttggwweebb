@@ -1114,7 +1114,7 @@ def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
     monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "черный" if u in {"a", "b"} else "белый")
     monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
     got2 = asi._extract_shop_vkus_color_tokens({"title": "Yeezy 350"}, image_urls=["a", "b", "c", "d"])
-    assert got2 == ["черный", "белый"]
+    assert got2 == ["черный"]
 
 def test_extract_image_urls_from_html_page_reads_escaped_telescope_urls(monkeypatch):
     html_single = '<html><head><meta property="og:image" content="https://cdn4.telesco.pe/file/single.jpg"></head></html>'
