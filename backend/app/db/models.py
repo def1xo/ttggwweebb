@@ -138,6 +138,7 @@ class Product(Base):
     import_source_url = Column(String(2000), nullable=True)
     import_source_kind = Column(String(64), nullable=True)
     import_supplier_name = Column(String(255), nullable=True)
+    import_media_meta = Column(JSON, nullable=True)
     detected_color = Column(String(32), nullable=True, index=True)
     detected_color_confidence = Column(Numeric(5, 4), nullable=True)
     detected_color_debug = Column(JSON, nullable=True)
