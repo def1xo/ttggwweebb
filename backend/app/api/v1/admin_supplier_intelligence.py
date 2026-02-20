@@ -1114,9 +1114,7 @@ def _safe_db_target(db: Session) -> tuple[str, str]:
         if bind is None or getattr(bind, "url", None) is None:
             return "unknown", "unknown"
         url = bind.url
-        safe_url = url.render_as_string(hide_password=True)
-        db_name = str(getattr(url, "database", None) or "unknown")
-        return safe_url, db_name
+        return url.render_as_string(hide_password=True), str(getattr(url, "database", None) or "unknown")
     except Exception:
         return "unknown", "unknown"
 
@@ -1828,9 +1826,8 @@ def import_products_from_sources(
                 min_dropship = title_min_dropship.get(base_title_key)
                 source_category = str(it.get("category") or it.get("category_name") or it.get("catalog") or "").strip()
                 cat_name = source_category or map_category(title)
-                category = ensure_category(cat_name, title_hint=title)
-                if category and getattr(category, "id", None):
-                    report.meta["categories_linked"] = int(report.meta.get("categories_linked", 0) or 0) + 1
+                category = get_or_create_category(cat_name)
+                report.meta["categories_linked"] = int(report.meta.get("categories_linked", 0) or 0) + 1
                 effective_title = (title_for_group or title).strip()[:500]
                 slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
