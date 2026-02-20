@@ -11,11 +11,13 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import requests
 from PIL import Image
 
+from app.services.color_normalization import normalize_color
+
 logger = logging.getLogger("color_detection")
 
 CANONICAL_COLORS: tuple[str, ...] = (
     "black", "white", "gray", "beige", "brown", "yellow", "orange",
-    "red", "pink", "purple", "blue", "green", "multicolor",
+    "red", "burgundy", "pink", "purple", "blue", "navy", "green", "olive", "multicolor", "unknown",
 )
 
 
@@ -128,20 +130,20 @@ def _kmeans(points: Sequence[Tuple[float, float, float]], k: int = 3, max_iter: 
 
 
 def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: float, v: float) -> str:
-    sat_low = s < 0.14
-    sat_very_low = s < 0.08
+    sat_low = s < 0.16
+    sat_very_low = s < 0.09
     warm = b > 8 and a > -2
 
     if sat_very_low:
-        if l >= 88:
-            return "white"
-        if l <= 28:
+        if v <= 0.18 or l <= 25:
             return "black"
-        if warm and l >= 62 and b >= 10:
+        if v >= 0.90 or l >= 90:
+            return "white"
+        if warm and l >= 60:
             return "beige"
-        if warm and l < 62:
+        if warm and l < 60:
             return "brown"
-        return "gray"
+        return "unknown"
 
     if sat_low:
         if warm and 58 <= l <= 88 and 8 <= b <= 26:
@@ -149,27 +151,33 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
         if warm and l < 58:
             return "brown"
 
-    # hysteresis buffer: yellow hue with low sat goes beige
-    if (0.10 <= h <= 0.18) and s < 0.28 and b < 28 and l > 55:
+    if 0.10 <= h <= 0.18 and s < 0.28 and b < 28 and l > 55:
         return "beige"
 
-    if b >= 34 and s >= 0.28 and (0.10 <= h <= 0.18):
-        return "yellow"
-    if 0.05 <= h < 0.10 and s >= 0.22:
-        return "orange"
-    if h >= 0.92 or h < 0.05:
+    if 0.30 <= h <= 0.46 and s >= 0.22:
+        if v < 0.45:
+            return "olive"
+        return "green"
+    if 0.52 <= h < 0.66:
+        if v < 0.45:
+            return "navy"
+        return "blue"
+    if 0.95 <= h or h < 0.05:
+        if v < 0.42:
+            return "burgundy"
         return "red"
     if 0.78 <= h < 0.92:
         return "pink" if l > 55 else "purple"
     if 0.66 <= h < 0.78:
         return "purple"
-    if 0.52 <= h < 0.66:
-        return "blue"
-    if 0.24 <= h < 0.52:
-        return "green"
+    if b >= 34 and s >= 0.28 and (0.10 <= h <= 0.18):
+        return "yellow"
+    if 0.05 <= h < 0.10 and s >= 0.22:
+        return "orange"
+
     if warm:
         return "beige" if l >= 58 else "brown"
-    return "gray"
+    return "unknown"
 
 
 def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Optional[ImageColorResult]:
@@ -193,7 +201,7 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
     rr2, gg2, bb2 = min(pixels, key=lambda p: ( _rgb_to_lab(p)[0] - l) ** 2 + (_rgb_to_lab(p)[1] - a) ** 2 + (_rgb_to_lab(p)[2] - b) ** 2)
     h, s, v = colorsys.rgb_to_hsv(rr2 / 255.0, gg2 / 255.0, bb2 / 255.0)
 
-    color = canonical_color_from_lab_hsv(l, a, b, h, s, v)
+    color = normalize_color(canonical_color_from_lab_hsv(l, a, b, h, s, v)) or "unknown"
     share = float(main["count"]) / float(total)
     confidence = max(0.05, min(0.99, share * (0.65 + min(0.35, s))))
 
@@ -203,7 +211,7 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
         l2, a2, b2 = second["center"]
         rr3, gg3, bb3 = min(pixels, key=lambda p: (_rgb_to_lab(p)[0] - l2) ** 2 + (_rgb_to_lab(p)[1] - a2) ** 2 + (_rgb_to_lab(p)[2] - b2) ** 2)
         h2, s2, v2 = colorsys.rgb_to_hsv(rr3 / 255.0, gg3 / 255.0, bb3 / 255.0)
-        c2 = canonical_color_from_lab_hsv(l2, a2, b2, h2, s2, v2)
+        c2 = normalize_color(canonical_color_from_lab_hsv(l2, a2, b2, h2, s2, v2)) or "unknown"
         if c2 != color and share <= 0.68 and second_share >= 0.32 and confidence >= 0.45:
             color = "multicolor"
             confidence = min(confidence, 0.78)
@@ -236,8 +244,9 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
     per_image: List[Dict[str, Any]] = []
     for idx, v in enumerate(votes):
         w = max(0.05, float(v.confidence))
-        score[v.color] += w
-        by_color[v.color] += 1
+        ckey = v.color if v.color != "unknown" else ("black" if v.light < 35 else ("white" if v.light > 80 else "gray"))
+        score[ckey] += w
+        by_color[ckey] += 1
         per_image.append({"idx": idx, "color": v.color, "confidence": round(v.confidence, 3), "share": round(v.cluster_share, 3)})
 
     # 5 photos rule: force single color via weighted majority + tie-breaks

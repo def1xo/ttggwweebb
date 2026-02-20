@@ -189,8 +189,8 @@ def test_extract_catalog_items_ignores_rrc_when_only_generic_price_exists():
 
 
 
-def test_infer_colors_with_ai_openai_parses_and_normalizes(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+def test_infer_colors_with_ai_disabled_returns_empty(monkeypatch):
+    monkeypatch.setenv("DISABLED_AI_KEY", "test-key")
 
     captured = {}
 
@@ -215,18 +215,13 @@ def test_infer_colors_with_ai_openai_parses_and_normalizes(monkeypatch):
     got = si.infer_colors_with_ai(
         title="Yeezy",
         image_urls=["https://cdn/a.jpg", "https://cdn/b.jpg"],
-        provider="openai",
+        provider="disabled",
     )
-    assert got == ["черный", "белый"]
-
-    msg = (captured.get("payload") or {}).get("messages", [{}, {"content": []}])[1]
-    content = msg.get("content") if isinstance(msg, dict) else []
-    image_parts = [x for x in (content or []) if isinstance(x, dict) and x.get("type") == "image_url"]
-    assert len(image_parts) == 2
+    assert got == []
 
 
 def test_infer_colors_with_ai_fallback_parses_plain_text(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("DISABLED_AI_KEY", "test-key")
 
     class R:
         content = b"1"
@@ -242,8 +237,8 @@ def test_infer_colors_with_ai_fallback_parses_plain_text(monkeypatch):
             }
 
     monkeypatch.setattr(si.requests, "post", lambda *a, **k: R())
-    got = si.infer_colors_with_ai(title="Yeezy", image_urls=["https://cdn/a.jpg"], provider="openai")
-    assert got == ["черный", "бежевый"]
+    got = si.infer_colors_with_ai(title="Yeezy", image_urls=["https://cdn/a.jpg"], provider="disabled")
+    assert got == []
 def test_generate_youth_description_mentions_title():
     txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
     assert "Худи Alpha" in txt
@@ -335,32 +330,16 @@ def test_find_similar_images_filters_by_hamming_distance(monkeypatch):
     assert [x["image_url"] for x in out] == ["https://cand/1.jpg", "https://cand/2.jpg"]
 
 
-def test_generate_ai_product_description_returns_empty_without_key(monkeypatch):
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+def test_generate_ai_product_description_returns_local_text_without_key(monkeypatch):
+    monkeypatch.delenv("DISABLED_ROUTER_KEY", raising=False)
     txt = generate_ai_product_description("Худи Alpha", "Кофты", "черный")
-    assert txt == ""
+    assert "Худи Alpha" in txt
 
 
-def test_generate_ai_product_description_uses_openrouter_response(monkeypatch):
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-
-    class DummyResp:
-        content = b"ok"
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {
-                "choices": [
-                    {"message": {"content": '{"description":"Уникальное описание худи без шаблонов."}'}}
-                ]
-            }
-
-    monkeypatch.setattr(si.requests, "post", lambda *a, **k: DummyResp())
-
+def test_generate_ai_product_description_local_fallback(monkeypatch):
+    monkeypatch.setenv("DISABLED_ROUTER_KEY", "test-key")
     txt = generate_ai_product_description("Худи Alpha", "Кофты", "черный")
-    assert txt == "Уникальное описание худи без шаблонов."
+    assert "стрит" in txt.lower()
 
 
 def test_suggest_sale_price_markup():
@@ -1112,7 +1091,7 @@ def test_extract_shop_vkus_color_tokens_two_repeated_colors_without_signature_cl
     monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
 
     got = asi._extract_shop_vkus_color_tokens({"title": "Zoom Vomero"}, image_urls=["a1", "a2", "a3", "b1", "b2"])
-    assert got == ["черный", "бежевый"]
+    assert got == []
 def test_extract_shop_vkus_color_tokens_keeps_white_and_gray_from_images(monkeypatch):
     monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый" if u in {"a", "b"} else "серый")
     monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")

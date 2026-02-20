@@ -1223,6 +1223,17 @@ export async function updateProduct(id: number, payload: any) {
   }
 }
 
+
+export async function regenerateProductDescription(id: number, forceRegen: boolean = false) {
+  try {
+    const form = new FormData();
+    form.append("force_regen", forceRegen ? "true" : "false");
+    const res = await axiosInstance.post(`/api/admin/products/${id}/regenerate_description`, form);
+    return res.data;
+  } catch (e) {
+    return handleAxiosError(e);
+  }
+}
 export async function deleteProduct(id: number) {
   try {
     const res = await axiosInstance.delete(`/api/admin/products/${id}`);
@@ -1564,6 +1575,7 @@ api.getAdminProducts = getAdminProducts;
 api.createProduct = createProduct;
 api.updateProduct = updateProduct;
 api.deleteProduct = deleteProduct;
+api.regenerateProductDescription = regenerateProductDescription;
 api.createCategory = createCategory;
 api.deleteCategory = deleteCategory;
 api.getRecommendations = getRecommendations;

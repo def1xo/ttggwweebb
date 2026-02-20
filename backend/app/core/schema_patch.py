@@ -172,11 +172,15 @@ def ensure_columns(engine) -> None:
             add_prod_col("import_source_kind", "VARCHAR(64)", "VARCHAR(64)")
             add_prod_col("import_supplier_name", "VARCHAR(255)", "VARCHAR(255)")
             add_prod_col("import_media_meta", "JSONB", "TEXT")
+            add_prod_col("description_source", "VARCHAR(32)", "VARCHAR(32)")
+            add_prod_col("description_hash", "VARCHAR(64)", "VARCHAR(64)")
+            add_prod_col("description_generated_at", "TIMESTAMPTZ", "DATETIME")
             add_prod_col("detected_color", "VARCHAR(32)", "VARCHAR(32)")
             add_prod_col("detected_color_confidence", "NUMERIC(5,4)", "NUMERIC(5,4)")
             add_prod_col("detected_color_debug", "JSONB", "TEXT")
             if _is_postgres(engine):
                 _create_index_pg(conn, "ix_products_detected_color", "products", "detected_color")
+                _create_index_pg(conn, "ix_products_description_hash", "products", "description_hash")
 
     # ---------- supplier_sources ----------
     if "supplier_sources" in tables:
