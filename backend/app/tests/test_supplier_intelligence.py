@@ -187,6 +187,63 @@ def test_extract_catalog_items_ignores_rrc_when_only_generic_price_exists():
     assert len(items) == 1
     assert items[0]["dropship_price"] == 2190.0
 
+
+
+def test_infer_colors_with_ai_openai_parses_and_normalizes(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    captured = {}
+
+    class R:
+        content = b"1"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {"message": {"content": '{"colors":["black","white"]}'}}
+                ]
+            }
+
+    def _fake_post(*args, **kwargs):
+        captured["payload"] = kwargs.get("json") or {}
+        return R()
+
+    monkeypatch.setattr(si.requests, "post", _fake_post)
+    got = si.infer_colors_with_ai(
+        title="Yeezy",
+        image_urls=["https://cdn/a.jpg", "https://cdn/b.jpg"],
+        provider="openai",
+    )
+    assert got == ["черный", "белый"]
+
+    msg = (captured.get("payload") or {}).get("messages", [{}, {"content": []}])[1]
+    content = msg.get("content") if isinstance(msg, dict) else []
+    image_parts = [x for x in (content or []) if isinstance(x, dict) and x.get("type") == "image_url"]
+    assert len(image_parts) == 2
+
+
+def test_infer_colors_with_ai_fallback_parses_plain_text(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    class R:
+        content = b"1"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {"message": {"content": "black, beige"}}
+                ]
+            }
+
+    monkeypatch.setattr(si.requests, "post", lambda *a, **k: R())
+    got = si.infer_colors_with_ai(title="Yeezy", image_urls=["https://cdn/a.jpg"], provider="openai")
+    assert got == ["черный", "бежевый"]
 def test_generate_youth_description_mentions_title():
     txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
     assert "Худи Alpha" in txt
@@ -197,6 +254,61 @@ def test_split_size_tokens_supports_lists_and_ranges():
     assert split_size_tokens("S M L") == ["S", "M", "L"]
     assert split_size_tokens("42-44") == ["42", "43", "44"]
 
+
+
+
+def test_extract_catalog_items_preserves_non_numeric_stock_text():
+    rows = [
+        ["Товар", "Цена дроп", "Размер", "Наличие"],
+        ["Nike SB Dunk", "4900", "41-45", "в наличии"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["stock"] in (None, 42)
+    assert items[0]["stock_text"] == "в наличии"
+
+
+
+
+
+def test_extract_catalog_items_detects_header_on_second_row_and_keeps_availability():
+    rows = [
+        ["Прайс на 12.01", ""],
+        ["№", "Название", "ЦЕНА ДРОП", "РАЗМЕРЫ", "НАЛИЧИЕ", "Фото"],
+        ["1", "Nike SB Dunk", "4900", "41-45", "42 (1шт)", "https://cdn.example.com/a.jpg"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["title"] == "Nike SB Dunk"
+    assert items[0]["stock_text"] == "42 (1шт)"
+
+def test_extract_catalog_items_prefers_sliv_price_from_price_cell():
+    rows = [
+        ["Товар", "Дроп цена", "Размер", "Наличие"],
+        ["NIKE zoom vomero 5", "дроп 2099 / Слив:2000", "41-45", "42"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["dropship_price"] == 2000.0
+
+
+def test_extract_catalog_items_infers_stock_cell_when_stock_header_missing():
+    rows = [
+        ["Товар", "Цена дроп", "Размер", "Комментарий", "Фото"],
+        ["Nike SB Dunk", "4900", "41-45", "в наличии 42", "https://cdn.example.com/a.jpg"],
+    ]
+
+    items = extract_catalog_items(rows)
+
+    assert len(items) == 1
+    assert items[0]["stock_text"] == "в наличии 42"
+    assert items[0]["stock"] in (None, 42)
 
 def test_find_similar_images_filters_by_hamming_distance(monkeypatch):
     signatures = {
@@ -942,6 +1054,92 @@ def test_extract_shop_vkus_stock_map_does_not_treat_spaced_range_as_in_stock_lis
     assert got == {}
 
 
+def test_extract_shop_vkus_stock_map_reads_cyrillic_availability_keys():
+    item = {
+        "РАЗМЕРЫ": "41-45",
+        "НАЛИЧИЕ": "42 (1шт)",
+    }
+    got = asi._extract_shop_vkus_stock_map(item)
+    assert got == {"42": 1}
+
+
+
+def test_dominant_color_name_from_url_prefers_vivid_accent_over_gray(monkeypatch):
+    from PIL import Image
+    import io
+
+    img = Image.new("RGB", (64, 64), (120, 120, 120))
+    for y in range(20, 44):
+        for x in range(20, 44):
+            img.putpixel((x, y), (170, 70, 200))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    payload = buf.getvalue()
+
+    monkeypatch.setattr(si, "_download_image_bytes", lambda *a, **k: payload)
+    got = si.dominant_color_name_from_url("https://cdn.example.com/test.png")
+    assert got == "фиолетовый"
+
+
+
+
+def test_dominant_color_name_from_url_prefers_center_over_red_background(monkeypatch):
+    from PIL import Image
+    import io
+
+    img = Image.new("RGB", (80, 80), (220, 40, 40))
+    for y in range(16, 64):
+        for x in range(16, 64):
+            img.putpixel((x, y), (25, 25, 25))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    payload = buf.getvalue()
+
+    monkeypatch.setattr(si, "_download_image_bytes", lambda *a, **k: payload)
+    got = si.dominant_color_name_from_url("https://cdn.example.com/test-center-black.png")
+    assert got == "черный"
+
+
+def test_extract_shop_vkus_color_tokens_two_repeated_colors_without_signature_clusters(monkeypatch):
+    palette = {
+        "a1": "черный",
+        "a2": "черный",
+        "a3": "черный",
+        "b1": "бежевый",
+        "b2": "бежевый",
+    }
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: palette.get(str(u), "серый"))
+    monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
+
+    got = asi._extract_shop_vkus_color_tokens({"title": "Zoom Vomero"}, image_urls=["a1", "a2", "a3", "b1", "b2"])
+    assert got == ["черный", "бежевый"]
+def test_extract_shop_vkus_color_tokens_keeps_white_and_gray_from_images(monkeypatch):
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый" if u in {"a", "b"} else "серый")
+    monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
+    got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
+    assert got == ["белый", "серый"]
+
+
+def test_extract_shop_vkus_color_tokens_keeps_two_colors_for_two_strong_signature_clusters(monkeypatch):
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый" if u in {"a1", "a2", "a3"} else "фиолетовый")
+    monkeypatch.setattr(
+        asi,
+        "image_print_signature_from_url",
+        lambda u: "sig-a" if u in {"a1", "a2", "a3"} else "sig-b",
+    )
+    monkeypatch.setattr(asi, "print_signature_hamming", lambda a, b: 0 if a == b else 40)
+
+    got = asi._extract_shop_vkus_color_tokens({"title": "Forum Mid"}, image_urls=["a1", "a2", "a3", "b1", "b2"])
+    assert got == ["белый", "фиолетовый"]
+
+
+def test_extract_shop_vkus_color_tokens_normalizes_english_color_names(monkeypatch):
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "white" if u in {"a", "b"} else "gray")
+    monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
+
+    got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
+    assert got == ["белый", "серый"]
+
 
 def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
     item = {
@@ -949,9 +1147,10 @@ def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
         "description": "доступны цвета black white",
     }
     got = asi._extract_shop_vkus_color_tokens(item, image_urls=["u1", "u2"])
-    assert "black" in got and "white" in got
+    assert "черный" in got and "белый" in got
 
     monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "черный" if u in {"a", "b"} else "белый")
+    monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
     got2 = asi._extract_shop_vkus_color_tokens({"title": "Yeezy 350"}, image_urls=["a", "b", "c", "d"])
     assert got2 == ["черный", "белый"]
 

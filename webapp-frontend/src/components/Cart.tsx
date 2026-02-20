@@ -115,6 +115,7 @@ export default function Cart() {
   const [placing, setPlacing] = useState(false);
   const [related, setRelated] = useState<any[]>([]);
   const [relatedLoading, setRelatedLoading] = useState(false);
+  const [productImageMap, setProductImageMap] = useState<Record<number, string>>({});
 
   const reqIdRef = useRef(0);
 
@@ -201,6 +202,39 @@ export default function Cart() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [availableItems.map((x) => `${x.product_id}:${x.quantity}`).join('|')]);
+
+
+  useEffect(() => {
+    const missingIds = Array.from(new Set(
+      items
+        .filter((it) => !normalizeMediaUrl((it as any)?.image || (it as any)?.image_url || (it as any)?.default_image))
+        .map((it) => Number(it.product_id))
+        .filter((pid) => Number.isFinite(pid) && pid > 0 && !productImageMap[pid])
+    ));
+    if (!missingIds.length) return;
+
+    let cancelled = false;
+    (async () => {
+      const next: Record<number, string> = {};
+      for (const pid of missingIds) {
+        try {
+          const res: any = await api.get(`/api/products/${pid}`);
+          const data = (res as any)?.data ?? res;
+          const img = pickCardImage(data);
+          if (img) next[pid] = img;
+        } catch {
+          // ignore unresolved product image
+        }
+      }
+      if (cancelled || !Object.keys(next).length) return;
+      setProductImageMap((prev) => ({ ...prev, ...next }));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items.map((it) => `${it.product_id}:${it.variant_id}:${it.image || ""}`).join("|")]);
 
   async function onClearEnded() {
     if (!endedItems.length) return;
@@ -390,7 +424,10 @@ export default function Cart() {
             availableItems.map((it) => (
               <div key={String(it.variant_id)} className="card cart-item">
                 <div className="thumb">
-                  {it.image ? <img src={String(it.image)} alt={it.title} /> : <div className="no-image">NO IMAGE</div>}
+                  {(() => {
+                    const itemImage = normalizeMediaUrl((it as any)?.image || (it as any)?.image_url || (it as any)?.default_image) || productImageMap[Number(it.product_id)] || null;
+                    return itemImage ? <img src={String(itemImage)} alt={it.title} /> : <div className="no-image">NO IMAGE</div>;
+                  })()}
                 </div>
 
                 <div className="item-body">
