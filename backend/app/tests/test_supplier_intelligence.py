@@ -187,6 +187,25 @@ def test_extract_catalog_items_ignores_rrc_when_only_generic_price_exists():
     assert len(items) == 1
     assert items[0]["dropship_price"] == 2190.0
 
+
+
+def test_infer_colors_with_ai_openai_parses_and_normalizes(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    class R:
+        content = b"1"
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {
+                "choices": [
+                    {"message": {"content": '{"colors":["black","white"]}'}}
+                ]
+            }
+
+    monkeypatch.setattr(si.requests, "post", lambda *a, **k: R())
+    got = si.infer_colors_with_ai(title="Yeezy", image_urls=["https://cdn/a.jpg"], provider="openai")
+    assert got == ["черный", "белый"]
 def test_generate_youth_description_mentions_title():
     txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
     assert "Худи Alpha" in txt
