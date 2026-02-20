@@ -40,10 +40,17 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
 
     # Collapse to a single color when all color groups share essentially same photoset.
     groups = list(color_groups.values())
-    if len(groups) > 1:
+    source_colors = set()
+    media_meta = getattr(p, "import_media_meta", None) if isinstance(getattr(p, "import_media_meta", None), dict) else {}
+    for c in (media_meta.get("colors_from_source_list") or []):
+        if c:
+            source_colors.add(str(c))
+
+    if len(groups) > 1 and len(source_colors) <= 1:
         ref_images = max(groups, key=lambda g: len(g.get("images") or [])).get("images") or []
         same_set = all(_images_overlap_ratio(ref_images, g.get("images") or []) >= 0.8 for g in groups)
-        if same_set:
+        forced_five_photos = len(ref_images) == 5
+        if same_set or forced_five_photos:
             merged_variant_ids: list[int] = []
             for g in groups:
                 merged_variant_ids.extend([int(x) for x in (g.get("variant_ids") or [])])
@@ -195,6 +202,7 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
         "name": p.title,
         "title": p.title,
         "description": p.description,
+        "description_source": getattr(p, "description_source", None),
         "base_price": float(p.base_price or 0),
         "price": float(p.base_price or 0),
         "default_image": p.default_image,

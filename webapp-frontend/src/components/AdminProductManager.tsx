@@ -16,6 +16,8 @@ type Product = {
   import_source_kind?: string | null;
   import_supplier_name?: string | null;
   image_count?: number;
+  description_source?: string | null;
+  description_generated_at?: string | null;
 };
 
 export default function AdminProductManager() {
@@ -77,6 +79,23 @@ export default function AdminProductManager() {
     }
   }
 
+
+  async function regenDescription(id?: number) {
+    if (!id) return;
+    try {
+      if (typeof (apiDefault as any).regenerateProductDescription === "function") {
+        await (apiDefault as any).regenerateProductDescription(id, true);
+      } else {
+        const form = new FormData();
+        form.append("force_regen", "true");
+        await fetch(`/api/admin/products/${id}/regenerate_description`, { method: "POST", body: form, credentials: "include" });
+      }
+      await load();
+    } catch (e: any) {
+      setErr(e?.message || "Ошибка регенерации описания");
+    }
+  }
+
   return (
     <div>
       <div className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -121,9 +140,13 @@ export default function AdminProductManager() {
                   <div className="small-muted" style={{ marginTop: 4, wordBreak: "break-all" }}>
                     Импорт: {(p as any).import_supplier_name || "—"} • {(p as any).import_source_kind || "—"} • {(p as any).import_source_url || "—"}
                   </div>
+                  <div className="small-muted" style={{ marginTop: 4 }}>
+                    Описание: {(p as any).description_source || "—"} • {(p as any).description_generated_at || "—"}
+                  </div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button className="btn ghost" onClick={() => setEditing(p)}>Ред.</button>
+                  <button className="btn ghost" onClick={() => regenDescription(p.id)}>Перегенерировать описание</button>
                   <button className="btn ghost" onClick={() => remove(p.id)}>Удалить</button>
                 </div>
               </div>

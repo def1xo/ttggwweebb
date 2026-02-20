@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 import os
 from decimal import Decimal
+from datetime import datetime
 import re
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,6 +19,14 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_current_admin_user, get_db
 from app.db import models
 from app.services.importer_notifications import slugify
+from app.services.color_normalization import normalize_color
+from app.services.description_generator import (
+    DescriptionPayload,
+    build_description_generator,
+    description_hash,
+    generated_meta,
+    should_regenerate_description,
+)
 from app.services import media_store
 from app.services.supplier_profiles import normalize_title_for_supplier
 from app.services.supplier_importers import (
@@ -33,8 +43,6 @@ from app.services.supplier_intelligence import (
     extract_catalog_items,
     extract_image_urls_from_html_page,
     fetch_tabular_preview,
-    generate_ai_product_description,
-    generate_youth_description,
     infer_colors_with_ai,
     image_print_signature_from_url,
     map_category,
@@ -87,9 +95,12 @@ def _split_color_tokens(raw: str | None) -> list[str]:
     out: list[str] = []
     for part in re.split(r"[,;/|]+|\s{2,}|\s+-\s+", txt):
         token = " ".join(part.strip().split())
-        if token and token not in out:
-            out.append(token)
+        normalized = normalize_color(token)
+        if normalized and normalized not in out and normalized != "unknown":
+            out.append(normalized)
     return out
+
+
 
 
 
@@ -118,7 +129,7 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
         key = str(name or "").strip().lower()
         if not key:
             return ""
-        return str(color_aliases.get(key) or key)
+        return normalize_color(str(color_aliases.get(key) or key)) or ""
 
     palette = (
         "черный", "чёрный", "белый", "серый", "красный", "синий", "голубой", "зеленый", "зелёный",
@@ -1010,6 +1021,7 @@ class ImportProductsIn(BaseModel):
     ai_description_enabled: bool = True
     ai_color_distribution_enabled: bool = False
     ai_color_distribution_provider: str = Field(default="disabled", max_length=64)
+    force_regen_descriptions: bool = False
     use_avito_pricing: bool = True
     avito_max_pages: int = Field(default=1, ge=1, le=3)
 
@@ -1022,6 +1034,7 @@ class ImportSourceReport(BaseModel):
     error_codes: dict[str, int] = Field(default_factory=dict)
     error_samples: list[str] = Field(default_factory=list)
     last_error_message: str | None = None
+    meta: dict[str, int | str] = Field(default_factory=dict)
 
 
 class ImportProductsOut(BaseModel):
@@ -1321,6 +1334,7 @@ def import_products_from_sources(
     supplier_tg_fallback_images: dict[str, list[str]] = {}
     existing_product_by_supplier_title: dict[tuple[str, str], models.Product] = {}
     existing_product_by_global_title: dict[tuple[int, str], models.Product] = {}
+    title_seen_photosets: dict[tuple[str, str], set[str]] = {}
 
     def _title_key(raw_title: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
@@ -1347,6 +1361,12 @@ def import_products_from_sources(
                 continue
             out.append(t)
         return " ".join(out[:10]).strip()
+
+    def _photoset_signature(urls: list[str]) -> str:
+        parts = sorted({str(u or "").strip() for u in (urls or []) if str(u or "").strip()})
+        if not parts:
+            return ""
+        return slugify("|".join(parts))[:120]
 
     def _pick_tg_images_for_title(supplier_key: str, raw_title: str) -> list[str]:
         by_title = supplier_tg_images_by_title.get(supplier_key, {})
@@ -1456,8 +1476,8 @@ def import_products_from_sources(
             raise
 
     def get_or_create_color(name: str | None) -> models.Color | None:
-        nm = (name or "").strip()
-        if not nm:
+        nm = normalize_color((name or "").strip())
+        if not nm or nm == "unknown":
             return None
         s = (slugify(nm) or nm.lower())[:128]
         x = db.query(models.Color).filter((models.Color.slug == s) | (models.Color.name == nm)).first()
@@ -1747,12 +1767,21 @@ def import_products_from_sources(
                 if not p:
                     p = _find_existing_global_product(int(category.id), _title_key(effective_title))
 
-                desc = str(it.get("description") or "").strip()
-                if payload.ai_style_description and not desc:
-                    if payload.ai_description_enabled:
-                        desc = generate_ai_product_description(title, cat_name, it.get("color"))
-                    else:
-                        desc = generate_youth_description(title, cat_name, it.get("color"))
+                supplier_desc = str(it.get("description") or "").strip()
+                desc = supplier_desc
+                desc_meta: dict[str, str] = {}
+                payload_desc = DescriptionPayload(
+                    title=title,
+                    brand=None,
+                    category=cat_name,
+                    colors=_split_color_tokens(it.get("color")),
+                    key_features=[str(it.get("notes") or "").strip()] if str(it.get("notes") or "").strip() else [],
+                    materials=[],
+                    season_style=[],
+                )
+                if payload.ai_style_description and not supplier_desc:
+                    desc = description_generator.generate(payload_desc)
+                    desc_meta = generated_meta(desc, getattr(description_generator, "source", "template"))
                 # Guard against anomalously low supplier price parse (e.g. 799 for sneakers).
                 # For footwear-like titles enforce a minimal wholesale floor before retail pricing.
                 if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title):
@@ -1901,6 +1930,9 @@ def import_products_from_sources(
                         title=effective_title,
                         slug=slug,
                         description=desc or None,
+                        description_source=(desc_meta.get("description_source") if desc_meta else ("supplier" if supplier_desc else None)),
+                        description_hash=(desc_meta.get("description_hash") if desc_meta else (description_hash(supplier_desc) if supplier_desc else None)),
+                        description_generated_at=(datetime.fromisoformat(desc_meta.get("description_generated_at")) if desc_meta.get("description_generated_at") else None),
                         base_price=Decimal(str(sale_price)),
                         currency="RUB",
                         category_id=category.id,
@@ -1909,7 +1941,7 @@ def import_products_from_sources(
                         import_source_kind=src_kind,
                         import_supplier_name=getattr(src, "supplier_name", None),
                         visible=bool(payload.publish_visible),
-                        import_media_meta={"photos_ref": photos_ref, "images_status": images_status},
+                        import_media_meta={"photos_ref": photos_ref, "images_status": images_status, "colors_from_source_list": [c for c in color_tokens if c]},
                     )
                     db.add(p)
                     db.flush()
@@ -1919,8 +1951,20 @@ def import_products_from_sources(
                     created_products += 1
                 else:
                     changed = False
-                    if desc and not p.description:
-                        p.description = desc
+                    if supplier_desc and not p.description:
+                        p.description = supplier_desc
+                        p.description_source = "supplier"
+                        p.description_hash = description_hash(supplier_desc)
+                    elif payload.ai_style_description and should_regenerate_description(getattr(p, "description", None), getattr(p, "description_hash", None), force_regen=bool(payload.force_regen_descriptions)):
+
+                        generated = description_generator.generate(payload_desc)
+                        if generated:
+                            p.description = generated
+                            meta = generated_meta(generated, getattr(description_generator, "source", "template"))
+                            p.description_source = meta.get("description_source")
+                            p.description_hash = meta.get("description_hash")
+                            if meta.get("description_generated_at"):
+                                p.description_generated_at = datetime.fromisoformat(meta.get("description_generated_at"))
                         changed = True
                     current_base = float(p.base_price or 0)
                     should_fix_low_price = bool(
@@ -1951,7 +1995,9 @@ def import_products_from_sources(
                         p.import_supplier_name = getattr(src, "supplier_name", None)
                         changed = True
                     prev_media_meta = getattr(p, "import_media_meta", None) or {}
-                    next_media_meta = {"photos_ref": photos_ref, "images_status": images_status}
+                    prev_colors = list((prev_media_meta or {}).get("colors_from_source_list") or []) if isinstance(prev_media_meta, dict) else []
+                    next_colors = sorted(set([*prev_colors, *[c for c in color_tokens if c]]))
+                    next_media_meta = {"photos_ref": photos_ref, "images_status": images_status, "colors_from_source_list": next_colors}
                     if next_media_meta != prev_media_meta:
                         p.import_media_meta = next_media_meta
                         changed = True
@@ -2022,6 +2068,22 @@ def import_products_from_sources(
                 # - for shop_vkus, allow fallback color inference from item text/gallery only when 2+ strong colors are detected.
                 src_color = it.get("color")
                 color_tokens = _split_color_tokens(src_color)
+                if color_tokens:
+                    report.meta["colors_from_source"] = int(report.meta.get("colors_from_source", 0) or 0) + len(color_tokens)
+
+                # If supplier did not provide color, allow variant-level color only when rows clearly have different photo sets.
+                title_key = (_supplier_key(getattr(src, "supplier_name", None) or ""), _title_key(title))
+                row_sig = _photoset_signature(image_urls)
+                seen_sigs = title_seen_photosets.setdefault(title_key, set())
+                has_other_sig = bool(row_sig and seen_sigs and row_sig not in seen_sigs)
+                if not color_tokens and has_other_sig and image_urls:
+                    guessed = normalize_color(dominant_color_name_from_url(image_urls[0]))
+                    if guessed and guessed != "unknown":
+                        color_tokens = [guessed]
+                        report.meta["consolidation_reason"] = "variant_color_from_distinct_photoset"
+                if row_sig:
+                    seen_sigs.add(row_sig)
+
                 if len(color_tokens) <= 1 and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
                     inferred_colors = _extract_shop_vkus_color_tokens(it if isinstance(it, dict) else {}, image_urls=image_urls)
                     if len(inferred_colors) >= 1:
@@ -2036,8 +2098,11 @@ def import_products_from_sources(
                         )
                         if len(ai_colors) >= 1:
                             color_tokens = ai_colors
+                if any(c for c in color_tokens if c and c != "unknown"):
+                    report.meta["colors_detected"] = int(report.meta.get("colors_detected", 0) or 0) + len([c for c in color_tokens if c and c != "unknown"])
                 if len(color_tokens) == 0:
                     color_tokens = [""]
+                report.meta["colors_final"] = int(report.meta.get("colors_final", 0) or 0) + len([c for c in color_tokens if c])
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
@@ -2374,7 +2439,7 @@ def import_products_from_sources(
 
         source_reports.append(report)
         logger.info(
-            "supplier_import_source_done supplier_name=%s source_id=%s created_products=%s updated_products=%s created_variants=%s updated_variants=%s imported_items=%s errors=%s",
+            "supplier_import_source_done supplier_name=%s source_id=%s created_products=%s updated_products=%s created_variants=%s updated_variants=%s imported_items=%s errors=%s colors_detected=%s colors_from_source=%s colors_final=%s consolidation=%s",
             getattr(src, "supplier_name", None),
             int(src.id),
             created_products,
@@ -2383,6 +2448,10 @@ def import_products_from_sources(
             updated_variants,
             report.imported,
             report.errors,
+            int((report.meta or {}).get("colors_detected", 0) if isinstance(report.meta, dict) else 0),
+            int((report.meta or {}).get("colors_from_source", 0) if isinstance(report.meta, dict) else 0),
+            int((report.meta or {}).get("colors_final", 0) if isinstance(report.meta, dict) else 0),
+            str((report.meta or {}).get("consolidation_reason", "n/a") if isinstance(report.meta, dict) else "n/a"),
         )
 
     top_failing_sources = sorted(
