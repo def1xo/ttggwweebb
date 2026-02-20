@@ -22,7 +22,8 @@ from app.services.importer_notifications import slugify
 from app.services.color_normalization import normalize_color
 from app.services.description_generator import (
     DescriptionPayload,
-    build_description_generator,
+    get_description_generator,
+    safe_generate_description,
     description_hash,
     generated_meta,
     should_regenerate_description,
@@ -65,7 +66,7 @@ ERROR_CODE_PARSE_FAILED = "parse_failed"
 ERROR_CODE_DB_CONFLICT = "db_conflict"
 ERROR_CODE_UNKNOWN = "unknown"
 TOP_FAILING_SOURCES_LIMIT = 5
-ERROR_SAMPLES_LIMIT = 3
+ERROR_SAMPLES_LIMIT = 5
 ERROR_MESSAGE_MAX_LEN = 500
 IMPORT_FALLBACK_STOCK_QTY = 9_999
 RRC_DISCOUNT_RUB = 300
@@ -1030,6 +1031,7 @@ class ImportSourceReport(BaseModel):
     source_id: int
     url: str
     imported: int = 0
+    skipped_count: int = 0
     errors: int = 0
     error_codes: dict[str, int] = Field(default_factory=dict)
     error_samples: list[str] = Field(default_factory=list)
@@ -1335,6 +1337,8 @@ def import_products_from_sources(
     existing_product_by_supplier_title: dict[tuple[str, str], models.Product] = {}
     existing_product_by_global_title: dict[tuple[int, str], models.Product] = {}
     title_seen_photosets: dict[tuple[str, str], set[str]] = {}
+    description_generator = get_description_generator()
+    description_generator_source = getattr(description_generator, "source", "template")
 
     def _title_key(raw_title: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
@@ -1684,6 +1688,12 @@ def import_products_from_sources(
         src_kind = detect_source_kind(src_url)
         supplier_key = _supplier_key(getattr(src, "supplier_name", None))
         report = _new_source_report(source_id=int(src.id), source_url=src_url)
+        report.meta = dict(getattr(report, "meta", {}) or {})
+        report.meta.setdefault("colors_detected", 0)
+        report.meta.setdefault("colors_from_source", 0)
+        report.meta.setdefault("colors_final", 0)
+        report.meta.setdefault("consolidation_reason", "n/a")
+        report.meta.setdefault("skipped_count", 0)
         touched_product_ids: set[int] = set()
         try:
             items = source_items_map.get(int(src.id), [])
@@ -1780,8 +1790,17 @@ def import_products_from_sources(
                     season_style=[],
                 )
                 if payload.ai_style_description and not supplier_desc:
-                    desc = description_generator.generate(payload_desc)
-                    desc_meta = generated_meta(desc, getattr(description_generator, "source", "template"))
+                    try:
+                        desc, src_name = safe_generate_description(payload_desc)
+                        if desc:
+                            desc_meta = generated_meta(desc, src_name)
+                    except Exception as gen_exc:
+                        logger.warning(
+                            "description generation failed (create path) supplier=%s title=%s err=%s",
+                            getattr(src, "supplier_name", None),
+                            title,
+                            str(gen_exc),
+                        )
                 # Guard against anomalously low supplier price parse (e.g. 799 for sneakers).
                 # For footwear-like titles enforce a minimal wholesale floor before retail pricing.
                 if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title):
@@ -1957,15 +1976,23 @@ def import_products_from_sources(
                         p.description_hash = description_hash(supplier_desc)
                     elif payload.ai_style_description and should_regenerate_description(getattr(p, "description", None), getattr(p, "description_hash", None), force_regen=bool(payload.force_regen_descriptions)):
 
-                        generated = description_generator.generate(payload_desc)
-                        if generated:
-                            p.description = generated
-                            meta = generated_meta(generated, getattr(description_generator, "source", "template"))
-                            p.description_source = meta.get("description_source")
-                            p.description_hash = meta.get("description_hash")
-                            if meta.get("description_generated_at"):
-                                p.description_generated_at = datetime.fromisoformat(meta.get("description_generated_at"))
-                        changed = True
+                        try:
+                            generated, src_name = safe_generate_description(payload_desc)
+                            if generated:
+                                p.description = generated
+                                meta = generated_meta(generated, src_name)
+                                p.description_source = meta.get("description_source")
+                                p.description_hash = meta.get("description_hash")
+                                if meta.get("description_generated_at"):
+                                    p.description_generated_at = datetime.fromisoformat(meta.get("description_generated_at"))
+                                changed = True
+                        except Exception as gen_exc:
+                            logger.warning(
+                                "description generation failed (update path) supplier=%s title=%s err=%s",
+                                getattr(src, "supplier_name", None),
+                                title,
+                                str(gen_exc),
+                            )
                     current_base = float(p.base_price or 0)
                     should_fix_low_price = bool(
                         current_base > 0
@@ -2420,6 +2447,8 @@ def import_products_from_sources(
                     ctx = None
                 logger.exception("supplier import item failed source_id=%s url=%s", src.id, src_url)
                 _register_source_error(report, exc, context=ctx)
+                report.skipped_count = int(getattr(report, "skipped_count", 0) or 0) + 1
+                report.meta["skipped_count"] = int(report.meta.get("skipped_count", 0) or 0) + 1
 
         if not payload.dry_run and src_kind in {"google_sheet", "moysklad_catalog", "generic_html"} and items:
             stale_q = db.query(models.Product).filter(models.Product.import_source_url == src_url)
@@ -2439,15 +2468,16 @@ def import_products_from_sources(
 
         source_reports.append(report)
         logger.info(
-            "supplier_import_source_done supplier_name=%s source_id=%s created_products=%s updated_products=%s created_variants=%s updated_variants=%s imported_items=%s errors=%s colors_detected=%s colors_from_source=%s colors_final=%s consolidation=%s",
+            "supplier_import_source_done supplier_name=%s source_id=%s imported_count=%s updated_count=%s skipped_count=%s created_variants=%s updated_variants=%s errors=%s error_samples=%s colors_detected=%s colors_from_source=%s colors_final=%s consolidation=%s",
             getattr(src, "supplier_name", None),
             int(src.id),
-            created_products,
+            report.imported,
             updated_products,
+            int(getattr(report, "skipped_count", 0) or 0),
             created_variants,
             updated_variants,
-            report.imported,
             report.errors,
+            list((report.error_samples or [])[:5]),
             int((report.meta or {}).get("colors_detected", 0) if isinstance(report.meta, dict) else 0),
             int((report.meta or {}).get("colors_from_source", 0) if isinstance(report.meta, dict) else 0),
             int((report.meta or {}).get("colors_final", 0) if isinstance(report.meta, dict) else 0),
@@ -2469,11 +2499,12 @@ def import_products_from_sources(
         )
 
     logger.info(
-        "supplier_import_summary created_products=%s updated_products=%s created_variants=%s updated_variants=%s",
+        "supplier_import_summary created_products=%s updated_products=%s created_variants=%s updated_variants=%s desc_gen=%s",
         created_products,
         updated_products,
         created_variants,
         updated_variants,
+        description_generator_source,
     )
 
     if payload.dry_run:

@@ -10,6 +10,8 @@ from typing import Iterable
 
 import requests
 
+_GENERATOR_CACHE = None
+
 
 @dataclass
 class DescriptionPayload:
@@ -211,3 +213,32 @@ def generated_meta(text: str, source: str) -> dict[str, str]:
         "description_source": source,
         "description_generated_at": datetime.utcnow().isoformat(),
     }
+
+
+def get_description_generator():
+    global _GENERATOR_CACHE
+    if _GENERATOR_CACHE is None:
+        _GENERATOR_CACHE = build_description_generator()
+    return _GENERATOR_CACHE
+
+
+def safe_generate_description(payload: DescriptionPayload) -> tuple[str | None, str]:
+    """Never raise: returns (text, source)."""
+    try:
+        gen = get_description_generator()
+        text = gen.generate(payload)
+        text = _norm(text)
+        if text:
+            return text, getattr(gen, "source", "template")
+    except Exception:
+        pass
+
+    try:
+        fb = TemplateDescriptionGenerator()
+        text = _norm(fb.generate(payload))
+        if text:
+            return text, "template"
+    except Exception:
+        pass
+
+    return None, "none"
