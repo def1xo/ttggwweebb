@@ -1112,130 +1112,12 @@ def infer_colors_with_ai(
     *,
     title: str,
     image_urls: list[str],
-    provider: str = "openai",
+    provider: str = "disabled",
     max_colors: int = 3,
 ) -> list[str]:
-    """Infer color tokens from gallery using LLM vision (best-effort)."""
+    """External AI color inference is disabled; keep contract and return no palette."""
 
-    alias = {
-        "чёрный": "черный",
-        "black": "черный",
-        "white": "белый",
-        "grey": "серый",
-        "gray": "серый",
-        "red": "красный",
-        "blue": "синий",
-        "green": "зеленый",
-        "beige": "бежевый",
-        "brown": "коричневый",
-        "pink": "розовый",
-        "purple": "фиолетовый",
-        "yellow": "желтый",
-        "orange": "оранжевый",
-    }
-
-    def _canon(v: str | None) -> str:
-        key = _norm(v)
-        if not key:
-            return ""
-        return str(alias.get(key) or key)
-
-    urls = [str(x).strip() for x in (image_urls or []) if str(x).strip()][:8]
-    if not urls:
-        return []
-
-    provider_key = _norm(provider) or "openai"
-    endpoint = ""
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-    model = ""
-
-    if provider_key == "openai":
-        api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
-        if not api_key:
-            return []
-        endpoint = "https://api.openai.com/v1/chat/completions"
-        headers["Authorization"] = f"Bearer {api_key}"
-        model = (os.getenv("OPENAI_COLOR_MODEL") or "gpt-4o-mini").strip()
-    elif provider_key == "openrouter":
-        api_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
-        if not api_key:
-            return []
-        endpoint = "https://openrouter.ai/api/v1/chat/completions"
-        headers["Authorization"] = f"Bearer {api_key}"
-        model = (os.getenv("OPENROUTER_COLOR_MODEL") or "openai/gpt-4o-mini").strip()
-    else:
-        return []
-
-    palette = [
-        "черный", "белый", "серый", "красный", "синий", "голубой", "зеленый", "бежевый",
-        "коричневый", "розовый", "фиолетовый", "желтый", "оранжевый",
-    ]
-    limit = max(1, min(int(max_colors or 3), 4))
-
-    content_parts: list[dict[str, Any]] = [
-        {
-            "type": "text",
-            "text": json.dumps(
-                {
-                    "title": _norm(title),
-                    "max_colors": limit,
-                    "allowed_colors": palette,
-                    "task": "Определи 1-3 основных цвета именно товара (игнорируй коробку/фон). Верни строго JSON: {\"colors\":[...]}",
-                },
-                ensure_ascii=False,
-            ),
-        }
-    ]
-    for u in urls:
-        content_parts.append({"type": "image_url", "image_url": {"url": u}})
-
-    try:
-        resp = requests.post(
-            endpoint,
-            timeout=(4.0, 35.0),
-            headers=headers,
-            json={
-                "model": model,
-                "temperature": 0,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "Ты помощник e-commerce. Смотри на фото и возвращай только валидный JSON без markdown.",
-                    },
-                    {
-                        "role": "user",
-                        "content": content_parts,
-                    },
-                ],
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json() if resp.content else {}
-        txt = str(data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
-        if txt.startswith("```"):
-            txt = re.sub(r"^```(?:json)?|```$", "", txt.strip(), flags=re.I).strip()
-
-        parsed: dict[str, Any] = {}
-        if txt.startswith("{"):
-            try:
-                parsed = json.loads(txt)
-            except Exception:
-                parsed = {}
-
-        raw_colors = parsed.get("colors") if isinstance(parsed, dict) else None
-        if not isinstance(raw_colors, list):
-            # tolerant fallback for non-JSON model output
-            raw_colors = re.split(r"[,;/\n]+", txt)
-
-        out: list[str] = []
-        for c in raw_colors:
-            cc = _canon(str(c))
-            if cc and cc in palette and cc not in out:
-                out.append(cc)
-        return out[:limit]
-    except Exception:
-        return []
-
+    return []
 
 def generate_youth_description(title: str, category_name: str | None = None, color: str | None = None) -> str:
     t = _norm(title)
@@ -1258,75 +1140,15 @@ def generate_ai_product_description(
     *,
     max_chars: int = 420,
 ) -> str:
-    """Generate unique product copy via OpenRouter.
+    """Generate local fallback product copy without external providers."""
 
-    Returns empty string when AI generation is unavailable/failed,
-    so caller can decide to keep description empty instead of шаблонного текста.
-    """
-    openrouter_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
-    if not openrouter_key:
-        return ""
-
-    prompt = {
-        "title": _norm(title),
-        "category": _norm(category_name) or "streetwear",
-        "color": _norm(color) or "",
-        "requirements": [
-            "Пиши по-русски для аудитории 15-25",
-            "Сделай описание уникальным, без шаблонных повторов",
-            "2-4 коротких предложения",
-            "Без мата, без обещаний медицинских/гарантийных эффектов",
-            "Не используй markdown/emoji",
-        ],
-    }
-    try:
-        resp = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            timeout=(4.0, 25.0),
-            headers={
-                "Authorization": f"Bearer {openrouter_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": os.getenv("OPENROUTER_MODEL", "openrouter/auto"),
-                "temperature": 0.9,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "Ты коммерческий копирайтер для e-commerce. Пиши нативно и уникально.",
-                    },
-                    {
-                        "role": "user",
-                        "content": "Сгенерируй описание товара в JSON с полем description. Данные: " + json.dumps(prompt, ensure_ascii=False),
-                    },
-                ],
-            },
-        )
-        resp.raise_for_status()
-        data = resp.json() if resp.content else {}
-        txt = (
-            data.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-        )
-        raw = str(txt or "").strip()
-        if raw.startswith("{"):
-            try:
-                parsed = json.loads(raw)
-                raw = str(parsed.get("description") or "").strip()
-            except Exception:
-                pass
-        raw = " ".join(raw.split())
-        if raw:
-            return raw[:max_chars]
-    except Exception:
-        pass
-    return ""
+    text = generate_youth_description(title, category_name=category_name, color=color)
+    text = " ".join(str(text or "").split())
+    return text[:max_chars] if text else ""
 
 
 MIN_MARKUP_RATIO = 1.40
 DEFAULT_MARKUP_RATIO = 1.55
-
 
 def normalize_retail_price(price: float | None) -> float:
     p = max(0.0, float(price or 0.0))
