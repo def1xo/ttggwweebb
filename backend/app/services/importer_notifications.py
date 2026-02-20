@@ -23,6 +23,7 @@ from app.services.supplier_intelligence import (
     _extract_size_stock_map as _sheet_extract_size_stock_map,
     extract_image_urls_from_html_page,
 )
+from app.services.color_detection import detect_product_color
 from app.services import media_store
 
 logger = logging.getLogger("tg_importer")
@@ -554,6 +555,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
         payload_with_text_links["image_urls"] = merged
     images = _normalize_image_urls(payload_with_text_links)
     images = _localize_image_urls(images, title_hint=(payload.get("title") or ""))
+    color_detection = detect_product_color(images) if images else {"color": None, "confidence": 0.0, "debug": {"reason": "no_images"}, "per_image": []}
     title = None
     for line in (text.splitlines() if text else []):
         ln = line.strip()
@@ -575,6 +577,8 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
     if size_stock_map and not sizes:
         sizes = sorted(size_stock_map.keys(), key=lambda x: float(x) if str(x).replace(".", "", 1).isdigit() else str(x))
     colors = _extract_colors(text)
+    if not colors and color_detection.get("color"):
+        colors = [str(color_detection.get("color"))]
     hashtags = _extract_hashtags(text)
     stock_quantity = _extract_stock_quantity(text, payload)
     supplier_name = _detect_supplier_from_payload(payload_with_text_links, text=text)
@@ -615,6 +619,12 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                 existing.updated_at = datetime.utcnow()
             if supplier_name and hasattr(existing, "import_supplier_name"):
                 existing.import_supplier_name = supplier_name
+            if hasattr(existing, "detected_color"):
+                existing.detected_color = color_detection.get("color")
+            if hasattr(existing, "detected_color_confidence"):
+                existing.detected_color_confidence = float(color_detection.get("confidence") or 0.0)
+            if hasattr(existing, "detected_color_debug"):
+                existing.detected_color_debug = color_detection
             existing.visible = visible
             if category:
                 if hasattr(existing, "category"):
@@ -665,6 +675,13 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                         db.add(v)
                     except Exception:
                         logger.exception("Could not set variant.stock_quantity")
+            logger.info(
+                "import_color_detection product_id=%s color=%s confidence=%.3f votes=%s",
+                existing.id,
+                color_detection.get("color"),
+                float(color_detection.get("confidence") or 0.0),
+                (color_detection.get("debug") or {}).get("votes"),
+            )
             db.flush()
             db.commit()
             db.refresh(existing)
@@ -710,6 +727,12 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
             prod_kwargs["default_image"] = images[0]
         if category and hasattr(models.Product, "category_id"):
             prod_kwargs["category_id"] = category.id
+        if hasattr(models.Product, "detected_color"):
+            prod_kwargs["detected_color"] = color_detection.get("color")
+        if hasattr(models.Product, "detected_color_confidence"):
+            prod_kwargs["detected_color_confidence"] = float(color_detection.get("confidence") or 0.0)
+        if hasattr(models.Product, "detected_color_debug"):
+            prod_kwargs["detected_color_debug"] = color_detection
         prod = models.Product(**{k: v for k, v in prod_kwargs.items() if v is not None})
         db.add(prod)
         db.flush()
@@ -728,6 +751,16 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
             variant_has_cost_column = "cost_price" in getattr(models.ProductVariant, "__table__").columns.keys()
         except Exception:
             variant_has_cost_column = False
+        image_groups: Dict[str, List[str]] = {}
+        for idx, meta in enumerate(color_detection.get("per_image") or []):
+            try:
+                c = str(meta.get("color") or "").strip()
+                img_idx = int(meta.get("idx"))
+                if c and 0 <= img_idx < len(images):
+                    image_groups.setdefault(c, []).append(images[img_idx])
+            except Exception:
+                continue
+
         if sizes and colors:
             for s in sizes:
                 size_obj = _get_or_create_size(db, s)
@@ -742,6 +775,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                         "updated_at": now,
                         "size_id": getattr(size_obj, "id", None),
                         "color_id": getattr(color_obj, "id", None),
+                        "images": image_groups.get(c) or None,
                     }
                     if variant_has_cost_column and cost_price is not None:
                         v_kwargs["cost_price"] = cost_price
@@ -773,6 +807,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                     "created_at": now,
                     "updated_at": now,
                     "color_id": getattr(color_obj, "id", None),
+                    "images": image_groups.get(c) or None,
                 }
                 if variant_has_cost_column and cost_price is not None:
                     v_kwargs["cost_price"] = cost_price
@@ -791,6 +826,13 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
             v = models.ProductVariant(**{k: v for k, v in v_kwargs.items() if v is not None})
             db.add(v)
         db.flush()
+        logger.info(
+            "import_color_detection product_id=%s color=%s confidence=%.3f votes=%s",
+            prod.id,
+            color_detection.get("color"),
+            float(color_detection.get("confidence") or 0.0),
+            (color_detection.get("debug") or {}).get("votes"),
+        )
         if cost_price is not None and not variant_has_cost_column and hasattr(models, "ProductCost"):
             try:
                 for variant in db.query(models.ProductVariant).filter(models.ProductVariant.product_id == prod.id).all():

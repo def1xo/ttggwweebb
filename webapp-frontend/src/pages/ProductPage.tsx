@@ -96,6 +96,25 @@ function collectProductImages(p: any): string[] {
   return out;
 }
 
+function imagesForColor(p: any, color: string | null): string[] {
+  if (!p) return [];
+  if (!color) return collectProductImages(p);
+  const groups = Array.isArray(p?.color_variants) ? p.color_variants : [];
+  const hit = groups.find((g: any) => String(g?.color || "") === String(color));
+  if (hit?.images?.length) {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of hit.images) {
+      const normalized = normalizeMediaUrl(item);
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      out.push(normalized);
+    }
+    if (out.length) return out;
+  }
+  return collectProductImages(p);
+}
+
 function getVariantStock(v: any): number {
   const raw = v?.stock_quantity ?? v?.stock ?? v?.quantity ?? v?.qty ?? 0;
   const value = Number(raw);
@@ -131,6 +150,7 @@ export default function ProductPage() {
         const res = await api.get(`/api/products/${id}`);
         const p = (res as any).data ?? res;
         setProduct(p);
+        if (p?.selected_color) setSelectedColor(String(p.selected_color));
       } catch {
         setProduct(null);
       }
@@ -166,8 +186,8 @@ export default function ProductPage() {
 
 
   const images: string[] = useMemo(() => {
-    return collectProductImages(product);
-  }, [product]);
+    return imagesForColor(product, selectedColor);
+  }, [product, selectedColor]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -198,8 +218,9 @@ export default function ProductPage() {
   const colors = useMemo(() => {
     const fromVariants = variants.map((v) => String(v?.color?.name || v?.color || "")).filter(Boolean);
     const fromProduct = Array.isArray(product?.colors) ? product.colors.map((x: any) => String(x || "")).filter(Boolean) : [];
-    return uniq([...fromVariants, ...fromProduct]);
-  }, [variants, product?.colors]);
+    const fromColorVariants = Array.isArray(product?.available_colors) ? product.available_colors.map((x: any) => String(x || "")).filter(Boolean) : [];
+    return uniq([...fromVariants, ...fromProduct, ...fromColorVariants]);
+  }, [variants, product?.colors, product?.available_colors]);
 
   const sizeOptions = sizes;
 

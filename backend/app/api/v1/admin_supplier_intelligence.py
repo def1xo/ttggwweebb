@@ -19,6 +19,11 @@ from app.db import models
 from app.services.importer_notifications import slugify
 from app.services import media_store
 from app.services.supplier_profiles import normalize_title_for_supplier
+from app.services.supplier_importers import (
+    ImporterContext,
+    get_importer_for_source,
+    resolve_tg_photos,
+)
 from app.services.supplier_intelligence import (
     SupplierOffer,
     ensure_min_markup_price,
@@ -1300,6 +1305,7 @@ def import_products_from_sources(
     created_products = 0
     updated_products = 0
     created_variants = 0
+    updated_variants = 0
     source_reports: list[ImportSourceReport] = []
     signature_product_map: dict[str, int] = {}
     title_product_candidates: dict[str, list[tuple[int, str | None]]] = {}
@@ -1526,6 +1532,9 @@ def import_products_from_sources(
         if len(bucket) > 25:
             del bucket[:-25]
 
+    def _upsert_passthrough(item: dict[str, Any], _ctx: ImporterContext):
+        return item
+
     def pick_sale_price(
         title: str,
         dropship_price: float,
@@ -1572,13 +1581,25 @@ def import_products_from_sources(
             source_items_map[int(src.id)] = []
             continue
         try:
-            preview = fetch_tabular_preview(
-                src_url,
-                timeout_sec=payload.fetch_timeout_sec,
-                max_rows=max(5, min(payload.max_items_per_source + 1, _default_pre_scan_rows_cap())),
+            importer = get_importer_for_source(src_url, getattr(src, "supplier_name", None))
+            if hasattr(importer, "_fetch_preview_fn"):
+                importer._fetch_preview_fn = fetch_tabular_preview
+            if hasattr(importer, "_extract_items_fn"):
+                importer._extract_items_fn = extract_catalog_items
+            ctx = ImporterContext(
+                source_url=src_url,
+                supplier_name=getattr(src, "supplier_name", None),
+                max_items=int(payload.max_items_per_source),
+                fetch_timeout_sec=int(payload.fetch_timeout_sec),
             )
-            rows = preview.get("rows_preview") or []
-            items = extract_catalog_items(rows, max_items=payload.max_items_per_source)
+            items = importer.fetch_rows(ctx)
+            parsed_items: list[dict[str, Any]] = []
+            for raw_item in items:
+                parsed = importer.parse_row(raw_item, ctx)
+                if not parsed:
+                    continue
+                parsed_items.append(importer.upsert(parsed, _upsert_passthrough, ctx))
+            items = importer.group_rows(parsed_items, ctx)
             if not items and "t.me/" in src_url:
                 imgs = extract_image_urls_from_html_page(src_url, limit=min(payload.max_items_per_source, payload.tg_fallback_limit))
                 items = [
@@ -1759,6 +1780,8 @@ def import_products_from_sources(
                         image_urls.append(uu)
 
                 # Prefer Telegram channel photos for suppliers that have paired table+TG sources.
+                photos_ref: list[str] = [str(x).strip() for x in ([image_url] + row_image_urls) if str(x or "").strip() and ("t.me/" in str(x) or "telegram.me/" in str(x))]
+                images_status = "resolved"
                 if supplier_key and src_kind != "telegram_channel":
                     tg_images = _pick_tg_images_for_title(supplier_key, title)
                     if tg_images:
@@ -1769,6 +1792,15 @@ def import_products_from_sources(
                                 merged.append(uu)
                         image_urls = merged
                         image_url = image_urls[0] if image_urls else image_url
+                    # unified rule: table provides data, Telegram provides photos.
+                    resolved_tg, status = resolve_tg_photos(photos_ref or tg_images, extract_image_urls_from_html_page, limit=(20 if supplier_key == "shop_vkus" else 8))
+                    images_status = status
+                    if resolved_tg:
+                        image_urls = resolved_tg
+                        image_url = resolved_tg[0]
+                    elif photos_ref:
+                        image_urls = []
+                        image_url = None
 
                 # expand telegram post links into direct image URLs with safety caps,
                 # otherwise large imports can spend minutes on network lookups.
@@ -1878,6 +1910,7 @@ def import_products_from_sources(
                         import_source_kind=src_kind,
                         import_supplier_name=getattr(src, "supplier_name", None),
                         visible=bool(payload.publish_visible),
+                        import_media_meta={"photos_ref": photos_ref, "images_status": images_status},
                     )
                     db.add(p)
                     db.flush()
@@ -1917,6 +1950,11 @@ def import_products_from_sources(
                         changed = True
                     if not getattr(p, "import_supplier_name", None) and getattr(src, "supplier_name", None):
                         p.import_supplier_name = getattr(src, "supplier_name", None)
+                        changed = True
+                    prev_media_meta = getattr(p, "import_media_meta", None) or {}
+                    next_media_meta = {"photos_ref": photos_ref, "images_status": images_status}
+                    if next_media_meta != prev_media_meta:
+                        p.import_media_meta = next_media_meta
                         changed = True
                     if image_urls:
                         existing_rows = db.query(models.ProductImage).filter(models.ProductImage.product_id == p.id).all()
@@ -2252,15 +2290,20 @@ def import_products_from_sources(
                                 if variant is None:
                                     raise
                         else:
+                            variant_changed = False
                             if float(variant.price or 0) <= 0 and sale_price > 0:
                                 variant.price = Decimal(str(sale_price))
+                                variant_changed = True
 
                             # Stock update policy:
                             # - when stock map is explicit, always trust and overwrite;
                             # - when row has explicit zero stock, propagate zero;
                             # - otherwise keep previous positive stock unless empty.
                             if has_explicit_stock_data:
-                                variant.stock_quantity = max(0, int(per_variant_stock))
+                                new_stock_qty = max(0, int(per_variant_stock))
+                                if int(variant.stock_quantity or 0) != new_stock_qty:
+                                    variant.stock_quantity = new_stock_qty
+                                    variant_changed = True
 
                             existing_variant_images = [str(x).strip() for x in (variant.images or []) if str(x).strip()]
                             if variant_images:
@@ -2272,6 +2315,9 @@ def import_products_from_sources(
                                 )
                                 if should_replace_variant_images:
                                     variant.images = desired_variant_images
+                                    variant_changed = True
+                            if variant_changed:
+                                updated_variants += 1
                             db.add(variant)
 
                 if has_stock_map:
@@ -2328,6 +2374,17 @@ def import_products_from_sources(
                 db.commit()
 
         source_reports.append(report)
+        logger.info(
+            "supplier_import_source_done supplier_name=%s source_id=%s created_products=%s updated_products=%s created_variants=%s updated_variants=%s imported_items=%s errors=%s",
+            getattr(src, "supplier_name", None),
+            int(src.id),
+            created_products,
+            updated_products,
+            created_variants,
+            updated_variants,
+            report.imported,
+            report.errors,
+        )
 
     top_failing_sources = sorted(
         (x for x in source_reports if x.errors > 0),
@@ -2342,6 +2399,14 @@ def import_products_from_sources(
                 for x in top_failing_sources
             ],
         )
+
+    logger.info(
+        "supplier_import_summary created_products=%s updated_products=%s created_variants=%s updated_variants=%s",
+        created_products,
+        updated_products,
+        created_variants,
+        updated_variants,
+    )
 
     if payload.dry_run:
         db.rollback()
