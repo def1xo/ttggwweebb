@@ -18,17 +18,29 @@ class ImporterContext:
 class BaseSupplierImporter:
     """Unified importer contract for supplier sources."""
 
+    def fetch(self, ctx: ImporterContext) -> list[dict[str, Any]]:
+        return self.fetch_rows(ctx)
+
     def fetch_rows(self, ctx: ImporterContext) -> list[dict[str, Any]]:
         raise NotImplementedError
 
     def parse_row(self, row: dict[str, Any], ctx: ImporterContext) -> dict[str, Any] | None:
         raise NotImplementedError
 
+    def normalize(self, row: dict[str, Any], ctx: ImporterContext) -> dict[str, Any] | None:
+        return self.parse_row(row, ctx)
+
     def group_rows(self, rows: list[dict[str, Any]], ctx: ImporterContext) -> list[dict[str, Any]]:
         return rows
 
+    def group(self, rows: list[dict[str, Any]], ctx: ImporterContext) -> list[dict[str, Any]]:
+        return self.group_rows(rows, ctx)
+
     def upsert(self, row: dict[str, Any], upsert_fn, ctx: ImporterContext) -> Any:
         return upsert_fn(row, ctx)
+
+    def resolve_photos(self, links: list[str], resolver_fn, limit: int = 20) -> tuple[list[str], str]:
+        return resolve_tg_photos(links, resolver_fn, limit=limit)
 
     def normalize_price(self, raw: Any) -> float:
         try:
@@ -92,6 +104,26 @@ class FirmachDropImporter(TabularSupplierImporter):
     pass
 
 
+class ProfitDropImporter(TabularSupplierImporter):
+    pass
+
+
+class VenomImporter(TabularSupplierImporter):
+    pass
+
+
+class EmpireImporter(TabularSupplierImporter):
+    pass
+
+
+class OptobazaImporter(TabularSupplierImporter):
+    pass
+
+
+class HHHBImporter(TabularSupplierImporter):
+    pass
+
+
 def resolve_tg_photos(links: list[str], resolver_fn, limit: int = 20) -> tuple[list[str], str]:
     refs = [str(x).strip() for x in links if str(x or "").strip()]
     if not refs:
@@ -117,6 +149,16 @@ def get_supplier_importer(supplier_name: str | None) -> BaseSupplierImporter:
         return ShopVkusImporter()
     if key in {"фирмач дроп", "firmachdroppp", "firmach drop"}:
         return FirmachDropImporter()
+    if key in {"профит дроп", "profit drop", "profitdrop"}:
+        return ProfitDropImporter()
+    if key == "venom":
+        return VenomImporter()
+    if key == "empire":
+        return EmpireImporter()
+    if key in {"оптобаза", "optobaza"}:
+        return OptobazaImporter()
+    if key in {"hhhb", "hhhв"}:
+        return HHHBImporter()
     return TabularSupplierImporter()
 
 

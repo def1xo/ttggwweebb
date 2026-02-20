@@ -22,7 +22,6 @@ from app.services.supplier_profiles import normalize_title_for_supplier
 from app.services.supplier_importers import (
     ImporterContext,
     get_importer_for_source,
-    resolve_tg_photos,
 )
 from app.services.supplier_intelligence import (
     SupplierOffer,
@@ -660,7 +659,7 @@ def _default_auto_import_ai_color_distribution_enabled() -> bool:
 
 
 def _default_auto_import_ai_color_distribution_provider() -> str:
-    return str(os.getenv("SUPPLIER_AUTO_IMPORT_AI_COLOR_DISTRIBUTION_PROVIDER") or "openai").strip() or "openai"
+    return "disabled"
 
 def _force_sync_auto_import() -> bool:
     return str(os.getenv("SUPPLIER_AUTO_IMPORT_FORCE_SYNC") or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -1007,10 +1006,10 @@ class ImportProductsIn(BaseModel):
     dry_run: bool = True
     publish_visible: bool = False
     ai_style_description: bool = True
-    ai_description_provider: str = Field(default="openrouter", max_length=64)
+    ai_description_provider: str = Field(default="disabled", max_length=64)
     ai_description_enabled: bool = True
     ai_color_distribution_enabled: bool = False
-    ai_color_distribution_provider: str = Field(default="openai", max_length=64)
+    ai_color_distribution_provider: str = Field(default="disabled", max_length=64)
     use_avito_pricing: bool = True
     avito_max_pages: int = Field(default=1, ge=1, le=3)
 
@@ -1592,14 +1591,14 @@ def import_products_from_sources(
                 max_items=int(payload.max_items_per_source),
                 fetch_timeout_sec=int(payload.fetch_timeout_sec),
             )
-            items = importer.fetch_rows(ctx)
+            items = importer.fetch(ctx)
             parsed_items: list[dict[str, Any]] = []
             for raw_item in items:
-                parsed = importer.parse_row(raw_item, ctx)
+                parsed = importer.normalize(raw_item, ctx)
                 if not parsed:
                     continue
                 parsed_items.append(importer.upsert(parsed, _upsert_passthrough, ctx))
-            items = importer.group_rows(parsed_items, ctx)
+            items = importer.group(parsed_items, ctx)
             if not items and "t.me/" in src_url:
                 imgs = extract_image_urls_from_html_page(src_url, limit=min(payload.max_items_per_source, payload.tg_fallback_limit))
                 items = [
@@ -1750,7 +1749,7 @@ def import_products_from_sources(
 
                 desc = str(it.get("description") or "").strip()
                 if payload.ai_style_description and not desc:
-                    if payload.ai_description_enabled and payload.ai_description_provider.lower() == "openrouter":
+                    if payload.ai_description_enabled:
                         desc = generate_ai_product_description(title, cat_name, it.get("color"))
                     else:
                         desc = generate_youth_description(title, cat_name, it.get("color"))
@@ -1793,7 +1792,7 @@ def import_products_from_sources(
                         image_urls = merged
                         image_url = image_urls[0] if image_urls else image_url
                     # unified rule: table provides data, Telegram provides photos.
-                    resolved_tg, status = resolve_tg_photos(photos_ref or tg_images, extract_image_urls_from_html_page, limit=(20 if supplier_key == "shop_vkus" else 8))
+                    resolved_tg, status = importer.resolve_photos(photos_ref or tg_images, extract_image_urls_from_html_page, limit=(20 if supplier_key == "shop_vkus" else 8))
                     images_status = status
                     if resolved_tg:
                         image_urls = resolved_tg

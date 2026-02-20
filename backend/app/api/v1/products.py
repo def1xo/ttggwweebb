@@ -12,6 +12,16 @@ from app.services import media_store
 router = APIRouter(prefix="/products", tags=["products"])
 
 
+def _images_overlap_ratio(a: list[str], b: list[str]) -> float:
+    sa = {str(x).strip() for x in (a or []) if str(x).strip()}
+    sb = {str(x).strip() for x in (b or []) if str(x).strip()}
+    if not sa or not sb:
+        return 0.0
+    inter = len(sa & sb)
+    base = max(1, min(len(sa), len(sb)))
+    return inter / base
+
+
 def _build_color_payload(p: models.Product) -> Dict[str, Any]:
     variants = list(getattr(p, "variants", []) or [])
     base_images = [im.url for im in sorted((p.images or []), key=lambda x: ((x.sort or 0), x.id))]
@@ -23,9 +33,28 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
         for u in (v.images or []):
             if u and u not in grp["images"]:
                 grp["images"].append(u)
+
     for grp in color_groups.values():
         if not grp["images"]:
             grp["images"] = list(base_images)
+
+    # Collapse to a single color when all color groups share essentially same photoset.
+    groups = list(color_groups.values())
+    if len(groups) > 1:
+        ref_images = max(groups, key=lambda g: len(g.get("images") or [])).get("images") or []
+        same_set = all(_images_overlap_ratio(ref_images, g.get("images") or []) >= 0.8 for g in groups)
+        if same_set:
+            merged_variant_ids: list[int] = []
+            for g in groups:
+                merged_variant_ids.extend([int(x) for x in (g.get("variant_ids") or [])])
+            single_color = (getattr(p, "detected_color", None) or groups[0].get("color") or "unknown")
+            color_groups = {
+                str(single_color): {
+                    "color": str(single_color),
+                    "variant_ids": sorted(set(merged_variant_ids)),
+                    "images": list(ref_images or base_images),
+                }
+            }
 
     available = sorted([k for k in color_groups.keys() if k and k != "unknown"])
     selected = available[0] if available else (getattr(p, "detected_color", None) or None)
@@ -33,11 +62,17 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
         selected_images = color_groups[selected]["images"]
     else:
         selected_images = list(base_images)
+
+    images_by_color = {str(k): list(v.get("images") or []) for k, v in color_groups.items() if k and k != "unknown"}
     return {
         "available_colors": available,
         "selected_color": selected,
         "color_variants": sorted(list(color_groups.values()), key=lambda x: str(x.get("color") or "")),
         "selected_color_images": selected_images,
+        # New unified keys (legacy keys above are preserved for compatibility)
+        "colors": available,
+        "default_color": selected,
+        "images_by_color": images_by_color,
     }
 
 
@@ -126,6 +161,8 @@ def list_products(
                 "available_colors": color_payload["available_colors"],
                 "selected_color": color_payload["selected_color"],
                 "color_variants": color_payload["color_variants"],
+                "default_color": color_payload["default_color"],
+                "images_by_color": color_payload["images_by_color"],
                 "variants": variants,
             }
         )
@@ -168,6 +205,8 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
         "selected_color": color_payload["selected_color"],
         "color_variants": color_payload["color_variants"],
         "selected_color_images": color_payload["selected_color_images"],
+        "default_color": color_payload["default_color"],
+        "images_by_color": color_payload["images_by_color"],
         "detected_color": getattr(p, "detected_color", None),
         "detected_color_confidence": (float(getattr(p, "detected_color_confidence", 0) or 0) if getattr(p, "detected_color_confidence", None) is not None else None),
         "variants": [
