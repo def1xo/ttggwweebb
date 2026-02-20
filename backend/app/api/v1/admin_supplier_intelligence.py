@@ -4,6 +4,7 @@ import logging
 import os
 from decimal import Decimal
 from datetime import datetime
+from time import perf_counter
 import re
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -1107,6 +1108,17 @@ def _register_source_error(report: ImportSourceReport, exc: Exception, context: 
         report.error_samples.append(message)
 
 
+def _safe_db_target(db: Session) -> tuple[str, str]:
+    try:
+        bind = db.get_bind()
+        if bind is None or getattr(bind, "url", None) is None:
+            return "unknown", "unknown"
+        url = bind.url
+        return url.render_as_string(hide_password=True), str(getattr(url, "database", None) or "unknown")
+    except Exception:
+        return "unknown", "unknown"
+
+
 
 
 class AvitoMarketScanIn(BaseModel):
@@ -1315,6 +1327,7 @@ def import_products_from_sources(
         .all()
     )
 
+    import_started_at = perf_counter()
     created_categories = 0
     created_products = 0
     updated_products = 0
@@ -1331,6 +1344,8 @@ def import_products_from_sources(
     telegram_media_cache: dict[str, list[str]] = {}
     telegram_media_expand_count = 0
     pre_scan_error_messages: dict[int, str] = {}
+    pre_scan_metrics: dict[int, dict[str, int]] = {}
+    db_url_safe, db_name = _safe_db_target(db)
     supplier_has_table_source: dict[str, bool] = {}
     supplier_tg_images_by_title: dict[str, dict[str, list[str]]] = {}
     supplier_tg_fallback_images: dict[str, list[str]] = {}
@@ -1615,14 +1630,22 @@ def import_products_from_sources(
                 max_items=int(payload.max_items_per_source),
                 fetch_timeout_sec=int(payload.fetch_timeout_sec),
             )
-            items = importer.fetch(ctx)
+            fetched_rows = importer.fetch(ctx)
             parsed_items: list[dict[str, Any]] = []
-            for raw_item in items:
+            normalized_items_count = 0
+            for raw_item in fetched_rows:
                 parsed = importer.normalize(raw_item, ctx)
                 if not parsed:
                     continue
+                normalized_items_count += 1
                 parsed_items.append(importer.upsert(parsed, _upsert_passthrough, ctx))
             items = importer.group(parsed_items, ctx)
+            pre_scan_metrics[int(src.id)] = {
+                "fetched_rows_count": int(len(fetched_rows or [])),
+                "parsed_items_count": int(len(parsed_items)),
+                "normalized_items_count": int(normalized_items_count),
+                "grouped_products_count": int(len(items or [])),
+            }
             if not items and "t.me/" in src_url:
                 imgs = extract_image_urls_from_html_page(src_url, limit=min(payload.max_items_per_source, payload.tg_fallback_limit))
                 items = [
@@ -1678,6 +1701,12 @@ def import_products_from_sources(
         except Exception as exc:
             src_id = int(src.id)
             source_items_map[src_id] = []
+            pre_scan_metrics[src_id] = {
+                "fetched_rows_count": 0,
+                "parsed_items_count": 0,
+                "normalized_items_count": 0,
+                "grouped_products_count": 0,
+            }
             pre_scan_error_messages[src_id] = _normalize_error_message(exc)
             logger.exception("Supplier pre-scan failed for source_id=%s url=%s", src_id, src_url)
 
@@ -1694,9 +1723,26 @@ def import_products_from_sources(
         report.meta.setdefault("colors_final", 0)
         report.meta.setdefault("consolidation_reason", "n/a")
         report.meta.setdefault("skipped_count", 0)
+        report.meta.setdefault("fetched_rows_count", 0)
+        report.meta.setdefault("parsed_items_count", 0)
+        report.meta.setdefault("normalized_items_count", 0)
+        report.meta.setdefault("grouped_products_count", 0)
+        report.meta.setdefault("upsert_products_created", 0)
+        report.meta.setdefault("upsert_products_updated", 0)
+        report.meta.setdefault("upsert_variants_created", 0)
+        report.meta.setdefault("upsert_variants_updated", 0)
+        report.meta.setdefault("categories_created", 0)
+        report.meta.setdefault("categories_linked", 0)
+        report.meta.setdefault("commit_count", 0)
+        report.meta.setdefault("commit_ok", True)
         touched_product_ids: set[int] = set()
         try:
             items = source_items_map.get(int(src.id), [])
+            pre_metrics = pre_scan_metrics.get(int(src.id), {})
+            report.meta["fetched_rows_count"] = int(pre_metrics.get("fetched_rows_count", len(items)))
+            report.meta["parsed_items_count"] = int(pre_metrics.get("parsed_items_count", len(items)))
+            report.meta["normalized_items_count"] = int(pre_metrics.get("normalized_items_count", len(items)))
+            report.meta["grouped_products_count"] = int(pre_metrics.get("grouped_products_count", len(items)))
         except Exception as exc:
             _register_source_error(report, exc)
             source_reports.append(report)
@@ -1759,8 +1805,10 @@ def import_products_from_sources(
                 base_title_key = _title_key(title)
                 title_for_group = _group_title(title)
                 min_dropship = title_min_dropship.get(base_title_key)
-                cat_name = map_category(title)
+                source_category = str(it.get("category") or it.get("category_name") or it.get("catalog") or "").strip()
+                cat_name = source_category or map_category(title)
                 category = get_or_create_category(cat_name)
+                report.meta["categories_linked"] = int(report.meta.get("categories_linked", 0) or 0) + 1
                 effective_title = (title_for_group or title).strip()[:500]
                 slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
@@ -1968,6 +2016,7 @@ def import_products_from_sources(
                         for idx, img_u in enumerate(image_urls[:8]):
                             db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
                     created_products += 1
+                    report.meta["upsert_products_created"] = int(report.meta.get("upsert_products_created", 0) or 0) + 1
                 else:
                     changed = False
                     if supplier_desc and not p.description:
@@ -2053,6 +2102,7 @@ def import_products_from_sources(
                     if changed:
                         db.add(p)
                         updated_products += 1
+                        report.meta["upsert_products_updated"] = int(report.meta.get("upsert_products_updated", 0) or 0) + 1
 
                 try:
                     sig = image_print_signature_from_url(image_url) if image_url else None
@@ -2370,6 +2420,7 @@ def import_products_from_sources(
                                     db.add(variant)
                                     db.flush()
                                 created_variants += 1
+                                report.meta["upsert_variants_created"] = int(report.meta.get("upsert_variants_created", 0) or 0) + 1
                             except IntegrityError:
                                 variant = (
                                     db.query(models.ProductVariant)
@@ -2409,6 +2460,7 @@ def import_products_from_sources(
                                     variant_changed = True
                             if variant_changed:
                                 updated_variants += 1
+                                report.meta["upsert_variants_updated"] = int(report.meta.get("upsert_variants_updated", 0) or 0) + 1
                             db.add(variant)
 
                 if has_stock_map:
@@ -2436,9 +2488,11 @@ def import_products_from_sources(
                 # don't lose all progress on later failures.
                 if not payload.dry_run:
                     db.commit()
+                    report.meta["commit_count"] = int(report.meta.get("commit_count", 0) or 0) + 1
             except Exception as exc:
                 if not payload.dry_run:
                     db.rollback()
+                report.meta["commit_ok"] = False
                 try:
                     ctx_title = str((it or {}).get("title") or "").strip()[:120] if isinstance(it, dict) else ""
                     ctx_image = str((it or {}).get("image_url") or "").strip()[:120] if isinstance(it, dict) else ""
@@ -2465,8 +2519,46 @@ def import_products_from_sources(
                         vv.stock_quantity = 0
                         db.add(vv)
                 db.commit()
+                report.meta["commit_count"] = int(report.meta.get("commit_count", 0) or 0) + 1
 
+        report.meta["categories_created"] = int(created_categories)
+        elapsed_ms = int((perf_counter() - import_started_at) * 1000)
+        supplier_products_count = 0
+        categories_total_count = 0
+        try:
+            supplier_products_count = int(
+                db.query(models.Product)
+                .filter(models.Product.import_supplier_name == getattr(src, "supplier_name", None))
+                .count()
+            )
+            categories_total_count = int(db.query(models.Category).count())
+        except Exception:
+            pass
         source_reports.append(report)
+        logger.info(
+            "supplier_import_diagnostics supplier_name=%s source_id=%s fetched_rows_count=%s parsed_items_count=%s normalized_items_count=%s grouped_products_count=%s upsert_products_created=%s upsert_products_updated=%s upsert_variants_created=%s upsert_variants_updated=%s categories_created=%s categories_linked=%s commit_ok=%s commit_count=%s skipped_count=%s db_url=%s db_name=%s elapsed_ms=%s supplier_products_count=%s categories_total_count=%s",
+            getattr(src, "supplier_name", None),
+            int(src.id),
+            int((report.meta or {}).get("fetched_rows_count", 0) if isinstance(report.meta, dict) else 0),
+            int((report.meta or {}).get("parsed_items_count", 0) if isinstance(report.meta, dict) else 0),
+            int((report.meta or {}).get("normalized_items_count", 0) if isinstance(report.meta, dict) else 0),
+            int((report.meta or {}).get("grouped_products_count", 0) if isinstance(report.meta, dict) else 0),
+            int((report.meta or {}).get("upsert_products_created", 0) if isinstance(report.meta, dict) else 0),
+            int((report.meta or {}).get("upsert_products_updated", 0) if isinstance(report.meta, dict) else 0),
+            int((report.meta or {}).get("upsert_variants_created", 0) if isinstance(report.meta, dict) else 0),
+            int((report.meta or {}).get("upsert_variants_updated", 0) if isinstance(report.meta, dict) else 0),
+            int((report.meta or {}).get("categories_created", 0) if isinstance(report.meta, dict) else 0),
+            int((report.meta or {}).get("categories_linked", 0) if isinstance(report.meta, dict) else 0),
+            bool((report.meta or {}).get("commit_ok", True) if isinstance(report.meta, dict) else True),
+            int((report.meta or {}).get("commit_count", 0) if isinstance(report.meta, dict) else 0),
+            int(getattr(report, "skipped_count", 0) or 0),
+            db_url_safe,
+            db_name,
+            elapsed_ms,
+            supplier_products_count,
+            categories_total_count,
+        )
+
         logger.info(
             "supplier_import_source_done supplier_name=%s source_id=%s imported_count=%s updated_count=%s skipped_count=%s created_variants=%s updated_variants=%s errors=%s error_samples=%s colors_detected=%s colors_from_source=%s colors_final=%s consolidation=%s",
             getattr(src, "supplier_name", None),
@@ -2506,6 +2598,26 @@ def import_products_from_sources(
         updated_variants,
         description_generator_source,
     )
+
+    try:
+        sample_products = (
+            db.query(models.Product)
+            .filter(models.Product.import_source_url.isnot(None))
+            .order_by(models.Product.id.desc())
+            .limit(3)
+            .all()
+        )
+        for sp in reversed(sample_products):
+            logger.info(
+                "supplier_import_sample_product id=%s title=%s category_id=%s is_published=%s variants_count=%s",
+                int(getattr(sp, "id", 0) or 0),
+                str(getattr(sp, "title", "") or "")[:180],
+                getattr(sp, "category_id", None),
+                bool(getattr(sp, "visible", False)),
+                int(len(getattr(sp, "variants", []) or [])),
+            )
+    except Exception:
+        logger.warning("supplier_import_sample_product unavailable")
 
     if payload.dry_run:
         db.rollback()
