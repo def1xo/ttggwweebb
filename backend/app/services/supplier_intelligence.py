@@ -1168,18 +1168,29 @@ def infer_colors_with_ai(
         "черный", "белый", "серый", "красный", "синий", "голубой", "зеленый", "бежевый",
         "коричневый", "розовый", "фиолетовый", "желтый", "оранжевый",
     ]
-    user_payload = {
-        "title": _norm(title),
-        "image_urls": urls,
-        "max_colors": max(1, min(int(max_colors or 3), 4)),
-        "allowed_colors": palette,
-        "task": "Определи 1-3 основных цвета именно товара (игнорируй коробку/фон). Верни строго JSON: {\"colors\":[...]}.",
-    }
+    limit = max(1, min(int(max_colors or 3), 4))
+
+    content_parts: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": json.dumps(
+                {
+                    "title": _norm(title),
+                    "max_colors": limit,
+                    "allowed_colors": palette,
+                    "task": "Определи 1-3 основных цвета именно товара (игнорируй коробку/фон). Верни строго JSON: {\"colors\":[...]}",
+                },
+                ensure_ascii=False,
+            ),
+        }
+    ]
+    for u in urls:
+        content_parts.append({"type": "image_url", "image_url": {"url": u}})
 
     try:
         resp = requests.post(
             endpoint,
-            timeout=(4.0, 30.0),
+            timeout=(4.0, 35.0),
             headers=headers,
             json={
                 "model": model,
@@ -1187,11 +1198,11 @@ def infer_colors_with_ai(
                 "messages": [
                     {
                         "role": "system",
-                        "content": "Ты помощник e-commerce. Возвращай только валидный JSON без markdown.",
+                        "content": "Ты помощник e-commerce. Смотри на фото и возвращай только валидный JSON без markdown.",
                     },
                     {
                         "role": "user",
-                        "content": json.dumps(user_payload, ensure_ascii=False),
+                        "content": content_parts,
                     },
                 ],
             },
@@ -1201,18 +1212,29 @@ def infer_colors_with_ai(
         txt = str(data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
         if txt.startswith("```"):
             txt = re.sub(r"^```(?:json)?|```$", "", txt.strip(), flags=re.I).strip()
-        parsed = json.loads(txt) if txt.startswith("{") else {}
-        raw_colors = parsed.get("colors") if isinstance(parsed, dict) else []
+
+        parsed: dict[str, Any] = {}
+        if txt.startswith("{"):
+            try:
+                parsed = json.loads(txt)
+            except Exception:
+                parsed = {}
+
+        raw_colors = parsed.get("colors") if isinstance(parsed, dict) else None
         if not isinstance(raw_colors, list):
-            return []
+            # tolerant fallback for non-JSON model output
+            raw_colors = re.split(r"[,;/\n]+", txt)
+
         out: list[str] = []
         for c in raw_colors:
             cc = _canon(str(c))
-            if cc and cc not in out:
+            if cc and cc in palette and cc not in out:
                 out.append(cc)
-        return out[: max(1, min(int(max_colors or 3), 4))]
+        return out[:limit]
     except Exception:
         return []
+
+
 def generate_youth_description(title: str, category_name: str | None = None, color: str | None = None) -> str:
     t = _norm(title)
     cat = _norm(category_name) or "лук"

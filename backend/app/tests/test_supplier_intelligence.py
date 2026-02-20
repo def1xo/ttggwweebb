@@ -192,10 +192,14 @@ def test_extract_catalog_items_ignores_rrc_when_only_generic_price_exists():
 def test_infer_colors_with_ai_openai_parses_and_normalizes(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
+    captured = {}
+
     class R:
         content = b"1"
+
         def raise_for_status(self):
             return None
+
         def json(self):
             return {
                 "choices": [
@@ -203,9 +207,43 @@ def test_infer_colors_with_ai_openai_parses_and_normalizes(monkeypatch):
                 ]
             }
 
+    def _fake_post(*args, **kwargs):
+        captured["payload"] = kwargs.get("json") or {}
+        return R()
+
+    monkeypatch.setattr(si.requests, "post", _fake_post)
+    got = si.infer_colors_with_ai(
+        title="Yeezy",
+        image_urls=["https://cdn/a.jpg", "https://cdn/b.jpg"],
+        provider="openai",
+    )
+    assert got == ["черный", "белый"]
+
+    msg = (captured.get("payload") or {}).get("messages", [{}, {"content": []}])[1]
+    content = msg.get("content") if isinstance(msg, dict) else []
+    image_parts = [x for x in (content or []) if isinstance(x, dict) and x.get("type") == "image_url"]
+    assert len(image_parts) == 2
+
+
+def test_infer_colors_with_ai_fallback_parses_plain_text(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    class R:
+        content = b"1"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {"message": {"content": "black, beige"}}
+                ]
+            }
+
     monkeypatch.setattr(si.requests, "post", lambda *a, **k: R())
     got = si.infer_colors_with_ai(title="Yeezy", image_urls=["https://cdn/a.jpg"], provider="openai")
-    assert got == ["черный", "белый"]
+    assert got == ["черный", "бежевый"]
 def test_generate_youth_description_mentions_title():
     txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
     assert "Худи Alpha" in txt
