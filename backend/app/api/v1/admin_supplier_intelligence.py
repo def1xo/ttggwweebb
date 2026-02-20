@@ -19,6 +19,8 @@ from app.db import models
 from app.services.importer_notifications import slugify
 from app.services import media_store
 from app.services.supplier_profiles import normalize_title_for_supplier
+from app.services.color_normalization import normalize_color
+from app.services.description_generator import DescriptionPayload, generate_description, should_regenerate_description
 from app.services.supplier_importers import (
     ImporterContext,
     get_importer_for_source,
@@ -34,8 +36,6 @@ from app.services.supplier_intelligence import (
     extract_catalog_items,
     extract_image_urls_from_html_page,
     fetch_tabular_preview,
-    generate_ai_product_description,
-    generate_youth_description,
     infer_colors_with_ai,
     image_print_signature_from_url,
     map_category,
@@ -58,7 +58,7 @@ ERROR_CODE_PARSE_FAILED = "parse_failed"
 ERROR_CODE_DB_CONFLICT = "db_conflict"
 ERROR_CODE_UNKNOWN = "unknown"
 TOP_FAILING_SOURCES_LIMIT = 5
-ERROR_SAMPLES_LIMIT = 3
+ERROR_SAMPLES_LIMIT = 5
 ERROR_MESSAGE_MAX_LEN = 500
 IMPORT_FALLBACK_STOCK_QTY = 9_999
 RRC_DISCOUNT_RUB = 300
@@ -88,8 +88,10 @@ def _split_color_tokens(raw: str | None) -> list[str]:
     out: list[str] = []
     for part in re.split(r"[,;/|]+|\s{2,}|\s+-\s+", txt):
         token = " ".join(part.strip().split())
-        if token and token not in out:
-            out.append(token)
+        canon = normalize_color(token) if token else None
+        val = canon or token
+        if val and val not in out:
+            out.append(val)
     return out
 
 
@@ -1007,8 +1009,9 @@ class ImportProductsIn(BaseModel):
     dry_run: bool = True
     publish_visible: bool = False
     ai_style_description: bool = True
-    ai_description_provider: str = Field(default="openrouter", max_length=64)
+    ai_description_provider: str = Field(default="template", max_length=64)
     ai_description_enabled: bool = True
+    force_regen: bool = False
     ai_color_distribution_enabled: bool = False
     ai_color_distribution_provider: str = Field(default="openai", max_length=64)
     use_avito_pricing: bool = True
@@ -1019,6 +1022,7 @@ class ImportSourceReport(BaseModel):
     source_id: int
     url: str
     imported: int = 0
+    skipped_count: int = 0
     errors: int = 0
     error_codes: dict[str, int] = Field(default_factory=dict)
     error_samples: list[str] = Field(default_factory=list)
@@ -1457,7 +1461,7 @@ def import_products_from_sources(
             raise
 
     def get_or_create_color(name: str | None) -> models.Color | None:
-        nm = (name or "").strip()
+        nm = normalize_color((name or "").strip()) or (name or "").strip()
         if not nm:
             return None
         s = (slugify(nm) or nm.lower())[:128]
@@ -1748,12 +1752,21 @@ def import_products_from_sources(
                 if not p:
                     p = _find_existing_global_product(int(category.id), _title_key(effective_title))
 
-                desc = str(it.get("description") or "").strip()
-                if payload.ai_style_description and not desc:
-                    if payload.ai_description_enabled and payload.ai_description_provider.lower() == "openrouter":
-                        desc = generate_ai_product_description(title, cat_name, it.get("color"))
-                    else:
-                        desc = generate_youth_description(title, cat_name, it.get("color"))
+                supplier_desc = str(it.get("description") or "").strip()
+                desc = supplier_desc
+                desc_source = None
+                desc_hash = None
+                desc_generated_at = None
+                if p and not supplier_desc and should_regenerate_description(getattr(p, "description", None), force_regen=bool(getattr(payload, "force_regen", False))):
+                    generated_desc, desc_source, desc_hash, desc_generated_at = generate_description(
+                        DescriptionPayload(title=title, category=cat_name, colors=_split_color_tokens(it.get("color")))
+                    )
+                    desc = generated_desc
+                elif (not p) and not supplier_desc:
+                    generated_desc, desc_source, desc_hash, desc_generated_at = generate_description(
+                        DescriptionPayload(title=title, category=cat_name, colors=_split_color_tokens(it.get("color")))
+                    )
+                    desc = generated_desc
                 # Guard against anomalously low supplier price parse (e.g. 799 for sneakers).
                 # For footwear-like titles enforce a minimal wholesale floor before retail pricing.
                 if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title):
@@ -1902,6 +1915,9 @@ def import_products_from_sources(
                         title=effective_title,
                         slug=slug,
                         description=desc or None,
+                        description_source=desc_source,
+                        description_hash=desc_hash,
+                        description_generated_at=desc_generated_at,
                         base_price=Decimal(str(sale_price)),
                         currency="RUB",
                         category_id=category.id,
@@ -1920,8 +1936,13 @@ def import_products_from_sources(
                     created_products += 1
                 else:
                     changed = False
-                    if desc and not p.description:
+                    if supplier_desc and supplier_desc != p.description:
+                        p.description = supplier_desc
+                    elif desc and should_regenerate_description(p.description, force_regen=bool(getattr(payload, "force_regen", False))):
                         p.description = desc
+                        p.description_source = desc_source
+                        p.description_hash = desc_hash
+                        p.description_generated_at = desc_generated_at
                         changed = True
                     current_base = float(p.base_price or 0)
                     should_fix_low_price = bool(
@@ -2023,22 +2044,22 @@ def import_products_from_sources(
                 # - for shop_vkus, allow fallback color inference from item text/gallery only when 2+ strong colors are detected.
                 src_color = it.get("color")
                 color_tokens = _split_color_tokens(src_color)
-                if len(color_tokens) <= 1 and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
-                    inferred_colors = _extract_shop_vkus_color_tokens(it if isinstance(it, dict) else {}, image_urls=image_urls)
-                    if len(inferred_colors) >= 1:
-                        color_tokens = inferred_colors
-
-                    if payload.ai_color_distribution_enabled:
-                        ai_colors = infer_colors_with_ai(
-                            title=title,
-                            image_urls=image_urls,
-                            provider=payload.ai_color_distribution_provider,
-                            max_colors=3,
-                        )
-                        if len(ai_colors) >= 1:
-                            color_tokens = ai_colors
+                colors_from_source = bool(color_tokens)
                 if len(color_tokens) == 0:
-                    color_tokens = [""]
+                    detected_single = normalize_color(getattr(p, "detected_color", None) if p else None)
+                    color_tokens = [detected_single or ""]
+                colors_final = [c for c in color_tokens if c]
+                consolidation_reason = "source_colors" if colors_from_source else "detected_single_fallback"
+                if len(image_urls) == 5 and len(colors_final) <= 1:
+                    consolidation_reason = "single_photoset"
+                logger.info(
+                    "supplier_color_resolution supplier=%s title=%s colors_from_source=%s colors_final=%s reason=%s",
+                    supplier_key,
+                    title[:120],
+                    color_tokens if colors_from_source else [],
+                    colors_final,
+                    consolidation_reason,
+                )
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
@@ -2355,6 +2376,7 @@ def import_products_from_sources(
                 except Exception:
                     ctx = None
                 logger.exception("supplier import item failed source_id=%s url=%s", src.id, src_url)
+                report.skipped_count = int(getattr(report, "skipped_count", 0) or 0) + 1
                 _register_source_error(report, exc, context=ctx)
 
         if not payload.dry_run and src_kind in {"google_sheet", "moysklad_catalog", "generic_html"} and items:
@@ -2375,7 +2397,7 @@ def import_products_from_sources(
 
         source_reports.append(report)
         logger.info(
-            "supplier_import_source_done supplier_name=%s source_id=%s created_products=%s updated_products=%s created_variants=%s updated_variants=%s imported_items=%s errors=%s",
+            "supplier_import_source_done supplier_name=%s source_id=%s created_products=%s updated_products=%s created_variants=%s updated_variants=%s imported_items=%s skipped_count=%s errors=%s",
             getattr(src, "supplier_name", None),
             int(src.id),
             created_products,
@@ -2383,6 +2405,7 @@ def import_products_from_sources(
             created_variants,
             updated_variants,
             report.imported,
+            report.skipped_count,
             report.errors,
         )
 

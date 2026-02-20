@@ -11,12 +11,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import requests
 from PIL import Image
 
+from app.services.color_normalization import CANONICAL_COLOR_POOL, normalize_color
+
 logger = logging.getLogger("color_detection")
 
-CANONICAL_COLORS: tuple[str, ...] = (
-    "black", "white", "gray", "beige", "brown", "yellow", "orange",
-    "red", "pink", "purple", "blue", "green", "multicolor",
-)
+CANONICAL_COLORS: tuple[str, ...] = tuple(x for x in CANONICAL_COLOR_POOL if x != "unknown")
 
 
 @dataclass
@@ -135,13 +134,13 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
     if sat_very_low:
         if l >= 88:
             return "white"
-        if l <= 28:
+        if l <= 26:
             return "black"
         if warm and l >= 62 and b >= 10:
             return "beige"
         if warm and l < 62:
             return "brown"
-        return "gray"
+        return "unknown"
 
     if sat_low:
         if warm and 58 <= l <= 88 and 8 <= b <= 26:
@@ -165,7 +164,7 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
         return "purple"
     if 0.52 <= h < 0.66:
         return "blue"
-    if 0.24 <= h < 0.52:
+    if 0.22 <= h < 0.49 and s >= 0.18:
         return "green"
     if warm:
         return "beige" if l >= 58 else "brown"
@@ -193,7 +192,7 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
     rr2, gg2, bb2 = min(pixels, key=lambda p: ( _rgb_to_lab(p)[0] - l) ** 2 + (_rgb_to_lab(p)[1] - a) ** 2 + (_rgb_to_lab(p)[2] - b) ** 2)
     h, s, v = colorsys.rgb_to_hsv(rr2 / 255.0, gg2 / 255.0, bb2 / 255.0)
 
-    color = canonical_color_from_lab_hsv(l, a, b, h, s, v)
+    color = normalize_color(canonical_color_from_lab_hsv(l, a, b, h, s, v)) or "unknown"
     share = float(main["count"]) / float(total)
     confidence = max(0.05, min(0.99, share * (0.65 + min(0.35, s))))
 
@@ -255,7 +254,7 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
                 if alt_conf < 0.55:
                     c1 = c2
         return {
-            "color": c1,
+            "color": normalize_color(c1) or c1,
             "confidence": round(min(0.99, s1 / max(0.001, sum(score.values())) + 0.15), 3),
             "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "forced_single_for_5": True},
             "per_image": per_image,
@@ -264,6 +263,9 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
     top = sorted(score.items(), key=lambda x: x[1], reverse=True)
     color = top[0][0]
     conf = top[0][1] / max(0.001, sum(score.values()))
+    if color == "unknown":
+        bright = sum(v.light for v in votes) / max(1, len(votes))
+        color = "white" if bright >= 75 else "black"
 
     if len(top) > 1:
         c2, s2 = top[1]
@@ -272,7 +274,7 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
             conf = max(conf, s2 / max(0.001, sum(score.values())))
 
     return {
-        "color": color,
+        "color": normalize_color(color) or color,
         "confidence": round(min(0.99, conf), 3),
         "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "forced_single_for_5": False},
         "per_image": per_image,
