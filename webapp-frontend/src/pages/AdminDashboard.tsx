@@ -1017,6 +1017,8 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [importTaskId, setImportTaskId] = useState<string | null>(null);
   const [importTaskStatus, setImportTaskStatus] = useState<string | null>(null);
   const [lastImportReport, setLastImportReport] = useState<any | null>(null);
+  const [aiColorDistributionEnabled, setAiColorDistributionEnabled] = useState(false);
+  const [aiColorDistributionProvider, setAiColorDistributionProvider] = useState("openai");
 
   const resetForm = () => {
     setEditingId(null);
@@ -1137,7 +1139,10 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
     try {
       setAutoImporting(true);
       setLastImportReport(null);
-      const res: any = await triggerSupplierAutoImportNow();
+      const res: any = await triggerSupplierAutoImportNow({
+        ai_color_distribution_enabled: aiColorDistributionEnabled,
+        ai_color_distribution_provider: aiColorDistributionProvider.trim() || "openai",
+      });
       if (res?.queued && res?.task_id) {
         setImportTaskId(String(res.task_id));
         setImportTaskStatus(String(res.status || "PENDING"));
@@ -1227,6 +1232,25 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
       <div className="card" style={{ padding: 12, marginBottom: 12, display: "grid", gap: 8 }}>
         <div style={{ fontWeight: 800 }}>Автообновление и автоимпорт</div>
         <div className="small-muted">Автоматический импорт настроен раз в 24 часа. Можно запустить вручную.</div>
+        <div style={{ fontWeight: 700, marginTop: 2 }}>AI-распределение цветов</div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={aiColorDistributionEnabled}
+            onChange={(e) => setAiColorDistributionEnabled(e.target.checked)}
+          />
+          <span>Включить ChatGPT/LLM для определения цветов</span>
+        </label>
+        <select
+          className="input"
+          value={aiColorDistributionProvider}
+          onChange={(e) => setAiColorDistributionProvider(e.target.value)}
+          disabled={!aiColorDistributionEnabled}
+        >
+          <option value="openai">openai (ChatGPT API)</option>
+          <option value="openrouter">openrouter</option>
+        </select>
+        <div className="small-muted">При включении импорт попробует определить цвета по фото через LLM (дороже и медленнее).</div>
         {importTaskId ? <div className="small-muted">Фоновая задача: {importTaskStatus || "PENDING"} • id: {importTaskId}</div> : null}
         <button className="btn" onClick={runAutoImportNow} disabled={autoImporting || items.length === 0}>
           {autoImporting ? "Запускаем..." : "Обновить и импортировать сейчас"}
