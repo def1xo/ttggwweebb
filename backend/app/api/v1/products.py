@@ -12,6 +12,35 @@ from app.services import media_store
 router = APIRouter(prefix="/products", tags=["products"])
 
 
+def _build_color_payload(p: models.Product) -> Dict[str, Any]:
+    variants = list(getattr(p, "variants", []) or [])
+    base_images = [im.url for im in sorted((p.images or []), key=lambda x: ((x.sort or 0), x.id))]
+    color_groups: Dict[str, Dict[str, Any]] = {}
+    for v in variants:
+        color_name = (v.color.name if getattr(v, "color", None) and v.color and v.color.name else None) or getattr(p, "detected_color", None) or "unknown"
+        grp = color_groups.setdefault(color_name, {"color": color_name, "variant_ids": [], "images": []})
+        grp["variant_ids"].append(v.id)
+        for u in (v.images or []):
+            if u and u not in grp["images"]:
+                grp["images"].append(u)
+    for grp in color_groups.values():
+        if not grp["images"]:
+            grp["images"] = list(base_images)
+
+    available = sorted([k for k in color_groups.keys() if k and k != "unknown"])
+    selected = available[0] if available else (getattr(p, "detected_color", None) or None)
+    if selected and selected in color_groups:
+        selected_images = color_groups[selected]["images"]
+    else:
+        selected_images = list(base_images)
+    return {
+        "available_colors": available,
+        "selected_color": selected,
+        "color_variants": sorted(list(color_groups.values()), key=lambda x: str(x.get("color") or "")),
+        "selected_color_images": selected_images,
+    }
+
+
 @router.get("")
 def list_products(
     category_id: Optional[int] = Query(None),
@@ -37,6 +66,7 @@ def list_products(
         return {"items": [], "total": 0, "page": page, "per_page": per_page}
     result = []
     for p in items:
+        color_payload = _build_color_payload(p)
         variants = []
         sizes = set()
         in_stock_sizes = set()
@@ -93,6 +123,9 @@ def list_products(
                 "has_stock": has_stock,
                 "sizes": sorted(list(in_stock_sizes or sizes), key=lambda x: float(x) if str(x).replace('.', '', 1).isdigit() else str(x)),
                 "colors": sorted(list(colors)),
+                "available_colors": color_payload["available_colors"],
+                "selected_color": color_payload["selected_color"],
+                "color_variants": color_payload["color_variants"],
                 "variants": variants,
             }
         )
@@ -119,6 +152,7 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
     sizes = sorted((in_stock_sizes or all_sizes), key=lambda x: float(x) if str(x).replace('.', '', 1).isdigit() else str(x))
     colors = sorted({(v.color.name if getattr(v, "color", None) and v.color else None) for v in (p.variants or []) if (getattr(v, "color", None) and v.color and v.color.name)})
 
+    color_payload = _build_color_payload(p)
     return {
         "id": p.id,
         "name": p.title,
@@ -130,6 +164,12 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
         "images": img_urls,
         "sizes": sizes,
         "colors": colors,
+        "available_colors": color_payload["available_colors"],
+        "selected_color": color_payload["selected_color"],
+        "color_variants": color_payload["color_variants"],
+        "selected_color_images": color_payload["selected_color_images"],
+        "detected_color": getattr(p, "detected_color", None),
+        "detected_color_confidence": (float(getattr(p, "detected_color_confidence", 0) or 0) if getattr(p, "detected_color_confidence", None) is not None else None),
         "variants": [
             {
                 "id": v.id,

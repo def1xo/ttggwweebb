@@ -15,6 +15,8 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
+from app.services.color_detection import detect_product_color
+
 
 def _safe_timeout(timeout_sec: int | float) -> tuple[float, float]:
     t = max(1.0, float(timeout_sec or 20))
@@ -1505,75 +1507,10 @@ def image_print_signature_from_url(url: str, timeout_sec: int = 20) -> str | Non
 
 
 def dominant_color_name_from_url(url: str, timeout_sec: int = 20) -> str | None:
-    def _classify_rgb(r_avg: float, g_avg: float, b_avg: float) -> str:
-        mx = max(r_avg, g_avg, b_avg)
-        mn = min(r_avg, g_avg, b_avg)
-        if mx < 45:
-            return "черный"
-        if mn > 215:
-            return "белый"
-        if abs(r_avg - g_avg) < 15 and abs(g_avg - b_avg) < 15:
-            return "серый"
-        if r_avg > g_avg * 1.18 and r_avg > b_avg * 1.18:
-            return "красный"
-        if g_avg > r_avg * 1.18 and g_avg > b_avg * 1.18:
-            return "зеленый"
-        if b_avg > r_avg * 1.18 and b_avg > g_avg * 1.18:
-            return "синий"
-        if r_avg > 150 and g_avg > 125 and b_avg < 120:
-            return "желтый"
-        if r_avg > 135 and b_avg > 120 and g_avg < 120:
-            return "фиолетовый"
-        return "мульти"
-
     try:
-        img = _load_image_for_analysis(_download_image_bytes(url, timeout_sec=timeout_sec))
-
-        small = img.resize((64, 64))
-        pixels = list(small.getdata())
-        n = len(pixels)
-        if n <= 0:
-            return None
-
-        def _avg_color(px: list[tuple[int, int, int]]) -> tuple[float, float, float]:
-            if not px:
-                return (0.0, 0.0, 0.0)
-            nn = len(px)
-            rs = sum(int(rr) for rr, _, _ in px)
-            gs = sum(int(gg) for _, gg, _ in px)
-            bs = sum(int(bb) for _, _, bb in px)
-            return (rs / nn, gs / nn, bs / nn)
-
-        r_avg, g_avg, b_avg = _avg_color(pixels)
-        coarse_global = _classify_rgb(r_avg, g_avg, b_avg)
-
-        # Central crop is usually the product body; it avoids background boxes/walls bias.
-        center_pixels: list[tuple[int, int, int]] = []
-        for y in range(12, 52):
-            row = y * 64
-            for x in range(12, 52):
-                center_pixels.append(pixels[row + x])
-        cr, cg, cb = _avg_color(center_pixels)
-        coarse_center = _classify_rgb(cr, cg, cb)
-
-        coarse = coarse_center
-        if coarse_center in {"белый", "серый", "мульти"} and coarse_global in {"черный", "коричневый", "бежевый", "синий", "зеленый", "фиолетовый", "желтый", "оранжевый"}:
-            coarse = coarse_global
-
-        # Accent-aware fallback: if mean is neutral, try vivid pixels only.
-        if coarse in {"белый", "серый", "мульти"}:
-            vivid: list[tuple[int, int, int]] = []
-            for (rr, gg, bb) in center_pixels or pixels:
-                h, ss, v = colorsys.rgb_to_hsv(rr / 255.0, gg / 255.0, bb / 255.0)
-                if ss >= 0.26 and v >= 0.2:
-                    vivid.append((rr, gg, bb))
-            if len(vivid) >= max(30, int(n * 0.02)):
-                vr, vg, vb = _avg_color(vivid)
-                vivid_name = _classify_rgb(vr, vg, vb)
-                if vivid_name not in {"черный", "белый", "серый", "мульти"}:
-                    return vivid_name
-
-        return coarse
+        result = detect_product_color([url])
+        color = result.get("color") if isinstance(result, dict) else None
+        return str(color) if color else None
     except Exception:
         return None
 
