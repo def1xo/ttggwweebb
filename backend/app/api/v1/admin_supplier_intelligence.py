@@ -31,6 +31,7 @@ from app.services.supplier_intelligence import (
     fetch_tabular_preview,
     generate_ai_product_description,
     generate_youth_description,
+    infer_colors_with_ai,
     image_print_signature_from_url,
     map_category,
     find_similar_images,
@@ -613,6 +614,12 @@ def _env_int(name: str, default: int) -> int:
     except Exception:
         return default
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
 
 def _default_max_items_per_source() -> int:
     return _env_int("SUPPLIER_IMPORT_MAX_ITEMS_PER_SOURCE", 1_000_000)
@@ -641,6 +648,14 @@ def _default_auto_import_fetch_timeout_sec() -> int:
 def _default_auto_import_tg_fallback_limit() -> int:
     return _env_int("SUPPLIER_AUTO_IMPORT_TG_FALLBACK_LIMIT", 5_000)
 
+
+
+def _default_auto_import_ai_color_distribution_enabled() -> bool:
+    return _env_bool("SUPPLIER_AUTO_IMPORT_AI_COLOR_DISTRIBUTION_ENABLED", False)
+
+
+def _default_auto_import_ai_color_distribution_provider() -> str:
+    return str(os.getenv("SUPPLIER_AUTO_IMPORT_AI_COLOR_DISTRIBUTION_PROVIDER") or "openai").strip() or "openai"
 
 def _force_sync_auto_import() -> bool:
     return str(os.getenv("SUPPLIER_AUTO_IMPORT_FORCE_SYNC") or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -989,6 +1004,8 @@ class ImportProductsIn(BaseModel):
     ai_style_description: bool = True
     ai_description_provider: str = Field(default="openrouter", max_length=64)
     ai_description_enabled: bool = True
+    ai_color_distribution_enabled: bool = False
+    ai_color_distribution_provider: str = Field(default="openai", max_length=64)
     use_avito_pricing: bool = True
     avito_max_pages: int = Field(default=1, ge=1, le=3)
 
@@ -1009,6 +1026,11 @@ class ImportProductsOut(BaseModel):
     updated_products: int
     created_variants: int
     source_reports: list[ImportSourceReport] = Field(default_factory=list)
+
+
+class AutoImportNowIn(BaseModel):
+    ai_color_distribution_enabled: bool | None = None
+    ai_color_distribution_provider: str | None = None
 
 
 class AutoImportNowOut(BaseModel):
@@ -1967,6 +1989,16 @@ def import_products_from_sources(
                     inferred_colors = _extract_shop_vkus_color_tokens(it if isinstance(it, dict) else {}, image_urls=image_urls)
                     if len(inferred_colors) >= 1:
                         color_tokens = inferred_colors
+
+                    if payload.ai_color_distribution_enabled:
+                        ai_colors = infer_colors_with_ai(
+                            title=title,
+                            image_urls=image_urls,
+                            provider=payload.ai_color_distribution_provider,
+                            max_colors=3,
+                        )
+                        if len(ai_colors) >= 1:
+                            color_tokens = ai_colors
                 if len(color_tokens) == 0:
                     color_tokens = [""]
 
@@ -2325,6 +2357,7 @@ def import_products_from_sources(
 
 @router.post("/supplier-intelligence/auto-import-now", response_model=AutoImportNowOut)
 def run_auto_import_now(
+    opts: AutoImportNowIn | None = None,
     _admin=Depends(get_current_admin_user),
     db: Session = Depends(get_db),
 ):
@@ -2344,6 +2377,8 @@ def run_auto_import_now(
         "publish_visible": True,
         "ai_style_description": True,
         "ai_description_enabled": True,
+        "ai_color_distribution_enabled": (opts.ai_color_distribution_enabled if opts and opts.ai_color_distribution_enabled is not None else _default_auto_import_ai_color_distribution_enabled()),
+        "ai_color_distribution_provider": (str(opts.ai_color_distribution_provider).strip() if opts and opts.ai_color_distribution_provider else _default_auto_import_ai_color_distribution_provider()),
         "use_avito_pricing": False,
         "avito_max_pages": 1,
         "max_items_per_source": _default_auto_import_max_items_per_source(),

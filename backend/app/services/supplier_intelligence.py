@@ -1104,6 +1104,115 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
     return out
 
 
+
+
+def infer_colors_with_ai(
+    *,
+    title: str,
+    image_urls: list[str],
+    provider: str = "openai",
+    max_colors: int = 3,
+) -> list[str]:
+    """Infer color tokens from gallery using LLM vision (best-effort)."""
+
+    alias = {
+        "чёрный": "черный",
+        "black": "черный",
+        "white": "белый",
+        "grey": "серый",
+        "gray": "серый",
+        "red": "красный",
+        "blue": "синий",
+        "green": "зеленый",
+        "beige": "бежевый",
+        "brown": "коричневый",
+        "pink": "розовый",
+        "purple": "фиолетовый",
+        "yellow": "желтый",
+        "orange": "оранжевый",
+    }
+
+    def _canon(v: str | None) -> str:
+        key = _norm(v)
+        if not key:
+            return ""
+        return str(alias.get(key) or key)
+
+    urls = [str(x).strip() for x in (image_urls or []) if str(x).strip()][:8]
+    if not urls:
+        return []
+
+    provider_key = _norm(provider) or "openai"
+    endpoint = ""
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    model = ""
+
+    if provider_key == "openai":
+        api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        if not api_key:
+            return []
+        endpoint = "https://api.openai.com/v1/chat/completions"
+        headers["Authorization"] = f"Bearer {api_key}"
+        model = (os.getenv("OPENAI_COLOR_MODEL") or "gpt-4o-mini").strip()
+    elif provider_key == "openrouter":
+        api_key = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+        if not api_key:
+            return []
+        endpoint = "https://openrouter.ai/api/v1/chat/completions"
+        headers["Authorization"] = f"Bearer {api_key}"
+        model = (os.getenv("OPENROUTER_COLOR_MODEL") or "openai/gpt-4o-mini").strip()
+    else:
+        return []
+
+    palette = [
+        "черный", "белый", "серый", "красный", "синий", "голубой", "зеленый", "бежевый",
+        "коричневый", "розовый", "фиолетовый", "желтый", "оранжевый",
+    ]
+    user_payload = {
+        "title": _norm(title),
+        "image_urls": urls,
+        "max_colors": max(1, min(int(max_colors or 3), 4)),
+        "allowed_colors": palette,
+        "task": "Определи 1-3 основных цвета именно товара (игнорируй коробку/фон). Верни строго JSON: {\"colors\":[...]}.",
+    }
+
+    try:
+        resp = requests.post(
+            endpoint,
+            timeout=(4.0, 30.0),
+            headers=headers,
+            json={
+                "model": model,
+                "temperature": 0,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Ты помощник e-commerce. Возвращай только валидный JSON без markdown.",
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(user_payload, ensure_ascii=False),
+                    },
+                ],
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json() if resp.content else {}
+        txt = str(data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
+        if txt.startswith("```"):
+            txt = re.sub(r"^```(?:json)?|```$", "", txt.strip(), flags=re.I).strip()
+        parsed = json.loads(txt) if txt.startswith("{") else {}
+        raw_colors = parsed.get("colors") if isinstance(parsed, dict) else []
+        if not isinstance(raw_colors, list):
+            return []
+        out: list[str] = []
+        for c in raw_colors:
+            cc = _canon(str(c))
+            if cc and cc not in out:
+                out.append(cc)
+        return out[: max(1, min(int(max_colors or 3), 4))]
+    except Exception:
+        return []
 def generate_youth_description(title: str, category_name: str | None = None, color: str | None = None) -> str:
     t = _norm(title)
     cat = _norm(category_name) or "лук"
