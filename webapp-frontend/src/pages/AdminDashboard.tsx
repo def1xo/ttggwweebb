@@ -1018,7 +1018,7 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
   const [importTaskStatus, setImportTaskStatus] = useState<string | null>(null);
   const [lastImportReport, setLastImportReport] = useState<any | null>(null);
   const [aiColorDistributionEnabled, setAiColorDistributionEnabled] = useState(false);
-  const [aiColorDistributionProvider, setAiColorDistributionProvider] = useState("openai");
+  const [aiColorDistributionProvider, setAiColorDistributionProvider] = useState("disabled");
 
   const resetForm = () => {
     setEditingId(null);
@@ -1141,7 +1141,7 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
       setLastImportReport(null);
       const res: any = await triggerSupplierAutoImportNow({
         ai_color_distribution_enabled: aiColorDistributionEnabled,
-        ai_color_distribution_provider: aiColorDistributionProvider.trim() || "openai",
+        ai_color_distribution_provider: aiColorDistributionProvider.trim() || "disabled",
       });
       if (res?.queued && res?.task_id) {
         setImportTaskId(String(res.task_id));
@@ -1239,7 +1239,7 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
             checked={aiColorDistributionEnabled}
             onChange={(e) => setAiColorDistributionEnabled(e.target.checked)}
           />
-          <span>Включить ChatGPT/LLM для определения цветов</span>
+          <span>Включить автоопределение цветов по фото</span>
         </label>
         <select
           className="input"
@@ -1247,10 +1247,9 @@ function AdminSupplierSourcesPanel({ onBack }: { onBack: () => void }) {
           onChange={(e) => setAiColorDistributionProvider(e.target.value)}
           disabled={!aiColorDistributionEnabled}
         >
-          <option value="openai">openai (ChatGPT API)</option>
-          <option value="openrouter">openrouter</option>
+          <option value="disabled">disabled</option>
         </select>
-        <div className="small-muted">При включении импорт попробует определить цвета по фото через LLM (дороже и медленнее).</div>
+        <div className="small-muted">При включении импорт попробует определить цвета по фото (дороже и медленнее).</div>
         {importTaskId ? <div className="small-muted">Фоновая задача: {importTaskStatus || "PENDING"} • id: {importTaskId}</div> : null}
         <button className="btn" onClick={runAutoImportNow} disabled={autoImporting || items.length === 0}>
           {autoImporting ? "Запускаем..." : "Обновить и импортировать сейчас"}
