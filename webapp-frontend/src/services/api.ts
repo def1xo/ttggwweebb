@@ -1406,9 +1406,9 @@ export async function importProductsFromSupplierSources(payload: {
   }
 }
 
-export async function triggerSupplierAutoImportNow() {
+export async function triggerSupplierAutoImportNow(payload?: { ai_color_distribution_enabled?: boolean; ai_color_distribution_provider?: string; }) {
   try {
-    const res = await axiosInstance.post("/api/admin/supplier-intelligence/auto-import-now", {});
+    const res = await axiosInstance.post("/api/admin/supplier-intelligence/auto-import-now", payload || {});
     return res.data;
   } catch (e) {
     return handleAxiosError(e);
