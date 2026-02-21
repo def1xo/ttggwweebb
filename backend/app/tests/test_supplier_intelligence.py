@@ -242,7 +242,19 @@ def test_infer_colors_with_ai_fallback_parses_plain_text(monkeypatch):
 def test_generate_youth_description_mentions_title():
     txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
     assert "Худи Alpha" in txt
-    assert "стрит" in txt.lower()
+    assert "цвет:" in txt.lower()
+
+
+def test_generate_youth_description_is_deterministic_for_same_input():
+    txt1 = generate_youth_description("Худи Alpha", "Кофты", "черный")
+    txt2 = generate_youth_description("Худи Alpha", "Кофты", "черный")
+    assert txt1 == txt2
+
+
+def test_generate_youth_description_varies_by_title_seed():
+    txt1 = generate_youth_description("Худи Alpha", "Кофты", "черный")
+    txt2 = generate_youth_description("Худи Beta", "Кофты", "черный")
+    assert txt1 != txt2
 
 
 def test_split_size_tokens_supports_lists_and_ranges():
@@ -339,7 +351,8 @@ def test_generate_ai_product_description_returns_local_text_without_key(monkeypa
 def test_generate_ai_product_description_local_fallback(monkeypatch):
     monkeypatch.setenv("DISABLED_ROUTER_KEY", "test-key")
     txt = generate_ai_product_description("Худи Alpha", "Кофты", "черный")
-    assert "стрит" in txt.lower()
+    assert "Худи Alpha" in txt
+    assert len(txt) <= 420
 
 
 def test_suggest_sale_price_markup():
