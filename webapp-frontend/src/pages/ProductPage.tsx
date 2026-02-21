@@ -6,6 +6,7 @@ import { useToast } from "../contexts/ToastContext";
 import { useFavorites } from "../contexts/FavoritesContext";
 import { hapticImpact } from "../utils/tg";
 import { HeartSmall } from "../components/Icons";
+import { buildDisplayColors } from "../utils/colorUtils";
 
 function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
@@ -99,20 +100,18 @@ function collectProductImages(p: any): string[] {
 function imagesForColor(p: any, color: string | null): string[] {
   if (!p) return [];
   if (!color) return collectProductImages(p);
-  const groups = Array.isArray(p?.color_variants) ? p.color_variants : [];
-  const hit = groups.find((g: any) => String(g?.color || "") === String(color));
-  if (hit?.images?.length) {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const item of hit.images) {
-      const normalized = normalizeMediaUrl(item);
-      if (!normalized || seen.has(normalized)) continue;
-      seen.add(normalized);
-      out.push(normalized);
-    }
-    if (out.length) return out;
+  const byColor = p?.images_by_color && typeof p.images_by_color === "object" ? p.images_by_color : {};
+  const raw = Array.isArray(byColor?.[color]) ? byColor[color] : [];
+  if (!raw.length) return collectProductImages(p);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    const normalized = normalizeMediaUrl(item);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
   }
-  return collectProductImages(p);
+  return out.length ? out : collectProductImages(p);
 }
 
 function getVariantStock(v: any): number {
@@ -215,12 +214,8 @@ export default function ProductPage() {
     return sortSizes(uniq([...fromVariants, ...fromProduct]).filter(isReasonableSize));
   }, [variants, product?.sizes]);
 
-  const colors = useMemo(() => {
-    const fromVariants = variants.map((v) => String(v?.color?.name || v?.color || "")).filter(Boolean);
-    const fromProduct = Array.isArray(product?.colors) ? product.colors.map((x: any) => String(x || "")).filter(Boolean) : [];
-    const fromColorVariants = Array.isArray(product?.available_colors) ? product.available_colors.map((x: any) => String(x || "")).filter(Boolean) : [];
-    return uniq([...fromVariants, ...fromProduct, ...fromColorVariants]);
-  }, [variants, product?.colors, product?.available_colors]);
+  const displayColors = useMemo(() => buildDisplayColors(product), [product, variants]);
+  const colors = useMemo(() => displayColors.map((x) => x.canonical), [displayColors]);
 
   const sizeOptions = sizes;
 
@@ -519,7 +514,7 @@ export default function ProductPage() {
                   }}
                 >
                   <ColorSwatch name={c} size={16} />
-                  <span style={{ fontWeight: 800 }}>{c}</span>
+                  <span style={{ fontWeight: 800 }}>{displayColors.find((x) => x.canonical === c)?.label || c}</span>
                 </button>
               ))}
             </div>
