@@ -92,6 +92,31 @@ def _split_color_tokens(raw: str | None) -> list[str]:
     return out
 
 
+def _count_unique_photo_urls(image_urls: list[str] | None, limit: int = 12) -> int:
+    seen: set[str] = set()
+    for raw in (image_urls or [])[: max(0, int(limit))]:
+        key = str(raw or "").strip()
+        if key:
+            seen.add(key)
+    return len(seen)
+
+
+def _shop_vkus_force_single_color(image_urls: list[str] | None) -> bool:
+    unique_photos = _count_unique_photo_urls(image_urls)
+    return 4 <= unique_photos <= 6
+
+
+def _shop_vkus_finalize_color_tokens(tokens: list[str], image_urls: list[str] | None) -> list[str]:
+    cleaned: list[str] = []
+    for token in tokens:
+        value = str(token or "").strip()
+        if value and value not in cleaned:
+            cleaned.append(value)
+    if _shop_vkus_force_single_color(image_urls):
+        return cleaned[:1]
+    return cleaned
+
+
 
 
 
@@ -139,7 +164,7 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
                 found.append(cc)
 
     if len(found) >= 2:
-        return found[:3]
+        return _shop_vkus_finalize_color_tokens(found[:3], image_urls)
 
     # Fallback: infer colors from gallery with signature clusters.
     # This avoids false two-color splits when one model has one colorway,
@@ -197,7 +222,7 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
                         if color_name not in out:
                             out.append(color_name)
                     if out:
-                        return out
+                        return _shop_vkus_finalize_color_tokens(out, image_urls)
 
     color_hits: dict[str, int] = {}
     for _, key in analyzed:
@@ -209,14 +234,14 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
         # Secondary fallback when signature grouping is fragmented by angle,
         # but two stable colors are repeatedly seen in gallery.
         if int(second_cnt) >= 2 and int(second_cnt) * 10 >= int(lead_cnt) * 5:
-            return [str(lead_color), str(second_color)]
+            return _shop_vkus_finalize_color_tokens([str(lead_color), str(second_color)], image_urls)
     strong = [k for k, v in ranked_hits if int(v or 0) >= 2]
     if strong:
-        return strong[:1]
+        return _shop_vkus_finalize_color_tokens(strong[:1], image_urls)
     if ranked_hits:
-        return [str(ranked_hits[0][0])]
+        return _shop_vkus_finalize_color_tokens([str(ranked_hits[0][0])], image_urls)
     if found:
-        return found[:1]
+        return _shop_vkus_finalize_color_tokens(found[:1], image_urls)
     return []
 
 def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
