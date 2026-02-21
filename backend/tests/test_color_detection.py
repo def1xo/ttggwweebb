@@ -1,3 +1,5 @@
+from PIL import Image, ImageDraw
+
 from app.services import color_detection as cd
 
 
@@ -44,3 +46,167 @@ def test_detect_product_color_for_5_images_forces_single(monkeypatch):
     out = cd.detect_product_color(["1", "2", "3", "4", "5"])
     assert out["color"] == "beige"
     assert out["debug"]["forced_single_for_5"] is True
+
+
+def test_extract_subject_pixels_keeps_black_and_white_subject():
+    img = Image.new("RGB", (220, 220), "white")
+    d = ImageDraw.Draw(img)
+    d.rectangle((40, 70, 180, 150), fill="black")
+    pixels = cd._extract_subject_pixels(img)
+    assert len(pixels) > 100
+
+
+def test_extract_subject_pixels_with_meta_has_foreground_coverage():
+    img = Image.new("RGB", (240, 240), "white")
+    d = ImageDraw.Draw(img)
+    d.ellipse((40, 70, 210, 190), fill=(30, 30, 30))
+    weighted, meta = cd._extract_subject_pixels_with_meta(img)
+    assert len(weighted) > 80
+    assert float(meta.get("coverage") or 0) > 0.18
+
+
+def test_detect_color_from_image_red_object_white_background(tmp_path):
+    img = Image.new("RGB", (360, 360), "white")
+    d = ImageDraw.Draw(img)
+    d.rectangle((90, 90, 270, 270), fill=(212, 30, 28))
+    p = tmp_path / "red_center.png"
+    img.save(p)
+    out = cd.detect_color_from_image_source(str(p))
+    assert out is not None
+    assert out.color == "red"
+
+
+def test_detect_product_color_black_white_composite(monkeypatch):
+    class R:
+        def __init__(self, color, conf, sat=0.1):
+            self.color = color
+            self.confidence = conf
+            self.cluster_share = 0.58
+            self.sat = sat
+            self.light = 64
+            self.lab_a = 0
+            self.lab_b = 0
+            self.debug = {}
+
+    seq = [R("black", 0.64), R("white", 0.62), R("black", 0.65), R("white", 0.63), R("black", 0.60)]
+    monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
+    out = cd.detect_product_color(["1", "2", "3", "4", "5"])
+    assert out["color"] == "black/white"
+    assert out["color"] != "multicolor"
+    assert out["color"] is not None
+
+
+def test_normalize_color_label_deduplicates_and_limits_parts():
+    assert cd.normalize_color_label("White / black / black") == "black/white"
+
+
+def test_normalize_color_label_maps_ru_and_aliases():
+    assert cd.normalize_color_label("фиолетовый") == "purple"
+    assert cd.normalize_color_label("grey/purple") == "gray/purple"
+
+
+def test_detect_color_from_image_green_object_white_background(tmp_path):
+    img = Image.new("RGB", (360, 360), "white")
+    d = ImageDraw.Draw(img)
+    d.rectangle((90, 90, 270, 270), fill=(25, 165, 55))
+    p = tmp_path / "green_center.png"
+    img.save(p)
+    out = cd.detect_color_from_image_source(str(p))
+    assert out is not None
+    assert out.color == "green"
+
+
+def test_detect_color_from_image_black_white_object(tmp_path):
+    img = Image.new("RGB", (360, 360), "white")
+    d = ImageDraw.Draw(img)
+    d.rectangle((80, 100, 170, 280), fill=(12, 12, 12))
+    d.rectangle((190, 100, 280, 280), fill=(245, 245, 245))
+    p = tmp_path / "bw_center.png"
+    img.save(p)
+    out = cd.detect_color_from_image_source(str(p))
+    assert out is not None
+    assert out.color == "black/white"
+
+
+def test_detect_product_color_prefers_purple_over_gray_noise(monkeypatch):
+    class R:
+        def __init__(self, color, conf):
+            self.color = color
+            self.confidence = conf
+            self.cluster_share = 0.55
+            self.sat = 0.3
+            self.light = 60
+            self.lab_a = 20
+            self.lab_b = -25
+            self.debug = {}
+
+    seq = [R("purple", 0.62), R("purple", 0.66), R("gray", 0.25), R("purple", 0.64), R("gray", 0.20)]
+    monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
+    out = cd.detect_product_color(["1", "2", "3", "4", "5"])
+    assert out["color"] == "purple"
+
+
+def test_detect_product_color_zoom_outlier_does_not_add_new_color(monkeypatch):
+    class R:
+        def __init__(self, color, conf, zoom=False):
+            self.color = color
+            self.confidence = conf
+            self.cluster_share = 0.56
+            self.sat = 0.2
+            self.light = 60
+            self.lab_a = 5
+            self.lab_b = -20
+            self.coverage = 0.92 if zoom else 0.45
+            self.zoom_flag = zoom
+            self.debug = {}
+
+    seq = [
+        R("black/purple", 0.74),
+        R("black/purple", 0.70),
+        R("black/purple", 0.69),
+        R("black/purple", 0.71),
+        R("beige", 0.82, zoom=True),
+    ]
+    monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
+    out = cd.detect_product_color(["1", "2", "3", "4", "5"])
+    assert out["color"] == "black/purple"
+
+
+def test_detect_product_color_5_photos_prefers_single_composite_label(monkeypatch):
+    class R:
+        def __init__(self, color, conf):
+            self.color = color
+            self.confidence = conf
+            self.cluster_share = 0.6
+            self.sat = 0.2
+            self.light = 60
+            self.lab_a = 0
+            self.lab_b = 0
+            self.coverage = 0.5
+            self.zoom_flag = False
+            self.debug = {}
+
+    seq = [
+        R("black/gray", 0.70),
+        R("black/gray", 0.67),
+        R("black/gray", 0.69),
+        R("black/gray", 0.66),
+        R("gray/beige", 0.42),
+    ]
+    monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
+    out = cd.detect_product_color(["1", "2", "3", "4", "5"])
+    assert out["color"] == "black/gray"
+    assert "/" in out["color"]
+
+
+def test_normalize_color_variants_converge_to_canonical_parts():
+    vals = [
+        cd.normalize_color_label("фиолетовый"),
+        cd.normalize_color_label("purple"),
+        cd.normalize_color_label("gray/purple"),
+        cd.normalize_color_label("grey/purple"),
+    ]
+    assert vals[0] == "purple"
+    assert vals[1] == "purple"
+    assert vals[2] == "gray/purple"
+    assert vals[3] == "gray/purple"

@@ -1,7 +1,6 @@
 
 from typing import Optional, List
 from decimal import Decimal
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
 from sqlalchemy.orm import Session
@@ -10,7 +9,6 @@ from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
 from app.services import media_store
 from app.services.importer_notifications import slugify
-from app.services.description_generator import DescriptionPayload, generate_description
 
 router = APIRouter(tags=["admin_products"])
 
@@ -194,11 +192,7 @@ def list_products(db: Session = Depends(get_db), admin: models.User = Depends(ge
             "visible": bool(getattr(p, "visible", False)),
             "category_id": p.category_id,
             "description": p.description,
-            "description_source": getattr(p, "description_source", None),
-            "description_generated_at": (getattr(p, "description_generated_at", None).isoformat() if getattr(p, "description_generated_at", None) else None),
             "default_image": p.default_image,
-            "description_source": getattr(p, "description_source", None),
-            "description_generated_at": (getattr(p, "description_generated_at", None).isoformat() if getattr(p, "description_generated_at", None) else None),
             "import_source_url": getattr(p, "import_source_url", None),
             "import_source_kind": getattr(p, "import_source_kind", None),
             "import_supplier_name": getattr(p, "import_supplier_name", None),
@@ -209,45 +203,6 @@ def list_products(db: Session = Depends(get_db), admin: models.User = Depends(ge
             "cost_price": (round(sum(latest_cost_by_variant.values()) / len(latest_cost_by_variant), 2) if latest_cost_by_variant else None),
         })
     return {"products": out}
-
-
-@router.post("/products/{product_id}/regenerate_description")
-def regenerate_product_description(
-    product_id: int,
-    force_regen: bool = Form(False),
-    db: Session = Depends(get_db),
-    admin: models.User = Depends(get_current_admin_user),
-):
-    p = db.query(models.Product).filter(models.Product.id == int(product_id)).one_or_none()
-    if not p:
-        raise HTTPException(404, detail="product not found")
-
-    if not should_regenerate_description(getattr(p, "description", None), getattr(p, "description_hash", None), force_regen=bool(force_regen)):
-        return {"ok": True, "skipped": True, "reason": "description is already valid"}
-
-    colors = sorted({(v.color.name if getattr(v, "color", None) and v.color else None) for v in (p.variants or []) if (getattr(v, "color", None) and v.color and v.color.name)})
-    payload = DescriptionPayload(
-        title=str(getattr(p, "title", "") or ""),
-        category=(getattr(getattr(p, "category", None), "name", None) if getattr(p, "category", None) else None),
-        colors=[str(c) for c in colors if c],
-        key_features=[],
-        materials=[],
-        season_style=[],
-    )
-    gen = build_description_generator()
-    text = gen.generate(payload)
-    if not text:
-        raise HTTPException(400, detail="failed to generate description")
-
-    p.description = text
-    meta = generated_meta(text, getattr(gen, "source", "template"))
-    p.description_source = meta.get("description_source")
-    p.description_hash = meta.get("description_hash")
-    ts = meta.get("description_generated_at")
-    p.description_generated_at = datetime.fromisoformat(ts) if ts else None
-    db.add(p)
-    db.commit()
-    return {"ok": True, "product_id": p.id, "description_source": p.description_source}
 
 
 @router.post("/products")
@@ -373,8 +328,6 @@ def create_product(
             "title": p.title,
             "base_price": float(p.base_price or 0),
             "default_image": p.default_image,
-            "description_source": getattr(p, "description_source", None),
-            "description_generated_at": (getattr(p, "description_generated_at", None).isoformat() if getattr(p, "description_generated_at", None) else None),
             "category_id": p.category_id,
             "sizes": size_list,
             "colors": [c.name for c in color_objs],
@@ -556,8 +509,6 @@ def update_product(
             "title": p.title,
             "base_price": float(p.base_price or 0),
             "default_image": p.default_image,
-            "description_source": getattr(p, "description_source", None),
-            "description_generated_at": (getattr(p, "description_generated_at", None).isoformat() if getattr(p, "description_generated_at", None) else None),
             "category_id": p.category_id,
             "sizes": sizes_out,
             "colors": colors_out,
@@ -605,23 +556,3 @@ def delete_category(category_id: int, db: Session = Depends(get_db), admin: mode
     db.delete(c)
     db.commit()
     return {"ok": True}
-
-
-@router.post("/products/{product_id}/regenerate-description")
-def regenerate_product_description(
-    product_id: int,
-    db: Session = Depends(get_db),
-    admin: models.User = Depends(get_current_admin_user),
-):
-    p = db.query(models.Product).filter(models.Product.id == int(product_id)).first()
-    if not p:
-        raise HTTPException(404, detail="product not found")
-    colors = sorted({(v.color.name if getattr(v, "color", None) and v.color else None) for v in (p.variants or []) if (getattr(v, "color", None) and v.color and v.color.name)})
-    text, source, desc_hash, generated_at = generate_description(DescriptionPayload(title=p.title, category=(p.category.name if getattr(p, "category", None) else None), colors=[c for c in colors if c]))
-    p.description = text
-    p.description_source = source
-    p.description_hash = desc_hash
-    p.description_generated_at = generated_at
-    db.add(p)
-    db.commit()
-    return {"ok": True, "description": p.description, "description_source": p.description_source, "description_generated_at": p.description_generated_at.isoformat() if p.description_generated_at else None}
