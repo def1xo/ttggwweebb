@@ -79,28 +79,23 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
                 }
             }
 
-    if canonical:
-        available = [canonical]
-        selected = canonical
-    else:
-        available = sorted([k for k in color_groups.keys() if k and k != "unknown"])
-        selected = available[0] if available else None
+    available = sorted([k for k in color_groups.keys() if k and k != "unknown"])
+    selected = canonical if (canonical and canonical in available) else (available[0] if available else canonical)
     if selected and selected in color_groups:
         selected_images = color_groups[selected]["images"]
     else:
         selected_images = list(base_images)
 
-    # 4-6 photos = one colorway: no per-color image filtering on frontend
-    if 4 <= len(base_images) <= 6:
-        selected_images = list(base_images)
-        if selected and selected not in color_groups:
-            color_groups[selected] = {
-                "color": selected,
-                "variant_ids": sorted({int(v.id) for v in variants if getattr(v, "id", None)}),
-                "images": list(base_images),
-            }
+    images_by_color = {str(k): list(v.get("images") or []) for k, v in color_groups.items() if k and k != "unknown"}
 
-    images_by_color = {str(k): (list(base_images) if 4 <= len(base_images) <= 6 else list(v.get("images") or [])) for k, v in color_groups.items() if k and k != "unknown" and (not canonical or str(k) == canonical)}
+    # one truth key for chip selection without breaking native photo grouping
+    if 4 <= len(base_images) <= 6 and available:
+        primary_key = max(available, key=lambda k: len((color_groups.get(k) or {}).get("images") or []))
+        color_keys = [str(primary_key)]
+    elif canonical:
+        color_keys = [str(canonical)]
+    else:
+        color_keys = list(available[:2])
     return {
         "available_colors": available,
         "selected_color": selected,
@@ -110,6 +105,7 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
         "colors": available,
         "default_color": selected,
         "images_by_color": images_by_color,
+        "color_keys": color_keys,
     }
 
 

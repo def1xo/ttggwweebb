@@ -146,6 +146,14 @@ function toRuLabel(canonical: string): string {
 }
 
 export function buildDisplayColors(product: any): DisplayColor[] {
+  const explicitKeys = Array.isArray(product?.color_keys)
+    ? product.color_keys.map((x: any) => normalizeCanonicalColor(String(x || ""))).filter(Boolean)
+    : [];
+  if (explicitKeys.length) {
+    const first = explicitKeys[0];
+    return [{ canonical: first, label: toRuLabel(first) }];
+  }
+
   const canonicalDirect = normalizeCanonicalColor(product?.canonical_color || product?.detected_color || "");
   if (canonicalDirect && canonicalDirect !== "multicolor") {
     return [{ canonical: canonicalDirect, label: toRuLabel(canonicalDirect) }];
