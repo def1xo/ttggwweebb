@@ -8,6 +8,8 @@ import os
 import re
 import statistics
 import time
+import hashlib
+import random
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any, Iterable, Optional
@@ -1120,17 +1122,56 @@ def infer_colors_with_ai(
     return []
 
 def generate_youth_description(title: str, category_name: str | None = None, color: str | None = None) -> str:
-    t = _norm(title)
-    cat = _norm(category_name) or "лук"
+    t = _norm(title) or "Эта модель"
+    cat = (_norm(category_name) or "лук").lower()
     clr = _norm(color)
-    mood = ""
-    if clr:
-        mood = f" Цвет: {clr}."
-    return (
-        f"{t} — вайбовый {cat.lower()} для повседневного стрит-стайла. "
-        f"Лёгко собирается в образ под универ, прогулки и вечерние вылазки.{mood} "
-        f"Сидит актуально, смотрится дорого, а носится каждый день без заморочек."
+
+    seed_src = f"{t}|{cat}|{clr}".encode("utf-8", errors="ignore")
+    rng = random.Random(int(hashlib.sha256(seed_src).hexdigest()[:16], 16))
+
+    vibes = ["вайбовый", "сочный", "актуальный", "чёткий", "стильный", "уверенный", "чистый"]
+    use_cases = ["под универ", "на прогулки", "на каждый день", "в поездки", "в вечерний выход"]
+    closers = [
+        "Сочетается с базой и акцентными вещами без лишней суеты.",
+        "Собирает сильный образ даже с простыми джинсами и худи.",
+        "Выглядит свежо в кадре и вживую, без перегруза по деталям.",
+        "Легко миксуется с кроссами, аксессуарами и верхом по сезону.",
+    ]
+    feature_map = {
+        "hoodie": "мягкий объём и расслабленный fit",
+        "худи": "мягкий объём и расслабленный fit",
+        "zip": "удобная молния и вариативная посадка",
+        "tee": "лёгкая база на каждый день",
+        "футбол": "лёгкая база на каждый день",
+        "jacket": "структурный силуэт и уверенный верхний слой",
+        "куртк": "структурный силуэт и уверенный верхний слой",
+        "jeans": "плотная фактура и стабильная посадка",
+        "джинс": "плотная фактура и стабильная посадка",
+        "sneaker": "удобная колодка и акцент в образе",
+        "кроссов": "удобная колодка и акцент в образе",
+    }
+    picked_features = [desc for k, desc in feature_map.items() if k in t.lower()]
+    feature_line = rng.choice(picked_features) if picked_features else "комфортный силуэт и аккуратный акцент на деталях"
+
+    templates = [
+        "{title} — {vibe} {cat}, который легко встраивается в гардероб {use_case}. {feature}. {closer}",
+        "{title} — {vibe} вариант для тех, кто любит чистый стиль и удобство {use_case}. {feature}. {closer}",
+        "{title} держит баланс между трендом и базой: {vibe} {cat} на {use_case}. {feature}. {closer}",
+        "{title} — это {vibe} настроение без перегруза: {cat} для {use_case}. {feature}. {closer}",
+        "{title} — {vibe} выбор в ротацию на каждый сезон. Подходит {use_case}, даёт уверенный силуэт. {feature}.",
+        "{title} заходит в лук с первого выхода: {vibe} {cat}, который удобно носить {use_case}. {feature}.",
+    ]
+    text = rng.choice(templates).format(
+        title=t,
+        vibe=rng.choice(vibes),
+        cat=cat,
+        use_case=rng.choice(use_cases),
+        feature=feature_line[:1].upper() + feature_line[1:],
+        closer=rng.choice(closers),
     )
+    if clr:
+        text += f" Цвет: {clr.lower()}."
+    return " ".join(text.split())
 
 
 def generate_ai_product_description(
