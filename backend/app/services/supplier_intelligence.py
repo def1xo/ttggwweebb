@@ -8,8 +8,6 @@ import os
 import re
 import statistics
 import time
-import hashlib
-import random
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any, Iterable, Optional
@@ -1102,6 +1100,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             if u not in image_urls:
                 image_urls.append(u)
         image_url = image_urls[0] if image_urls else None
+        post_link = next((u for u in image_urls if re.search(r"(?:t\.me|telegram\.me)/", str(u), flags=re.I)), None)
         description = _norm(row[idx_desc]) if idx_desc is not None and idx_desc < len(row) else ""
 
         out.append({
@@ -1115,6 +1114,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             "stock_map": stock_map or None,
             "image_url": image_url,
             "image_urls": image_urls,
+            "post_link": post_link,
             "description": description or None,
         })
     return out
@@ -1190,22 +1190,9 @@ def generate_ai_product_description(
 ) -> str:
     """Generate local fallback product copy without external providers."""
 
-    text = " ".join(str(generate_youth_description(title, category_name=category_name, color=color) or "").split())
-    if not text:
-        return ""
-    if len(text) <= max_chars:
-        return text
-    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", text) if p.strip()]
-    out = ""
-    for p in parts:
-        candidate = (out + " " + p).strip() if out else p
-        if len(candidate) <= max_chars:
-            out = candidate
-        else:
-            break
-    if out:
-        return out
-    return (text[: max(0, max_chars - 1)].rstrip() + "…") if max_chars > 1 else text[:max_chars]
+    text = generate_youth_description(title, category_name=category_name, color=color)
+    text = " ".join(str(text or "").split())
+    return text[:max_chars] if text else ""
 
 
 MIN_MARKUP_RATIO = 1.40

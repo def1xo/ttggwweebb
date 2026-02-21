@@ -2046,6 +2046,22 @@ def import_products_from_sources(
 
                 if len(color_tokens) == 0:
                     color_tokens = [""]
+                elif is_shop_vkus:
+                    color_tokens = [color_tokens[0]]
+
+                if is_shop_vkus and color_tokens and color_tokens[0] and shop_vkus_post_link:
+                    # when same model rows accidentally resolve to same color, keep row colorway separated by post link
+                    existing_same = (
+                        db.query(models.ProductVariant)
+                        .join(models.Color, models.Color.id == models.ProductVariant.color_id, isouter=True)
+                        .filter(models.ProductVariant.product_id == p.id)
+                        .filter(models.Color.name == color_tokens[0])
+                        .first()
+                    )
+                    if existing_same is not None:
+                        suffix = re.sub(r"\W+", "", shop_vkus_post_link.lower())[-6:]
+                        if suffix:
+                            color_tokens = [f"{color_tokens[0]}/{suffix}"]
 
                 if is_shop_vkus:
                     logger.info(
