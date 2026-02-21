@@ -7,6 +7,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from collections import deque
 
 import requests
 from PIL import Image
@@ -109,6 +110,8 @@ class ImageColorResult:
     light: float
     lab_a: float
     lab_b: float
+    coverage: float
+    zoom_flag: bool
     debug: Dict[str, Any]
 
 
@@ -200,7 +203,7 @@ def _download_or_open(source: str, timeout_sec: int = 12) -> Optional[Image.Imag
         return None
 
 
-def _extract_subject_pixels(img: Image.Image) -> List[Tuple[Tuple[int, int, int], float]]:
+def _extract_subject_pixels_with_meta(img: Image.Image) -> Tuple[List[Tuple[Tuple[int, int, int], float]], Dict[str, Any]]:
     w, h = img.size
     if w < 8 or h < 8:
         return []
@@ -229,7 +232,8 @@ def _extract_subject_pixels(img: Image.Image) -> List[Tuple[Tuple[int, int, int]
     cx, cy = ww / 2.0, hh / 2.0
     sigma = 0.35 * float(max(ww, hh))
     sigma2 = max(1.0, 2.0 * sigma * sigma)
-    pixels: List[Tuple[Tuple[int, int, int], float]] = []
+    subject_mask: List[List[bool]] = [[False for _ in range(ww)] for _ in range(hh)]
+    subject_candidate_count = 0
     for y in range(0, hh, 2):
         for x in range(0, ww, 2):
             r, g, b = px[x, y]
@@ -241,11 +245,54 @@ def _extract_subject_pixels(img: Image.Image) -> List[Tuple[Tuple[int, int, int]
                 bg_dist = min(_lab_distance(lab, bg) for bg in bg_clusters)
                 if bg_dist <= 10.0 and center_weight < 0.82:
                     continue
+            subject_mask[y][x] = True
+            subject_candidate_count += 1
+
+    # keep the largest connected component near center (anti-crop/noise)
+    visited: set[Tuple[int, int]] = set()
+    best_comp: List[Tuple[int, int]] = []
+    center_box = (int(ww * 0.30), int(hh * 0.30), int(ww * 0.70), int(hh * 0.70))
+    for y in range(0, hh, 2):
+        for x in range(0, ww, 2):
+            if (x, y) in visited or not subject_mask[y][x]:
+                continue
+            q = deque([(x, y)])
+            visited.add((x, y))
+            comp: List[Tuple[int, int]] = []
+            touches_center = False
+            while q:
+                cx2, cy2 = q.popleft()
+                comp.append((cx2, cy2))
+                if center_box[0] <= cx2 <= center_box[2] and center_box[1] <= cy2 <= center_box[3]:
+                    touches_center = True
+                for dx, dy in ((2, 0), (-2, 0), (0, 2), (0, -2)):
+                    nx, ny = cx2 + dx, cy2 + dy
+                    if nx < 0 or ny < 0 or nx >= ww or ny >= hh:
+                        continue
+                    if (nx, ny) in visited or not subject_mask[ny][nx]:
+                        continue
+                    visited.add((nx, ny))
+                    q.append((nx, ny))
+            if touches_center and len(comp) > len(best_comp):
+                best_comp = comp
+
+    best_set = set(best_comp)
+    pixels: List[Tuple[Tuple[int, int, int], float]] = []
+    for y in range(0, hh, 2):
+        for x in range(0, ww, 2):
+            if best_set and (x, y) not in best_set:
+                continue
+            if not best_set and not subject_mask[y][x]:
+                continue
+            r, g, b = px[x, y]
             edge_strength = 0.0
             if 1 <= x < (ww - 1) and 1 <= y < (hh - 1):
                 r2, g2, b2 = px[x + 1, y]
                 r3, g3, b3 = px[x, y + 1]
                 edge_strength = min(1.0, (abs(r - r2) + abs(g - g2) + abs(b - b2) + abs(r - r3) + abs(g - g3) + abs(b - b3)) / 180.0)
+
+            center_weight = math.exp(-(((x - cx) ** 2 + (y - cy) ** 2) / sigma2))
+            h1, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
 
             keep_score = center_weight * 0.72 + edge_strength * 0.28
             if s >= 0.18:
@@ -257,7 +304,19 @@ def _extract_subject_pixels(img: Image.Image) -> List[Tuple[Tuple[int, int, int]
     if len(pixels) > 2200:
         step = max(1, len(pixels) // 2200)
         pixels = pixels[::step]
-    return pixels
+    sampled_total = max(1, (ww // 2) * (hh // 2))
+    coverage = float(len(best_set) if best_set else subject_candidate_count) / float(sampled_total)
+    meta = {
+        "coverage": round(max(0.0, min(1.0, coverage)), 3),
+        "zoom_flag": bool(coverage > 0.85),
+        "small_mask_fallback": bool(coverage < 0.18),
+    }
+    return pixels, meta
+
+
+def _extract_subject_pixels(img: Image.Image) -> List[Tuple[int, int, int]]:
+    weighted, _meta = _extract_subject_pixels_with_meta(img)
+    return [p for p, _w in weighted]
 
 
 def _kmeans(points: Sequence[Tuple[float, float, float]], k: int = 3, max_iter: int = 12) -> List[Dict[str, Any]]:
@@ -345,7 +404,7 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
     img = _download_or_open(source, timeout_sec=timeout_sec)
     if img is None:
         return None
-    weighted_pixels = _extract_subject_pixels(img)
+    weighted_pixels, mask_meta = _extract_subject_pixels_with_meta(img)
     pixels = [p for p, _w in weighted_pixels]
     weights = [float(w) for _p, w in weighted_pixels]
     if not pixels:
@@ -406,9 +465,12 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
         light=l,
         lab_a=a,
         lab_b=b,
+        coverage=float(mask_meta.get("coverage") or 0.0),
+        zoom_flag=bool(mask_meta.get("zoom_flag")),
         debug={
             "clusters": [{"center": [round(x, 2) for x in c["center"]], "count": int(c["count"])} for c in clusters],
             "top2": [{"color": c, "share": round(sv, 3)} for c, sv in top2],
+            "mask": mask_meta,
         },
     )
 
@@ -450,6 +512,8 @@ def detect_product_color(image_sources: Sequence[str], title_hint: str | None = 
     per_image: List[Dict[str, Any]] = []
     for idx, v in enumerate(votes):
         w = max(0.05, float(v.confidence))
+        if bool(getattr(v, "zoom_flag", False)):
+            w *= 0.6
         if "/" in str(v.color):
             parts = [p for p in str(v.color).split("/") if p]
             if parts:
@@ -461,17 +525,28 @@ def detect_product_color(image_sources: Sequence[str], title_hint: str | None = 
         else:
             score[v.color] += w
         by_color[v.color] += 1
-        per_image.append({"idx": idx, "color": v.color, "confidence": round(v.confidence, 3), "share": round(v.cluster_share, 3)})
+        per_image.append({"idx": idx, "color": v.color, "confidence": round(v.confidence, 3), "share": round(v.cluster_share, 3), "coverage": round(float(getattr(v, 'coverage', 0.0)), 3), "zoom_flag": bool(getattr(v, 'zoom_flag', False))})
+
+    support_photos: Dict[str, int] = defaultdict(int)
+    for v in votes:
+        parts = [p for p in str(v.color or "").split("/") if p]
+        for p in (parts or [str(v.color)]):
+            support_photos[p] += 1
 
     # 5 photos rule: force one stable result (single color or a composite pair)
     if len(valid) == 5:
-        c1 = _compose_top_colors(score, sum(score.values()))
+        total_s = sum(score.values())
+        valid_score = {}
+        for c, s in score.items():
+            if support_photos.get(c, 0) >= 2 or s >= 0.55 * max(0.001, total_s):
+                valid_score[c] = s
+        c1 = _compose_top_colors(valid_score or score, sum((valid_score or score).values()))
         top = sorted(score.items(), key=lambda x: x[1], reverse=True)
         s1 = top[0][1] if top else 0.0
         out = {
             "color": c1,
             "confidence": round(min(0.99, s1 / max(0.001, sum(score.values())) + 0.15), 3),
-            "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "forced_single_for_5": True},
+            "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "support_photos": dict(support_photos), "forced_single_for_5": True},
             "per_image": per_image,
         }
         if (not out["color"] or float(out.get("confidence") or 0) < 0.35):
@@ -482,13 +557,18 @@ def detect_product_color(image_sources: Sequence[str], title_hint: str | None = 
         return out
 
     top = sorted(score.items(), key=lambda x: x[1], reverse=True)
-    color = _compose_top_colors(score, sum(score.values())) or top[0][0]
+    total_s = sum(score.values())
+    valid_score = {}
+    for c, s in score.items():
+        if support_photos.get(c, 0) >= 2 or s >= 0.55 * max(0.001, total_s):
+            valid_score[c] = s
+    color = _compose_top_colors(valid_score or score, sum((valid_score or score).values())) or top[0][0]
     conf = top[0][1] / max(0.001, sum(score.values()))
 
     out = {
         "color": color,
         "confidence": round(min(0.99, conf), 3),
-        "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "forced_single_for_5": False},
+        "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "support_photos": dict(support_photos), "forced_single_for_5": False},
         "per_image": per_image,
     }
     if (not out["color"] or float(out.get("confidence") or 0) < 0.35):

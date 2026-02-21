@@ -40,6 +40,26 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
         if not grp["images"]:
             grp["images"] = list(base_images)
 
+    # Merge singleton colors into matching composite groups (e.g. purple + gray/purple)
+    composites = [k for k in color_groups.keys() if isinstance(k, str) and "/" in str(k)]
+    for ck in composites:
+        parts = [x for x in str(ck).split("/") if x]
+        for part in parts:
+            if part == ck or part not in color_groups:
+                continue
+            src = color_groups.get(part) or {}
+            dst = color_groups.get(ck) or {}
+            dst_ids = set(int(x) for x in (dst.get("variant_ids") or []))
+            dst_ids.update(int(x) for x in (src.get("variant_ids") or []))
+            dst["variant_ids"] = sorted(dst_ids)
+            dst_imgs = list(dst.get("images") or [])
+            for u in (src.get("images") or []):
+                if u and u not in dst_imgs:
+                    dst_imgs.append(u)
+            dst["images"] = dst_imgs
+            color_groups[ck] = dst
+            color_groups.pop(part, None)
+
     # Collapse to a single color when all color groups share essentially same photoset.
     groups = list(color_groups.values())
     if len(groups) > 1:

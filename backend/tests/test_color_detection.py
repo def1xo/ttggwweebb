@@ -56,6 +56,15 @@ def test_extract_subject_pixels_keeps_black_and_white_subject():
     assert len(pixels) > 100
 
 
+def test_extract_subject_pixels_with_meta_has_foreground_coverage():
+    img = Image.new("RGB", (240, 240), "white")
+    d = ImageDraw.Draw(img)
+    d.ellipse((40, 70, 210, 190), fill=(30, 30, 30))
+    weighted, meta = cd._extract_subject_pixels_with_meta(img)
+    assert len(weighted) > 80
+    assert float(meta.get("coverage") or 0) > 0.18
+
+
 def test_detect_color_from_image_red_object_white_background(tmp_path):
     img = Image.new("RGB", (360, 360), "white")
     d = ImageDraw.Draw(img)
@@ -135,6 +144,32 @@ def test_detect_product_color_prefers_purple_over_gray_noise(monkeypatch):
     monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
     out = cd.detect_product_color(["1", "2", "3", "4", "5"])
     assert out["color"] == "purple"
+
+
+def test_detect_product_color_zoom_outlier_does_not_add_new_color(monkeypatch):
+    class R:
+        def __init__(self, color, conf, zoom=False):
+            self.color = color
+            self.confidence = conf
+            self.cluster_share = 0.56
+            self.sat = 0.2
+            self.light = 60
+            self.lab_a = 5
+            self.lab_b = -20
+            self.coverage = 0.92 if zoom else 0.45
+            self.zoom_flag = zoom
+            self.debug = {}
+
+    seq = [
+        R("black/purple", 0.74),
+        R("black/purple", 0.70),
+        R("black/purple", 0.69),
+        R("black/purple", 0.71),
+        R("beige", 0.82, zoom=True),
+    ]
+    monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
+    out = cd.detect_product_color(["1", "2", "3", "4", "5"])
+    assert out["color"] == "black/purple"
 
 
 def test_normalize_color_variants_converge_to_canonical_parts():
