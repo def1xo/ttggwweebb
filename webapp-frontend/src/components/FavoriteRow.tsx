@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Collapsible from "./Collapsible";
-import { buildDisplayColors } from "../utils/colorUtils";
 import { useFavorites } from "../contexts/FavoritesContext";
 import { hapticImpact, hapticSelection } from "../utils/tg";
 
@@ -67,7 +66,11 @@ export default function FavoriteRow({ product, index = 0, compact = false, onRem
           .filter(Boolean)
       )
     );
-    const colors = buildDisplayColors(product).map((x) => x.label);
+    const colors = uniq(
+      variants
+        .map((v) => String(v?.color?.name || v?.color || ""))
+        .filter(Boolean)
+    );
 
     let sizeLabel = "";
     if (sizes.length === 1) sizeLabel = sizes[0];
