@@ -578,6 +578,8 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
         # only when there are explicit bad-frame signals.
         pre = list(uniq)
         source = raw_norm or uniq
+        if len(source) >= 9:
+            pre = uniq[2:]
         if len(source) > 2:
             first_two = source[:2]
             rest = source[2:]

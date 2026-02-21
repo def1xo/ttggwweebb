@@ -8,7 +8,6 @@ from decimal import Decimal
 from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
 from app.services import media_store
-from app.services.color_detection import normalize_color_key, detect_product_colors_from_photos
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -23,29 +22,12 @@ def _images_overlap_ratio(a: list[str], b: list[str]) -> float:
     return inter / base
 
 
-
-
-def _ordered_uploaded_image_urls(p: models.Product) -> list[str]:
-    ordered_images = sorted((p.images or []), key=lambda x: ((x.sort or 0), x.id))
-    seen: set[str] = set()
-    out: list[str] = []
-    for im in ordered_images:
-        u = str(getattr(im, "url", "") or "").strip()
-        if not u or u in seen:
-            continue
-        seen.add(u)
-        out.append(u)
-    return out
-
 def _build_color_payload(p: models.Product) -> Dict[str, Any]:
-    canonical = normalize_color_key(getattr(p, "detected_color", None)) if getattr(p, "detected_color", None) else None
     variants = list(getattr(p, "variants", []) or [])
-    base_images = _ordered_uploaded_image_urls(p)
-
+    base_images = [im.url for im in sorted((p.images or []), key=lambda x: ((x.sort or 0), x.id))]
     color_groups: Dict[str, Dict[str, Any]] = {}
     for v in variants:
-        raw_color = (v.color.name if getattr(v, "color", None) and v.color and v.color.name else None) or getattr(p, "detected_color", None) or "unknown"
-        color_name = normalize_color_key(raw_color) or str(raw_color)
+        color_name = (v.color.name if getattr(v, "color", None) and v.color and v.color.name else None) or "unknown"
         grp = color_groups.setdefault(color_name, {"color": color_name, "variant_ids": [], "images": []})
         grp["variant_ids"].append(v.id)
         for u in (v.images or []):
@@ -56,42 +38,41 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
         if not grp["images"]:
             grp["images"] = list(base_images)
 
+    # Collapse to a single color when all color groups share essentially same photoset.
+    groups = list(color_groups.values())
+    if len(groups) > 1:
+        ref_images = max(groups, key=lambda g: len(g.get("images") or [])).get("images") or []
+        same_set = all(_images_overlap_ratio(ref_images, g.get("images") or []) >= 0.8 for g in groups)
+        if same_set:
+            merged_variant_ids: list[int] = []
+            for g in groups:
+                merged_variant_ids.extend([int(x) for x in (g.get("variant_ids") or [])])
+            single_color = (getattr(p, "detected_color", None) or groups[0].get("color") or "unknown")
+            color_groups = {
+                str(single_color): {
+                    "color": str(single_color),
+                    "variant_ids": sorted(set(merged_variant_ids)),
+                    "images": list(ref_images or base_images),
+                }
+            }
+
     available = sorted([k for k in color_groups.keys() if k and k != "unknown"])
-    fallback_single = normalize_color_key(canonical or (available[0] if available else "multicolor")) or "multicolor"
-    detected_map = detect_product_colors_from_photos(base_images)
-    color_keys = [normalize_color_key(x) for x in (detected_map.get("color_keys") or []) if normalize_color_key(x)]
-    if not color_keys:
-        color_keys = [fallback_single]
-
-    photo_keys = detected_map.get("photo_color_keys") or []
-    images_by_color: Dict[str, list[str]] = {}
-    if len(photo_keys) == len(base_images) and photo_keys:
-        for idx, img in enumerate(base_images):
-            key = normalize_color_key(photo_keys[idx]) or color_keys[0]
-            images_by_color.setdefault(key, []).append(img)
-    elif len(color_keys) == 1:
-        images_by_color = {color_keys[0]: list(base_images)} if base_images else {}
-    elif len(color_keys) == 2 and len(base_images) > 6:
-        a, b = color_keys[0], color_keys[1]
-        images_by_color = {
-            a: [u for i, u in enumerate(base_images) if i <= 1 or (2 <= i < len(base_images) - 2)],
-            b: [u for i, u in enumerate(base_images) if i >= len(base_images) - 2],
-        }
+    selected = available[0] if available else None
+    if selected and selected in color_groups:
+        selected_images = color_groups[selected]["images"]
     else:
-        images_by_color = {k: list((color_groups.get(k) or {}).get("images") or []) for k in color_keys}
+        selected_images = list(base_images)
 
-    selected = color_keys[0] if color_keys else fallback_single
-    selected_images = list(images_by_color.get(selected, base_images)) if selected else list(base_images)
-
+    images_by_color = {str(k): list(v.get("images") or []) for k, v in color_groups.items() if k and k != "unknown"}
     return {
         "available_colors": available,
         "selected_color": selected,
         "color_variants": sorted(list(color_groups.values()), key=lambda x: str(x.get("color") or "")),
         "selected_color_images": selected_images,
+        # New unified keys (legacy keys above are preserved for compatibility)
         "colors": available,
         "default_color": selected,
         "images_by_color": images_by_color,
-        "color_keys": color_keys,
     }
 
 
@@ -135,7 +116,7 @@ def list_products(
                     if int(getattr(v, "stock_quantity", 0) or 0) > 0:
                         in_stock_sizes.add(size_name)
                 if getattr(v, "color", None) and v.color and v.color.name:
-                    colors.add(normalize_color_key(v.color.name) or v.color.name)
+                    colors.add(v.color.name)
             except Exception:
                 pass
             variants.append(
@@ -206,7 +187,7 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
         if (getattr(v, "size", None) and v.size and v.size.name and int(getattr(v, "stock_quantity", 0) or 0) > 0)
     }
     sizes = sorted((in_stock_sizes or all_sizes), key=lambda x: float(x) if str(x).replace('.', '', 1).isdigit() else str(x))
-    colors = sorted({(normalize_color_key(v.color.name) or v.color.name) for v in (p.variants or []) if (getattr(v, "color", None) and v.color and v.color.name)})
+    colors = sorted({(v.color.name if getattr(v, "color", None) and v.color else None) for v in (p.variants or []) if (getattr(v, "color", None) and v.color and v.color.name)})
 
     color_payload = _build_color_payload(p)
     return {
