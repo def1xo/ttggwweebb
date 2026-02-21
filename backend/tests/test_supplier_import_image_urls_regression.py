@@ -1433,3 +1433,165 @@ def test_import_products_shop_vkus_overwrites_stale_sizes_across_colors_when_ava
         db.close()
         Base.metadata.drop_all(engine)
 
+
+def test_import_products_shop_vkus_splits_two_rows_by_post_link_into_two_colorways(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-split/htmlview",
+            supplier_name="shop_vkus",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото", "Ссылка"],
+                    ["Nike ZoomX", "4900", "41-43", "41", "https://t.me/shop_vkus/1001?single", "https://t.me/shop_vkus/1001?single"],
+                    ["Nike ZoomX", "4900", "42-44", "44", "https://t.me/shop_vkus/1002?single", "https://t.me/shop_vkus/1002?single"],
+                ]
+            }
+
+        def _fake_extract(url, *args, **kwargs):
+            if "1001" in str(url):
+                return [
+                    "https://cdn.example.com/a1.jpg",
+                    "https://cdn.example.com/a2.jpg",
+                    "https://cdn.example.com/a3.jpg",
+                    "https://cdn.example.com/a4.jpg",
+                ]
+            return [
+                "https://cdn.example.com/b1.jpg",
+                "https://cdn.example.com/b2.jpg",
+                "https://cdn.example.com/b3.jpg",
+                "https://cdn.example.com/b4.jpg",
+            ]
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "extract_image_urls_from_html_page", _fake_extract)
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+        monkeypatch.setattr(
+            asi,
+            "dominant_color_name_from_url",
+            lambda u: "белый" if "/a" in str(u or "") else "черный",
+        )
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        products = db.query(models.Product).all()
+        assert len(products) == 1
+        p = products[0]
+        variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
+        colors = {db.query(models.Color).filter(models.Color.id == v.color_id).one().name for v in variants if v.color_id}
+        assert len(colors) == 2
+        by_color_images = {}
+        by_color_sizes = {}
+        for v in variants:
+            c = db.query(models.Color).filter(models.Color.id == v.color_id).one().name
+            by_color_images.setdefault(c, set()).update(v.images or [])
+            s = db.query(models.Size).filter(models.Size.id == v.size_id).one().name if v.size_id else ""
+            by_color_sizes.setdefault(c, set()).add(s)
+        assert by_color_images["белый"] == {
+            "https://cdn.example.com/a1.jpg",
+            "https://cdn.example.com/a2.jpg",
+            "https://cdn.example.com/a3.jpg",
+            "https://cdn.example.com/a4.jpg",
+        }
+        assert by_color_images["черный"] == {
+            "https://cdn.example.com/b1.jpg",
+            "https://cdn.example.com/b2.jpg",
+            "https://cdn.example.com/b3.jpg",
+            "https://cdn.example.com/b4.jpg",
+        }
+        assert by_color_sizes["белый"] == {"41", "42", "43"}
+        assert by_color_sizes["черный"] == {"42", "43", "44"}
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+
+
+def test_import_products_shop_vkus_single_row_keeps_single_colorway_for_four_to_six_photos(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-single/htmlview",
+            supplier_name="shop_vkus",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото"],
+                    ["NB 9060", "3900", "41-44", "42", "https://t.me/shop_vkus/2001?single"],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "extract_image_urls_from_html_page", lambda *a, **k: [
+            "https://cdn.example.com/c1.jpg",
+            "https://cdn.example.com/c2.jpg",
+            "https://cdn.example.com/c3.jpg",
+            "https://cdn.example.com/c4.jpg",
+            "https://cdn.example.com/c5.jpg",
+        ])
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+        monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый")
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        products = db.query(models.Product).all()
+        assert len(products) == 1
+        p = products[0]
+        variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
+        colors = {db.query(models.Color).filter(models.Color.id == v.color_id).one().name for v in variants if v.color_id}
+        assert colors == {"белый"}
+        merged_images = set()
+        for v in variants:
+            merged_images.update(v.images or [])
+        assert merged_images == {
+            "https://cdn.example.com/c1.jpg",
+            "https://cdn.example.com/c2.jpg",
+            "https://cdn.example.com/c3.jpg",
+            "https://cdn.example.com/c4.jpg",
+            "https://cdn.example.com/c5.jpg",
+        }
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
