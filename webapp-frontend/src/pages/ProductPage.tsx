@@ -99,6 +99,8 @@ function collectProductImages(p: any): string[] {
 
 function imagesForColor(p: any, color: string | null): string[] {
   if (!p) return [];
+  const allImages = collectProductImages(p);
+  if (allImages.length >= 4 && allImages.length <= 6) return allImages;
   if (!color) return collectProductImages(p);
   const groups = Array.isArray(p?.color_variants) ? p.color_variants : [];
   const hit = groups.find((g: any) => String(g?.color || "") === String(color));
