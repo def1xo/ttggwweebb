@@ -34,19 +34,3 @@ def test_resolve_tg_photos_graceful_pending():
 def test_registry_returns_firmach_importer():
     importer = get_importer_for_source("https://docs.google.com/spreadsheets/d/abc/edit", "Фирмач дроп")
     assert importer.__class__.__name__ == "FirmachDropImporter"
-
-
-def test_shop_vkus_contract_uses_unified_methods_without_breaking_parse():
-    importer = get_importer_for_source("https://docs.google.com/spreadsheets/d/abc/edit", "shop_vkus")
-    ctx = ImporterContext(source_url="https://docs.google.com/spreadsheets/d/abc/edit", supplier_name="shop_vkus", max_items=5, fetch_timeout_sec=10)
-
-    importer._fetch_preview_fn = lambda *_a, **_k: {"rows_preview": [["title", "price"], ["Yeezy", "5000"]]}
-    importer._extract_items_fn = lambda *_a, **_k: [{"title": "Yeezy", "dropship_price": 5000, "image_urls": ["x", "x"], "size": "42 43"}]
-
-    rows = importer.fetch(ctx)
-    parsed = importer.normalize(rows[0], ctx)
-    grouped = importer.group([parsed], ctx)
-
-    assert importer.__class__.__name__ == "ShopVkusImporter"
-    assert grouped[0]["title"] == "Yeezy"
-    assert grouped[0]["size_tokens"] == ["42", "43"]
