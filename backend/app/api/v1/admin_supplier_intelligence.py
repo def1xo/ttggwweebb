@@ -573,12 +573,12 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
         return uniq
 
     if supplier_key == "shop_vkus":
-        # shop_vkus feeds often prepend two service frames in longer galleries.
+        # shop_vkus feeds can prepend service frames in some galleries.
+        # Keep clean short galleries in original order and drop the leading pair
+        # only when there are explicit bad-frame signals.
         pre = list(uniq)
         source = raw_norm or uniq
-        if len(source) >= 7:
-            pre = uniq[2:]
-        elif len(source) > 2:
+        if len(source) > 2:
             first_two = source[:2]
             rest = source[2:]
             has_supplier_marker = any(
@@ -2232,11 +2232,36 @@ def import_products_from_sources(
                         if listed_sizes and size_list_like and not size_range_like:
                             stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in listed_sizes}
 
+                if (
+                    not size_tokens
+                    and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None)
+                    and raw_stock_str
+                    and stock_qty_parse_failed
+                ):
+                    inferred_from_stock = [
+                        str(x).strip()[:16]
+                        for x in split_size_tokens(raw_stock_str)
+                        if str(x).strip()[:16] and re.fullmatch(r"\d{2,3}(?:[.,]5)?", str(x).strip()[:16])
+                    ]
+                    if inferred_from_stock:
+                        size_tokens = list(dict.fromkeys(inferred_from_stock))
+                        if not stock_map:
+                            stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in size_tokens}
+
                 if not size_tokens and stock_map:
                     size_tokens = sorted(
                         stock_map.keys(),
                         key=lambda x: float(x) if str(x).replace(".", "", 1).isdigit() else str(x),
                     )
+
+                if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
+                    generic_in_stock_signal = bool(raw_stock_str and re.search(r"(?i)\b(в\s*наличии|есть|in\s*stock|available)\b", raw_stock_str))
+                    if generic_in_stock_signal and size_tokens and size_tokens != [""]:
+                        if not stock_map:
+                            stock_map = {str(sz): int(IMPORT_FALLBACK_STOCK_QTY) for sz in size_tokens if str(sz).strip()}
+                        elif all(int(v or 0) <= 1 for v in stock_map.values()):
+                            stock_map = {str(sz): int(IMPORT_FALLBACK_STOCK_QTY) for sz in size_tokens if str(sz).strip()}
+
                 if not size_tokens:
                     size_tokens = [""]
 
@@ -2255,7 +2280,7 @@ def import_products_from_sources(
                         size_key = str(size_name or "").strip()
                         if has_stock_map:
                             per_variant_stock = int(stock_map.get(size_key, 0) or 0)
-                        elif has_explicit_stock:
+                        elif has_explicit_stock and not stock_qty_parse_failed:
                             per_variant_stock = int(base_stock)
                             if remainder_stock > 0:
                                 per_variant_stock += 1
