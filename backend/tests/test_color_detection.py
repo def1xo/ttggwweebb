@@ -1,8 +1,9 @@
+from PIL import Image
+
 from app.services import color_detection as cd
 
 
 def test_beige_vs_yellow_low_saturation_prefers_beige():
-    # low sat + warm Lab should remain beige even in yellow-ish hue window
     color = cd.canonical_color_from_lab_hsv(l=72, a=4, b=16, h=0.14, s=0.18, v=0.82)
     assert color == "beige"
 
@@ -44,3 +45,15 @@ def test_detect_product_color_for_5_images_forces_single(monkeypatch):
     out = cd.detect_product_color(["1", "2", "3", "4", "5"])
     assert out["color"] == "beige"
     assert out["debug"]["forced_single_for_5"] is True
+
+
+def test_black_product_on_blue_background_is_not_blue(monkeypatch):
+    img = Image.new("RGB", (220, 220), (30, 70, 150))
+    for x in range(70, 150):
+        for y in range(70, 150):
+            img.putpixel((x, y), (15, 15, 15))
+
+    monkeypatch.setattr(cd, "_download_or_open", lambda *_a, **_k: img)
+    out = cd.detect_product_color(["mock://img"])
+    assert out["color"] in {"black", "gray"}
+    assert out["color"] != "blue"
