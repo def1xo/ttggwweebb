@@ -40,17 +40,10 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
 
     # Collapse to a single color when all color groups share essentially same photoset.
     groups = list(color_groups.values())
-    source_colors = set()
-    media_meta = getattr(p, "import_media_meta", None) if isinstance(getattr(p, "import_media_meta", None), dict) else {}
-    for c in (media_meta.get("colors_from_source_list") or []):
-        if c:
-            source_colors.add(str(c))
-
-    if len(groups) > 1 and len(source_colors) <= 1:
+    if len(groups) > 1:
         ref_images = max(groups, key=lambda g: len(g.get("images") or [])).get("images") or []
         same_set = all(_images_overlap_ratio(ref_images, g.get("images") or []) >= 0.8 for g in groups)
-        forced_five_photos = len(ref_images) == 5
-        if same_set or forced_five_photos:
+        if same_set:
             merged_variant_ids: list[int] = []
             for g in groups:
                 merged_variant_ids.extend([int(x) for x in (g.get("variant_ids") or [])])
@@ -69,31 +62,17 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
         selected_images = color_groups[selected]["images"]
     else:
         selected_images = list(base_images)
-    images_by_color = {k: list(v.get("images") or []) for k, v in color_groups.items() if k}
-    consolidation_reason = None
-    if len(color_groups) > 1:
-        all_sets = [set(v.get("images") or []) for v in color_groups.values() if (v.get("images") or [])]
-        overlap = 0.0
-        if len(all_sets) >= 2:
-            inter = len(set.intersection(*all_sets))
-            union = len(set.union(*all_sets))
-            overlap = (inter / union) if union else 0.0
-        if (len(base_images) == 5) or (overlap >= 0.8):
-            keep = selected or next(iter(color_groups.keys()))
-            color_groups = {keep: color_groups[keep]} if keep in color_groups else color_groups
-            available = [keep] if keep else []
-            selected = keep
-            images_by_color = {keep: list(color_groups[keep].get("images") or base_images)} if keep else {}
-            consolidation_reason = "single_photoset"
 
+    images_by_color = {str(k): list(v.get("images") or []) for k, v in color_groups.items() if k and k != "unknown"}
     return {
         "available_colors": available,
         "selected_color": selected,
-        "default_color": selected,
         "color_variants": sorted(list(color_groups.values()), key=lambda x: str(x.get("color") or "")),
-        "images_by_color": images_by_color,
         "selected_color_images": selected_images,
-        "consolidation_reason": consolidation_reason,
+        # New unified keys (legacy keys above are preserved for compatibility)
+        "colors": available,
+        "default_color": selected,
+        "images_by_color": images_by_color,
     }
 
 
@@ -181,8 +160,8 @@ def list_products(
                 "colors": sorted(list(colors)),
                 "available_colors": color_payload["available_colors"],
                 "selected_color": color_payload["selected_color"],
-                "default_color": color_payload["default_color"],
                 "color_variants": color_payload["color_variants"],
+                "default_color": color_payload["default_color"],
                 "images_by_color": color_payload["images_by_color"],
                 "variants": variants,
             }
@@ -216,7 +195,6 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
         "name": p.title,
         "title": p.title,
         "description": p.description,
-        "description_source": getattr(p, "description_source", None),
         "base_price": float(p.base_price or 0),
         "price": float(p.base_price or 0),
         "default_image": p.default_image,
@@ -225,13 +203,10 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
         "colors": colors,
         "available_colors": color_payload["available_colors"],
         "selected_color": color_payload["selected_color"],
-        "default_color": color_payload["default_color"],
         "color_variants": color_payload["color_variants"],
-        "images_by_color": color_payload["images_by_color"],
         "selected_color_images": color_payload["selected_color_images"],
-        "consolidation_reason": color_payload["consolidation_reason"],
-        "description_source": getattr(p, "description_source", None),
-        "description_generated_at": (getattr(p, "description_generated_at", None).isoformat() if getattr(p, "description_generated_at", None) else None),
+        "default_color": color_payload["default_color"],
+        "images_by_color": color_payload["images_by_color"],
         "detected_color": getattr(p, "detected_color", None),
         "detected_color_confidence": (float(getattr(p, "detected_color_confidence", 0) or 0) if getattr(p, "detected_color_confidence", None) is not None else None),
         "variants": [
