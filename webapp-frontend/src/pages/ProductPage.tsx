@@ -6,6 +6,7 @@ import { useToast } from "../contexts/ToastContext";
 import { useFavorites } from "../contexts/FavoritesContext";
 import { hapticImpact } from "../utils/tg";
 import { HeartSmall } from "../components/Icons";
+import { buildDisplayColors } from "../utils/colorUtils";
 
 function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
@@ -215,12 +216,8 @@ export default function ProductPage() {
     return sortSizes(uniq([...fromVariants, ...fromProduct]).filter(isReasonableSize));
   }, [variants, product?.sizes]);
 
-  const colors = useMemo(() => {
-    const fromVariants = variants.map((v) => String(v?.color?.name || v?.color || "")).filter(Boolean);
-    const fromProduct = Array.isArray(product?.colors) ? product.colors.map((x: any) => String(x || "")).filter(Boolean) : [];
-    const fromColorVariants = Array.isArray(product?.available_colors) ? product.available_colors.map((x: any) => String(x || "")).filter(Boolean) : [];
-    return uniq([...fromVariants, ...fromProduct, ...fromColorVariants]);
-  }, [variants, product?.colors, product?.available_colors]);
+  const displayColors = useMemo(() => buildDisplayColors(product), [product, variants]);
+  const colors = useMemo(() => displayColors.map((x) => x.canonical), [displayColors]);
 
   const sizeOptions = sizes;
 
@@ -519,7 +516,7 @@ export default function ProductPage() {
                   }}
                 >
                   <ColorSwatch name={c} size={16} />
-                  <span style={{ fontWeight: 800 }}>{c}</span>
+                  <span style={{ fontWeight: 800 }}>{displayColors.find((x) => x.canonical === c)?.label || c}</span>
                 </button>
               ))}
             </div>
