@@ -14,20 +14,34 @@ from PIL import Image
 logger = logging.getLogger("color_detection")
 
 CANONICAL_COLORS: tuple[str, ...] = (
-    "black", "white", "gray", "beige", "brown", "yellow", "orange",
-    "red", "pink", "purple", "blue", "green", "multicolor",
+    "black", "white", "gray",
+    "beige", "brown",
+    "navy", "blue", "light_blue", "teal", "turquoise",
+    "green", "lime", "olive",
+    "yellow", "orange",
+    "red", "burgundy", "pink",
+    "purple", "lavender",
+    "silver", "gold",
+    "multicolor",
 )
 
 COLOR_PRIORITY: tuple[str, ...] = (
-    "black", "white", "gray", "beige", "brown", "yellow", "orange",
-    "red", "pink", "purple", "blue", "green", "multicolor",
+    "black", "white", "gray", "navy", "blue", "light_blue", "teal", "turquoise",
+    "green", "lime", "olive", "yellow", "orange", "red", "burgundy", "pink",
+    "purple", "lavender", "beige", "brown", "silver", "gold", "multicolor",
 )
 
 COLOR_SYNONYMS: dict[str, str] = {
     "grey": "gray",
     "violet": "purple",
+    "lilac": "lavender",
     "offwhite": "white",
     "off-white": "white",
+    "cream": "beige",
+    "sky": "light_blue",
+    "mint": "teal",
+    "aqua": "turquoise",
+    "maroon": "burgundy",
     "lightgray": "gray",
     "darkgray": "gray",
     "dark-grey": "gray",
@@ -43,12 +57,46 @@ COLOR_SYNONYMS: dict[str, str] = {
     "красный": "red",
     "синий": "blue",
     "голубой": "blue",
+    "темно-синий": "navy",
+    "тёмно-синий": "navy",
+    "бордовый": "burgundy",
+    "лавандовый": "lavender",
+    "бирюзовый": "turquoise",
+    "оливковый": "olive",
+    "лаймовый": "lime",
+    "золотой": "gold",
+    "серебристый": "silver",
     "розовый": "pink",
     "оранжевый": "orange",
     "желтый": "yellow",
     "жёлтый": "yellow",
     "коричневый": "brown",
     "бежевый": "beige",
+}
+
+LAB_PROTOTYPES: dict[str, Tuple[float, float, float]] = {
+    "black": (18.0, 0.0, 0.0),
+    "white": (96.0, 0.0, 0.0),
+    "gray": (60.0, 0.0, 0.0),
+    "silver": (77.0, 0.0, 0.0),
+    "beige": (82.0, 2.0, 18.0),
+    "brown": (45.0, 18.0, 24.0),
+    "navy": (25.0, 8.0, -35.0),
+    "blue": (44.0, 10.0, -48.0),
+    "light_blue": (68.0, -8.0, -22.0),
+    "teal": (58.0, -30.0, -6.0),
+    "turquoise": (72.0, -34.0, -10.0),
+    "green": (52.0, -40.0, 32.0),
+    "lime": (86.0, -52.0, 74.0),
+    "olive": (46.0, -10.0, 28.0),
+    "yellow": (90.0, -5.0, 82.0),
+    "orange": (72.0, 38.0, 66.0),
+    "red": (52.0, 70.0, 44.0),
+    "burgundy": (32.0, 44.0, 18.0),
+    "pink": (74.0, 40.0, 6.0),
+    "purple": (44.0, 48.0, -44.0),
+    "lavender": (72.0, 24.0, -18.0),
+    "gold": (76.0, 8.0, 72.0),
 }
 
 
@@ -88,9 +136,20 @@ def normalize_color_label(color: str | None) -> str:
         seen.add(token)
         out.append(token)
     if not out:
-        return ""
+        return "multicolor"
     out = sorted(out, key=lambda x: COLOR_PRIORITY.index(x) if x in COLOR_PRIORITY else 999)[:2]
     return "/".join(out)
+
+
+def _nearest_canonical_from_lab(lab: Tuple[float, float, float]) -> str:
+    best = "multicolor"
+    best_d = 10e9
+    for c, proto in LAB_PROTOTYPES.items():
+        d = _lab_distance(lab, proto)
+        if d < best_d:
+            best_d = d
+            best = c
+    return best
 
 
 def _keyword_fallback_color(title: str | None) -> str:
@@ -141,18 +200,24 @@ def _download_or_open(source: str, timeout_sec: int = 12) -> Optional[Image.Imag
         return None
 
 
-def _extract_subject_pixels(img: Image.Image) -> List[Tuple[int, int, int]]:
+def _extract_subject_pixels(img: Image.Image) -> List[Tuple[Tuple[int, int, int], float]]:
     w, h = img.size
     if w < 8 or h < 8:
         return []
-    img = img.resize((220, 220))
+    max_side = 256
+    if max(img.size) > max_side:
+        scale = max_side / float(max(img.size))
+        nw = max(8, int(img.size[0] * scale))
+        nh = max(8, int(img.size[1] * scale))
+        img = img.resize((nw, nh))
     px = img.load()
+    ww, hh = img.size
 
-    bw = max(10, int(220 * 0.10))
+    bw = max(2, int(min(ww, hh) * 0.10))
     edge_pixels: List[Tuple[int, int, int]] = []
-    for y in range(220):
-        for x in range(220):
-            if x < bw or x >= 220 - bw or y < bw or y >= 220 - bw:
+    for y in range(hh):
+        for x in range(ww):
+            if x < bw or x >= ww - bw or y < bw or y >= hh - bw:
                 edge_pixels.append(px[x, y])
 
     bg_clusters: List[Tuple[float, float, float]] = []
@@ -161,24 +226,23 @@ def _extract_subject_pixels(img: Image.Image) -> List[Tuple[int, int, int]]:
         for c in _kmeans(edge_labs, k=2):
             bg_clusters.append(tuple(c["center"]))
 
-    x0, x1 = 24, 196
-    y0, y1 = 24, 196
-    pixels: List[Tuple[int, int, int]] = []
-    for y in range(y0, y1, 2):
-        for x in range(x0, x1, 2):
+    cx, cy = ww / 2.0, hh / 2.0
+    sigma = 0.35 * float(max(ww, hh))
+    sigma2 = max(1.0, 2.0 * sigma * sigma)
+    pixels: List[Tuple[Tuple[int, int, int], float]] = []
+    for y in range(0, hh, 2):
+        for x in range(0, ww, 2):
             r, g, b = px[x, y]
             lab = _rgb_to_lab((r, g, b))
 
+            h1, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
+            center_weight = math.exp(-(((x - cx) ** 2 + (y - cy) ** 2) / sigma2))
             if bg_clusters:
                 bg_dist = min(_lab_distance(lab, bg) for bg in bg_clusters)
-                if bg_dist <= 8.5:
+                if bg_dist <= 10.0 and center_weight < 0.82:
                     continue
-
-            h1, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
-            center_dist = math.dist((x, y), (110, 110)) / 110.0
-            center_weight = max(0.30, 1.0 - (center_dist ** 1.35))
             edge_strength = 0.0
-            if 1 <= x < 219 and 1 <= y < 219:
+            if 1 <= x < (ww - 1) and 1 <= y < (hh - 1):
                 r2, g2, b2 = px[x + 1, y]
                 r3, g3, b3 = px[x, y + 1]
                 edge_strength = min(1.0, (abs(r - r2) + abs(g - g2) + abs(b - b2) + abs(r - r3) + abs(g - g3) + abs(b - b3)) / 180.0)
@@ -188,7 +252,7 @@ def _extract_subject_pixels(img: Image.Image) -> List[Tuple[int, int, int]]:
                 keep_score += 0.08
             if keep_score < 0.36:
                 continue
-            pixels.append((r, g, b))
+            pixels.append(((r, g, b), max(0.08, min(1.0, keep_score))))
 
     if len(pixels) > 2200:
         step = max(1, len(pixels) // 2200)
@@ -281,12 +345,19 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
     img = _download_or_open(source, timeout_sec=timeout_sec)
     if img is None:
         return None
-    pixels = _extract_subject_pixels(img)
+    weighted_pixels = _extract_subject_pixels(img)
+    pixels = [p for p, _w in weighted_pixels]
+    weights = [float(w) for _p, w in weighted_pixels]
     if not pixels:
         return None
 
     lab_points = [_rgb_to_lab(p) for p in pixels]
-    clusters = _kmeans(lab_points, k=4)
+    expanded_lab_points: list[Tuple[float, float, float]] = []
+    for lp, w in zip(lab_points, weights):
+        reps = max(1, min(5, int(round(w * 4.0))))
+        for _ in range(reps):
+            expanded_lab_points.append(lp)
+    clusters = _kmeans(expanded_lab_points, k=3)
     if not clusters:
         return None
 
@@ -298,7 +369,7 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
     rr2, gg2, bb2 = min(pixels, key=lambda p: ( _rgb_to_lab(p)[0] - l) ** 2 + (_rgb_to_lab(p)[1] - a) ** 2 + (_rgb_to_lab(p)[2] - b) ** 2)
     h, s, v = colorsys.rgb_to_hsv(rr2 / 255.0, gg2 / 255.0, bb2 / 255.0)
 
-    color = canonical_color_from_lab_hsv(l, a, b, h, s, v)
+    color = _nearest_canonical_from_lab((l, a, b))
     share = float(main["count"]) / float(total)
     confidence = max(0.05, min(0.99, share * (0.65 + min(0.35, s))))
     top2: list[tuple[str, float]] = [(color, share)]
@@ -309,15 +380,21 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
         l2, a2, b2 = second["center"]
         rr3, gg3, bb3 = min(pixels, key=lambda p: (_rgb_to_lab(p)[0] - l2) ** 2 + (_rgb_to_lab(p)[1] - a2) ** 2 + (_rgb_to_lab(p)[2] - b2) ** 2)
         h2, s2, v2 = colorsys.rgb_to_hsv(rr3 / 255.0, gg3 / 255.0, bb3 / 255.0)
-        c2 = canonical_color_from_lab_hsv(l2, a2, b2, h2, s2, v2)
+        c2 = _nearest_canonical_from_lab((l2, a2, b2))
         top2.append((c2, second_share))
         if c2 != color:
             if {color, c2} == {"black", "white"} and (share + second_share) >= 0.65:
                 color = "black/white"
                 confidence = max(confidence, min(0.94, 0.62 + (share + second_share) * 0.28))
+            elif color == "gray" and c2 in {"green", "purple", "red", "blue", "lime", "turquoise", "teal"} and second_share >= 0.22 and confidence < 0.62:
+                color = normalize_color_label(f"{color}/{c2}") or c2
+                confidence = max(confidence, min(0.90, 0.52 + (share + second_share) * 0.20))
             elif share >= 0.30 and second_share >= 0.25:
                 color = normalize_color_label(f"{color}/{c2}") or color
                 confidence = max(confidence, min(0.93, 0.56 + (share + second_share) * 0.22))
+
+    if (share < 0.32) and (len(clusters) > 1 and (float(clusters[1]["count"]) / float(total)) < 0.25) and confidence < 0.35:
+        color = "multicolor"
 
     color = normalize_color_label(color) or color
 
@@ -352,6 +429,8 @@ def _compose_top_colors(score: Dict[str, float], total_score: float) -> str | No
         if {c1, c2} <= {"beige", "yellow", "brown"}:
             return normalize_color_label(c1) or c1
         return normalize_color_label(f"{c1}/{c2}") or c1
+    if share1 < 0.32 and share2 < 0.25:
+        return "multicolor"
     return normalize_color_label(c1) or c1
 
 
@@ -371,7 +450,16 @@ def detect_product_color(image_sources: Sequence[str], title_hint: str | None = 
     per_image: List[Dict[str, Any]] = []
     for idx, v in enumerate(votes):
         w = max(0.05, float(v.confidence))
-        score[v.color] += w
+        if "/" in str(v.color):
+            parts = [p for p in str(v.color).split("/") if p]
+            if parts:
+                part_w = w / float(len(parts))
+                for p in parts:
+                    score[p] += part_w
+            else:
+                score[v.color] += w
+        else:
+            score[v.color] += w
         by_color[v.color] += 1
         per_image.append({"idx": idx, "color": v.color, "confidence": round(v.confidence, 3), "share": round(v.cluster_share, 3)})
 

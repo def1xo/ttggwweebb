@@ -7,10 +7,11 @@ export type ColorSwatchInfo = {
   css: { backgroundColor?: string; backgroundImage?: string };
 };
 
-type DisplayColor = { canonical: string; label: string };
+export type DisplayColor = { canonical: string; label: string };
 
 const COLOR_PRIORITY = [
-  "black", "white", "gray", "beige", "brown", "purple", "blue", "green", "yellow", "orange", "red", "pink", "multicolor",
+  "black", "white", "gray", "navy", "blue", "light_blue", "teal", "turquoise", "green", "lime", "olive",
+  "yellow", "orange", "red", "burgundy", "pink", "purple", "lavender", "beige", "brown", "silver", "gold", "multicolor",
 ];
 
 const COLOR_LABEL_RU: Record<string, string> = {
@@ -19,21 +20,37 @@ const COLOR_LABEL_RU: Record<string, string> = {
   gray: "серый",
   beige: "бежевый",
   brown: "коричневый",
+  navy: "тёмно-синий",
   purple: "фиолетовый",
   blue: "синий",
+  light_blue: "голубой",
+  teal: "бирюзовый",
+  turquoise: "бирюзовый",
   green: "зелёный",
+  lime: "лаймовый",
+  olive: "оливковый",
   yellow: "жёлтый",
   orange: "оранжевый",
   red: "красный",
+  burgundy: "бордовый",
   pink: "розовый",
-  multicolor: "мульти",
+  lavender: "лавандовый",
+  silver: "серебристый",
+  gold: "золотой",
+  multicolor: "мультиколор",
 };
 
 const COLOR_ALIASES: Record<string, string> = {
   grey: "gray",
   violet: "purple",
+  lilac: "lavender",
   offwhite: "white",
   "off-white": "white",
+  cream: "beige",
+  sky: "light_blue",
+  mint: "teal",
+  aqua: "turquoise",
+  maroon: "burgundy",
   "чёрный": "black",
   "черный": "black",
   "белый": "white",
@@ -44,6 +61,15 @@ const COLOR_ALIASES: Record<string, string> = {
   "зеленый": "green",
   "синий": "blue",
   "голубой": "blue",
+  "тёмно-синий": "navy",
+  "темно-синий": "navy",
+  "бордовый": "burgundy",
+  "лавандовый": "lavender",
+  "бирюзовый": "turquoise",
+  "оливковый": "olive",
+  "лаймовый": "lime",
+  "серебристый": "silver",
+  "золотой": "gold",
   "красный": "red",
   "жёлтый": "yellow",
   "желтый": "yellow",
@@ -108,7 +134,7 @@ export function normalizeCanonicalColor(raw?: string): string {
     const bi = COLOR_PRIORITY.indexOf(b);
     return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
   });
-  return sorted.slice(0, 2).join("/");
+  return sorted.slice(0, 2).join("/") || "multicolor";
 }
 
 function toRuLabel(canonical: string): string {
@@ -150,6 +176,10 @@ export function buildDisplayColors(product: any): DisplayColor[] {
     })
     .slice(0, 2)
     .map((c) => ({ canonical: c, label: toRuLabel(c) }));
+}
+
+export function buildDisplayColorChips(product: any, _locale: "ru" | "en" = "ru"): DisplayColor[] {
+  return buildDisplayColors(product);
 }
 
 export function getColorSwatchInfo(raw?: string): ColorSwatchInfo {

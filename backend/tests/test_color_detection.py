@@ -135,3 +135,16 @@ def test_detect_product_color_prefers_purple_over_gray_noise(monkeypatch):
     monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
     out = cd.detect_product_color(["1", "2", "3", "4", "5"])
     assert out["color"] == "purple"
+
+
+def test_normalize_color_variants_converge_to_canonical_parts():
+    vals = [
+        cd.normalize_color_label("фиолетовый"),
+        cd.normalize_color_label("purple"),
+        cd.normalize_color_label("gray/purple"),
+        cd.normalize_color_label("grey/purple"),
+    ]
+    assert vals[0] == "purple"
+    assert vals[1] == "purple"
+    assert vals[2] == "gray/purple"
+    assert vals[3] == "gray/purple"

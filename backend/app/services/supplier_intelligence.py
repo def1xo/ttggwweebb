@@ -1153,17 +1153,27 @@ def generate_youth_description(title: str, category_name: str | None = None, col
     picked_features = [desc for k, desc in feature_map.items() if k in t.lower()]
     feature_line = rng.choice(picked_features) if picked_features else "комфортный силуэт и аккуратный акцент на деталях"
 
+    color_key = str(clr or "").lower()
+    color_notes = {
+        "purple": ["фиолетовый акцент", "акцентная расцветка", "выразительный фиолетовый тон"],
+        "green": ["зелёный вайб", "сочный акцент", "живой зелёный тон"],
+        "lime": ["зелёный вайб", "сочный акцент", "живой зелёный тон"],
+        "olive": ["зелёный вайб", "сочный акцент", "живой зелёный тон"],
+        "black/white": ["чистая база", "универсальный контраст", "баланс светлого и тёмного"],
+    }
+    color_phrase = rng.choice(color_notes.get(color_key, ["цвет работает как аккуратный акцент", "расцветка легко встраивается в гардероб"]))
+
     templates = [
-        "{title} — {vibe} {cat}, который легко встраивается в гардероб {use_case}. {feature}. {closer}",
-        "{title} — {vibe} вариант для тех, кто любит чистый стиль и удобство {use_case}. {feature}. {closer}",
-        "{title} держит баланс между трендом и базой: {vibe} {cat} на {use_case}. {feature}. {closer}",
-        "{title} — это {vibe} настроение без перегруза: {cat} для {use_case}. {feature}. {closer}",
-        "{title} — {vibe} выбор в ротацию на каждый сезон. Подходит {use_case}, даёт уверенный силуэт. {feature}.",
-        "{title} заходит в лук с первого выхода: {vibe} {cat}, который удобно носить {use_case}. {feature}.",
-        "{title} выглядит актуально и спокойно: {vibe} {cat} на {use_case}. {feature}. {closer}",
-        "{title} — когда нужен чистый стайл без лишнего шума. {vibe} подача для {use_case}. {feature}. {closer}",
-        "{title} даёт правильный ритм образу: {vibe} {cat}, удобный в движении и повседневке {use_case}. {feature}.",
-        "{title} работает и соло, и в слоях: {vibe} вайб, понятная посадка и комфорт {use_case}. {feature}. {closer}",
+        "{title} — {vibe} {cat}, который легко встраивается в гардероб {use_case}. {feature}. {color_phrase}. {closer}",
+        "{title} — {vibe} вариант для тех, кто любит чистый стиль и удобство {use_case}. {feature}. {color_phrase}. {closer}",
+        "{title} держит баланс между трендом и базой: {vibe} {cat} на {use_case}. {feature}. {color_phrase}. {closer}",
+        "{title} — это {vibe} настроение без перегруза: {cat} для {use_case}. {feature}. {color_phrase}. {closer}",
+        "{title} — {vibe} выбор в ротацию на каждый сезон. Подходит {use_case}, даёт уверенный силуэт. {feature}. {color_phrase}.",
+        "{title} заходит в лук с первого выхода: {vibe} {cat}, который удобно носить {use_case}. {feature}. {color_phrase}.",
+        "{title} выглядит актуально и спокойно: {vibe} {cat} на {use_case}. {feature}. {color_phrase}. {closer}",
+        "{title} — когда нужен чистый стайл без лишнего шума. {vibe} подача для {use_case}. {feature}. {color_phrase}. {closer}",
+        "{title} даёт правильный ритм образу: {vibe} {cat}, удобный в движении и повседневке {use_case}. {feature}. {color_phrase}.",
+        "{title} работает и соло, и в слоях: {vibe} вайб, понятная посадка и комфорт {use_case}. {feature}. {color_phrase}. {closer}",
     ]
     text = rng.choice(templates).format(
         title=t,
@@ -1171,10 +1181,19 @@ def generate_youth_description(title: str, category_name: str | None = None, col
         cat=cat,
         use_case=rng.choice(use_cases),
         feature=feature_line[:1].upper() + feature_line[1:],
+        color_phrase=color_phrase[:1].upper() + color_phrase[1:],
         closer=rng.choice(closers),
     )
     if clr:
         text += f" Цвет: {clr.lower()}."
+    text = " ".join(text.split())
+    text = re.sub(r"\b(\w+)\s+\1\b", r"\1", text, flags=re.IGNORECASE)
+    text = text.replace("на на", "на")
+
+    if re.search(r"(?i)(кросс|sneaker|yeezy|air|max|forum|dunk|vomero)", t):
+        addon = " Подойдёт под джинсы, карго и базовый худи."
+        if addon.strip().lower() not in text.lower():
+            text += addon
     return " ".join(text.split())
 
 
