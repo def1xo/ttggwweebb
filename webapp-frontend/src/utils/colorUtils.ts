@@ -7,78 +7,6 @@ export type ColorSwatchInfo = {
   css: { backgroundColor?: string; backgroundImage?: string };
 };
 
-export type DisplayColor = { canonical: string; label: string };
-
-const COLOR_PRIORITY = [
-  "black", "white", "gray", "navy", "blue", "light_blue", "teal", "turquoise", "green", "lime", "olive",
-  "yellow", "orange", "red", "burgundy", "pink", "purple", "lavender", "beige", "brown", "silver", "gold", "multicolor",
-];
-
-const COLOR_LABEL_RU: Record<string, string> = {
-  black: "чёрный",
-  white: "белый",
-  gray: "серый",
-  beige: "бежевый",
-  brown: "коричневый",
-  navy: "тёмно-синий",
-  purple: "фиолетовый",
-  blue: "синий",
-  light_blue: "голубой",
-  teal: "бирюзовый",
-  turquoise: "бирюзовый",
-  green: "зелёный",
-  lime: "лаймовый",
-  olive: "оливковый",
-  yellow: "жёлтый",
-  orange: "оранжевый",
-  red: "красный",
-  burgundy: "бордовый",
-  pink: "розовый",
-  lavender: "лавандовый",
-  silver: "серебристый",
-  gold: "золотой",
-  multicolor: "мультиколор",
-};
-
-const COLOR_ALIASES: Record<string, string> = {
-  grey: "gray",
-  violet: "purple",
-  lilac: "lavender",
-  offwhite: "white",
-  "off-white": "white",
-  cream: "beige",
-  sky: "light_blue",
-  mint: "teal",
-  aqua: "turquoise",
-  maroon: "burgundy",
-  "чёрный": "black",
-  "черный": "black",
-  "белый": "white",
-  "серый": "gray",
-  "фиолетовый": "purple",
-  "фиолет": "purple",
-  "зелёный": "green",
-  "зеленый": "green",
-  "синий": "blue",
-  "голубой": "blue",
-  "тёмно-синий": "navy",
-  "темно-синий": "navy",
-  "бордовый": "burgundy",
-  "лавандовый": "lavender",
-  "бирюзовый": "turquoise",
-  "оливковый": "olive",
-  "лаймовый": "lime",
-  "серебристый": "silver",
-  "золотой": "gold",
-  "красный": "red",
-  "жёлтый": "yellow",
-  "желтый": "yellow",
-  "оранжевый": "orange",
-  "коричневый": "brown",
-  "бежевый": "beige",
-  "розовый": "pink",
-};
-
 const COLOR_MAP: Array<{ re: RegExp; hex: string }> = [
   { re: /(black|черн)/i, hex: "#111827" },
   { re: /(white|бел)/i, hex: "#F9FAFB" },
@@ -96,6 +24,27 @@ const COLOR_MAP: Array<{ re: RegExp; hex: string }> = [
   { re: /(gold|золот)/i, hex: "#D4AF37" },
   { re: /(silver|сереб)/i, hex: "#C0C0C0" },
   { re: /(teal|бирюз)/i, hex: "#14B8A6" },
+  { re: /(^|\b)navy(\b|$)|темно-син|тёмно-син/i, hex: "#1E3A8A" },
+  { re: /(^|\b)sky_blue(\b|$)|голуб/i, hex: "#60A5FA" },
+  { re: /(^|\b)turquoise(\b|$)/i, hex: "#40E0D0" },
+  { re: /(^|\b)mint(\b|$)/i, hex: "#98FF98" },
+  { re: /(^|\b)olive(\b|$)/i, hex: "#6B8E23" },
+  { re: /(^|\b)lime(\b|$)/i, hex: "#84CC16" },
+  { re: /(^|\b)burgundy(\b|$)|бордов/i, hex: "#7F1D1D" },
+  { re: /(^|\b)maroon(\b|$)/i, hex: "#7A1F3D" },
+  { re: /(^|\b)coral(\b|$)/i, hex: "#FB7185" },
+  { re: /(^|\b)peach(\b|$)/i, hex: "#FDBA74" },
+  { re: /(^|\b)lavender(\b|$)/i, hex: "#C4B5FD" },
+  { re: /(^|\b)lilac(\b|$)|сирен/i, hex: "#A78BFA" },
+  { re: /(^|\b)violet(\b|$)/i, hex: "#8B5CF6" },
+  { re: /(^|\b)khaki(\b|$)/i, hex: "#A3A35C" },
+  { re: /(^|\b)sand(\b|$)/i, hex: "#E9D8A6" },
+  { re: /(^|\b)camel(\b|$)/i, hex: "#C19A6B" },
+  { re: /(^|\b)cream(\b|$)/i, hex: "#FFFDD0" },
+  { re: /(^|\b)off_white(\b|$)/i, hex: "#FAF9F6" },
+  { re: /(^|\b)bronze(\b|$)/i, hex: "#CD7F32" },
+  { re: /(^|\b)multi(\b|$)|мульти/i, hex: "#9CA3AF" },
+  { re: /(^|\b)none(\b|$)/i, hex: "#D1D5DB" },
 ];
 
 function partToHex(part: string): string {
@@ -121,41 +70,6 @@ export function splitColorName(raw?: string): string[] {
     .filter(Boolean);
   // special case: "черно" -> treat as "черный" etc (prefix match works)
   return parts.length ? parts : [s];
-}
-
-export function normalizeCanonicalColor(raw?: string): string {
-  const parts = splitColorName(raw)
-    .map((p) => String(p || "").trim().toLowerCase())
-    .map((p) => COLOR_ALIASES[p] || p)
-    .filter((p) => Boolean(COLOR_LABEL_RU[p]));
-  const uniq = Array.from(new Set(parts));
-  const sorted = uniq.sort((a, b) => {
-    const ai = COLOR_PRIORITY.indexOf(a);
-    const bi = COLOR_PRIORITY.indexOf(b);
-    return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
-  });
-  return sorted.slice(0, 2).join("/") || "multicolor";
-}
-
-function toRuLabel(canonical: string): string {
-  if (!canonical) return "";
-  return canonical
-    .split("/")
-    .map((p) => COLOR_LABEL_RU[p] || p)
-    .join("/");
-}
-
-export function buildDisplayColors(product: any): DisplayColor[] {
-  const explicitKeys = Array.isArray(product?.color_keys)
-    ? product.color_keys.map((x: any) => normalizeCanonicalColor(String(x || ""))).filter(Boolean)
-    : [];
-  const unique = Array.from(new Set(explicitKeys)).slice(0, 2);
-  return unique.map((canonical) => ({ canonical, label: toRuLabel(canonical) }));
-}
-
-
-export function buildDisplayColorChips(product: any, _locale: "ru" | "en" = "ru"): DisplayColor[] {
-  return buildDisplayColors(product);
 }
 
 export function getColorSwatchInfo(raw?: string): ColorSwatchInfo {
