@@ -85,164 +85,135 @@ def _split_color_tokens(raw: str | None) -> list[str]:
     if not txt:
         return []
     out: list[str] = []
-    for part in re.split(r"[,;/|]+|\s{2,}|\s+-\s+", txt):
+    for part in re.split(r"[,;/|+&]+|\s{2,}|\s+-\s+|\sи\s", txt, flags=re.I):
         token = " ".join(part.strip().split())
         if token and token not in out:
             out.append(token)
     return out
 
 
-def _count_unique_photo_urls(image_urls: list[str] | None, limit: int = 12) -> int:
-    seen: set[str] = set()
-    for raw in (image_urls or [])[: max(0, int(limit))]:
-        key = str(raw or "").strip()
-        if key:
-            seen.add(key)
-    return len(seen)
+_CANON_COLOR_ALIASES: dict[str, str] = {
+    "чёрный": "black", "черный": "black", "black": "black",
+    "белый": "white", "white": "white", "молочный": "off_white", "айвори": "off_white",
+    "серый": "gray", "grey": "gray", "gray": "gray", "графит": "gray",
+    "бежевый": "beige", "beige": "beige",
+    "коричневый": "brown", "brown": "brown",
+    "синий": "blue", "blue": "blue", "голубой": "sky_blue", "sky": "sky_blue", "sky blue": "sky_blue",
+    "темно-синий": "navy", "тёмно-синий": "navy", "navy": "navy",
+    "бирюзовый": "teal", "teal": "teal", "turquoise": "turquoise", "бирюза": "turquoise",
+    "зеленый": "green", "зелёный": "green", "green": "green", "оливковый": "olive", "olive": "olive",
+    "лаймовый": "lime", "lime": "lime", "мятный": "mint", "mint": "mint",
+    "красный": "red", "red": "red", "бордовый": "burgundy", "burgundy": "burgundy", "maroon": "maroon",
+    "розовый": "pink", "pink": "pink", "коралловый": "coral", "coral": "coral", "персиковый": "peach", "peach": "peach",
+    "фиолетовый": "purple", "purple": "purple", "лавандовый": "lavender", "lavender": "lavender", "сиреневый": "lilac", "lilac": "lilac", "violet": "violet",
+    "желтый": "yellow", "жёлтый": "yellow", "yellow": "yellow",
+    "оранжевый": "orange", "orange": "orange",
+    "хаки": "khaki", "khaki": "khaki", "песочный": "sand", "sand": "sand", "camel": "camel", "кэмел": "camel",
+    "cream": "cream", "кремовый": "cream",
+    "silver": "silver", "серебристый": "silver", "серебро": "silver",
+    "gold": "gold", "золотой": "gold", "бронзовый": "bronze", "bronze": "bronze",
+    "multi": "multi", "multicolor": "multi", "мульти": "multi", "мультиколор": "multi",
+    "none": "none", "без цвета": "none",
+}
+_CANON_ALLOWED = set(_CANON_COLOR_ALIASES.values())
 
 
-def _shop_vkus_force_single_color(image_urls: list[str] | None) -> bool:
-    unique_photos = _count_unique_photo_urls(image_urls)
-    return 4 <= unique_photos <= 6
+def _canonical_color_key(raw: str | None) -> str:
+    txt = str(raw or "").strip().lower()
+    if not txt:
+        return ""
+    txt = re.sub(r"(?:^|[\s_/\-])single(?:$|[\s_/\-])", " ", txt)
+    txt = re.sub(r"[^\w\s\-/+,&]", " ", txt, flags=re.U)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    if not txt:
+        return ""
+    direct = _CANON_COLOR_ALIASES.get(txt)
+    if direct:
+        return direct
+    parts = _split_color_tokens(txt)
+    normalized = [_CANON_COLOR_ALIASES.get(p.strip().lower(), "") for p in parts]
+    normalized = [x for x in normalized if x and x in _CANON_ALLOWED and x != "none"]
+    if not normalized:
+        return ""
+    uniq = list(dict.fromkeys(normalized))
+    if len(uniq) >= 3:
+        return "multi"
+    return uniq[0]
 
 
-def _shop_vkus_finalize_color_tokens(tokens: list[str], image_urls: list[str] | None) -> list[str]:
-    cleaned: list[str] = []
-    for token in tokens:
-        value = str(token or "").strip()
-        if value and value not in cleaned:
-            cleaned.append(value)
-    if _shop_vkus_force_single_color(image_urls):
-        return cleaned[:1]
-    return cleaned
 
 
+_COLOR_LABEL_RU: dict[str, str] = {
+    "black": "черный", "white": "белый", "gray": "серый", "beige": "бежевый", "brown": "коричневый",
+    "blue": "синий", "red": "красный", "green": "зеленый", "yellow": "желтый", "orange": "оранжевый",
+    "purple": "фиолетовый", "pink": "розовый", "navy": "темно-синий", "sky_blue": "голубой",
+    "teal": "бирюзовый", "turquoise": "бирюза", "mint": "мятный", "olive": "оливковый", "lime": "лаймовый",
+    "burgundy": "бордовый", "maroon": "марун", "coral": "коралловый", "peach": "персиковый",
+    "lavender": "лавандовый", "lilac": "сиреневый", "violet": "фиалковый", "khaki": "хаки",
+    "sand": "песочный", "camel": "кэмел", "cream": "кремовый", "off_white": "молочный",
+    "silver": "серебристый", "gold": "золотой", "bronze": "бронзовый", "multi": "мультиколор",
+}
 
 
+def _color_label_ru(color_key: str | None) -> str:
+    key = _canonical_color_key(color_key)
+    if not key:
+        return ""
+    return _COLOR_LABEL_RU.get(key, key)
 
+
+def _shop_vkus_row_post_link(item: dict[str, object], image_urls: list[str] | None = None) -> str:
+    for key in ("post_link", "post_url", "source_url", "link", "url", "album_url"):
+        val = str(item.get(key) or "").strip()
+        if val and re.search(r"(?:t\.me|telegram\.me)/", val, flags=re.I):
+            return val
+    for raw in (item.get("image_urls") or []):
+        val = str(raw or "").strip()
+        if val and re.search(r"(?:t\.me|telegram\.me)/", val, flags=re.I):
+            return val
+    for raw in (image_urls or []):
+        val = str(raw or "").strip()
+        if val and re.search(r"(?:t\.me|telegram\.me)/", val, flags=re.I):
+            return val
+    return ""
 
 def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = None) -> list[str]:
-    color_aliases = {
-        "чёрный": "черный",
-        "black": "черный",
-        "white": "белый",
-        "grey": "серый",
-        "gray": "серый",
-        "red": "красный",
-        "blue": "синий",
-        "green": "зеленый",
-        "beige": "бежевый",
-        "brown": "коричневый",
-        "pink": "розовый",
-        "purple": "фиолетовый",
-        "yellow": "желтый",
-        "orange": "оранжевый",
-    }
-
-    def _canon_color(name: str | None) -> str:
-        key = str(name or "").strip().lower()
-        if not key:
-            return ""
-        return str(color_aliases.get(key) or key)
-
-    palette = (
-        "черный", "чёрный", "белый", "серый", "красный", "синий", "голубой", "зеленый", "зелёный",
-        "бежевый", "коричневый", "розовый", "фиолетовый", "желтый", "оранжевый",
-        "black", "white", "grey", "gray", "red", "blue", "green", "beige", "brown", "pink", "purple", "yellow", "orange",
-    )
     blob_parts: list[str] = []
     for key in ("color", "title", "description", "text", "notes"):
         v = item.get(key)
         if isinstance(v, str) and v.strip():
             blob_parts.append(v)
-    blob = " ".join(blob_parts).lower()
-    found: list[str] = []
-    for c in palette:
-        if re.search(rf"(?<!\w){re.escape(c)}(?!\w)", blob):
-            cc = _canon_color(c)
-            if cc and cc not in found:
-                found.append(cc)
+    text_blob = " ".join(blob_parts)
+    text_parts = _split_color_tokens(text_blob)
+    text_parts.extend(re.findall(r"[A-Za-z_\-]+|[А-Яа-яЁё_\-]+", text_blob))
+    text_candidates = [_canonical_color_key(x) for x in text_parts]
+    text_candidates = [x for x in text_candidates if x and x != "none"]
+    text_candidates = list(dict.fromkeys(text_candidates))
+    if text_candidates:
+        if len(text_candidates) >= 3:
+            return ["multi"]
+        return text_candidates[:2]
 
-    if len(found) >= 2:
-        return _shop_vkus_finalize_color_tokens(found[:3], image_urls)
-
-    # Fallback: infer colors from gallery with signature clusters.
-    # This avoids false two-color splits when one model has one colorway,
-    # while still allowing mixed rows with two visually different colorways.
-    analyzed: list[tuple[str | None, str]] = []
+    votes: dict[str, int] = {}
     for u in (image_urls or [])[:12]:
-        sig: str | None = None
-        try:
-            sig = image_print_signature_from_url(u)
-        except Exception:
-            sig = None
         try:
             nm = dominant_color_name_from_url(u)
         except Exception:
             nm = None
-        key = _canon_color(nm)
-        if not key or key in {"мульти"}:
+        key = _canonical_color_key(nm)
+        if not key or key in {"none"}:
             continue
-        analyzed.append((sig, key))
+        votes[key] = int(votes.get(key, 0) or 0) + 1
 
-    if analyzed:
-        clusters: list[dict[str, Any]] = []
-        for sig, color_key in analyzed:
-            target: dict[str, Any] | None = None
-            if sig:
-                for cl in clusters:
-                    rep_sig = str(cl.get("rep_sig") or "")
-                    if rep_sig and print_signature_hamming(sig, rep_sig) <= 6:
-                        target = cl
-                        break
-            if target is None:
-                target = {"rep_sig": sig, "count": 0, "color_hits": {}}
-                clusters.append(target)
-            target["count"] = int(target.get("count") or 0) + 1
-            ch = target["color_hits"]
-            ch[color_key] = int(ch.get(color_key, 0) or 0) + 1
-
-        if clusters:
-            ranked_clusters = sorted(clusters, key=lambda x: int(x.get("count") or 0), reverse=True)
-            cluster_colors: list[tuple[str, int]] = []
-            for cl in ranked_clusters:
-                ch = cl.get("color_hits") or {}
-                if not ch:
-                    continue
-                top_color, _ = max(ch.items(), key=lambda kv: int(kv[1] or 0))
-                cluster_colors.append((str(top_color), int(cl.get("count") or 0)))
-
-            if cluster_colors and len(cluster_colors) >= 2:
-                lead = cluster_colors[0][1]
-                second = cluster_colors[1][1]
-                # expose 2 colors only when second cluster is substantial.
-                if second >= 2 and second * 10 >= lead * 6:
-                    out: list[str] = []
-                    for color_name, _ in cluster_colors[:3]:
-                        if color_name not in out:
-                            out.append(color_name)
-                    if out:
-                        return _shop_vkus_finalize_color_tokens(out, image_urls)
-
-    color_hits: dict[str, int] = {}
-    for _, key in analyzed:
-        color_hits[key] = int(color_hits.get(key, 0) or 0) + 1
-    ranked_hits = sorted(color_hits.items(), key=lambda x: int(x[1] or 0), reverse=True)
-    if len(ranked_hits) >= 2:
-        lead_color, lead_cnt = ranked_hits[0]
-        second_color, second_cnt = ranked_hits[1]
-        # Secondary fallback when signature grouping is fragmented by angle,
-        # but two stable colors are repeatedly seen in gallery.
-        if int(second_cnt) >= 2 and int(second_cnt) * 10 >= int(lead_cnt) * 5:
-            return _shop_vkus_finalize_color_tokens([str(lead_color), str(second_color)], image_urls)
-    strong = [k for k, v in ranked_hits if int(v or 0) >= 2]
-    if strong:
-        return _shop_vkus_finalize_color_tokens(strong[:1], image_urls)
-    if ranked_hits:
-        return _shop_vkus_finalize_color_tokens([str(ranked_hits[0][0])], image_urls)
-    if found:
-        return _shop_vkus_finalize_color_tokens(found[:1], image_urls)
+    ranked = sorted(votes.items(), key=lambda x: int(x[1] or 0), reverse=True)
+    if len(ranked) >= 3 and int(ranked[2][1]) >= 2:
+        return ["multi"]
+    if len(ranked) >= 2 and int(ranked[1][1]) >= 2:
+        return [str(ranked[0][0]), str(ranked[1][0])]
+    if ranked:
+        return [str(ranked[0][0])]
     return []
+
 
 def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
     def _iter_stock_like_values(src: dict) -> list[str]:
@@ -573,11 +544,11 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
         return uniq
 
     if supplier_key == "shop_vkus":
-        # shop_vkus feeds can prepend service frames in some galleries.
-        # Keep clean short galleries in original order and drop the leading pair
-        # only when there are explicit bad-frame signals.
+        # shop_vkus feeds often prepend two service frames in longer galleries.
         pre = list(uniq)
         source = raw_norm or uniq
+        if len(source) >= 9:
+            pre = uniq[2:]
         if len(source) > 2:
             first_two = source[:2]
             rest = source[2:]
@@ -1346,6 +1317,7 @@ def import_products_from_sources(
     supplier_tg_fallback_images: dict[str, list[str]] = {}
     existing_product_by_supplier_title: dict[tuple[str, str], models.Product] = {}
     existing_product_by_global_title: dict[tuple[int, str], models.Product] = {}
+    shop_vkus_rows_by_title: dict[str, int] = {}
 
     def _title_key(raw_title: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
@@ -1757,6 +1729,9 @@ def import_products_from_sources(
                 cat_name = map_category(title)
                 category = get_or_create_category(cat_name)
                 effective_title = (title_for_group or title).strip()[:500]
+                if supplier_key == "shop_vkus" and int(shop_vkus_rows_by_title.get(base_title_key, 0)) >= 3:
+                    # Keep maximum two colorways in a single product for shop_vkus.
+                    effective_title = f"{effective_title} #{int(shop_vkus_rows_by_title.get(base_title_key, 0)) - 1}"[:500]
                 slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
                 p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
@@ -1764,12 +1739,18 @@ def import_products_from_sources(
                     image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
                     image_url = image_urls[0]
 
-                if not p:
-                    p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
-                if not p and supplier_key:
-                    p = _find_existing_supplier_product(supplier_key, getattr(src, "supplier_name", None), _title_key(effective_title))
+                shop_vkus_post_link = _shop_vkus_row_post_link(it if isinstance(it, dict) else {}, image_urls=image_urls)
+                shop_vkus_row_idx = 0
+                if supplier_key == "shop_vkus":
+                    shop_vkus_row_idx = int(shop_vkus_rows_by_title.get(base_title_key, 0))
+                    shop_vkus_rows_by_title[base_title_key] = shop_vkus_row_idx + 1
 
                 if not p:
+                    p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
+                if not p and supplier_key and not (supplier_key == "shop_vkus" and shop_vkus_row_idx >= 2):
+                    p = _find_existing_supplier_product(supplier_key, getattr(src, "supplier_name", None), _title_key(effective_title))
+
+                if not p and not (supplier_key == "shop_vkus" and shop_vkus_row_idx >= 2):
                     p = _find_existing_global_product(int(category.id), _title_key(effective_title))
 
                 desc = str(it.get("description") or "").strip()
@@ -2042,27 +2023,58 @@ def import_products_from_sources(
                         existing_product_by_supplier_title[(supplier_key, _title_key(effective_title))] = p
                     existing_product_by_global_title[(int(category.id), _title_key(effective_title))] = p
 
-                # Color policy:
-                # - if source has only one color, do not force color variants;
-                # - for shop_vkus, allow fallback color inference from item text/gallery only when 2+ strong colors are detected.
+                # Color policy with canonical keys only.
+                is_shop_vkus = _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None)
                 src_color = it.get("color")
-                color_tokens = _split_color_tokens(src_color)
-                if len(color_tokens) <= 1 and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
-                    inferred_colors = _extract_shop_vkus_color_tokens(it if isinstance(it, dict) else {}, image_urls=image_urls)
-                    if len(inferred_colors) >= 1:
-                        color_tokens = inferred_colors
+                color_tokens = [_canonical_color_key(x) for x in _split_color_tokens(src_color)]
+                color_tokens = [x for x in color_tokens if x and x != "none"]
 
-                    if payload.ai_color_distribution_enabled:
+                if is_shop_vkus:
+                    incoming_photo_count = len(image_urls)
+                    if 4 <= incoming_photo_count <= 6:
+                        # strict single-color rule for shop_vkus standard post size
+                        color_tokens = color_tokens[:1]
+                    elif incoming_photo_count > 6:
+                        # in a single row with one size/stock set we keep one color and compact gallery
+                        has_second_stock_set = bool(str(it.get("stock_text") or "").count(";") >= 1)
+                        if not has_second_stock_set:
+                            image_urls = image_urls[:6]
+                            image_url = image_urls[0] if image_urls else image_url
+                            color_tokens = color_tokens[:1]
+
+                    if not color_tokens and image_urls:
+                        inferred_colors = _extract_shop_vkus_color_tokens(it if isinstance(it, dict) else {}, image_urls=image_urls)
+                        color_tokens = [x for x in inferred_colors if x and x != "none"]
+
+                    if len(color_tokens) >= 3:
+                        color_tokens = ["multi"]
+                    elif color_tokens:
+                        color_tokens = [color_tokens[0]]
+                else:
+                    if len(color_tokens) <= 1 and payload.ai_color_distribution_enabled:
                         ai_colors = infer_colors_with_ai(
                             title=title,
                             image_urls=image_urls,
                             provider=payload.ai_color_distribution_provider,
                             max_colors=3,
                         )
-                        if len(ai_colors) >= 1:
-                            color_tokens = ai_colors
+                        ai_norm = [_canonical_color_key(x) for x in ai_colors]
+                        ai_norm = [x for x in ai_norm if x and x != "none"]
+                        if ai_norm:
+                            color_tokens = ai_norm[:1]
+
                 if len(color_tokens) == 0:
                     color_tokens = [""]
+
+                if is_shop_vkus:
+                    logger.info(
+                        "shop_vkus item '%s': photos_in=%s photos_final=%s colors=%s post_link=%s",
+                        title,
+                        len(row_image_urls),
+                        len(image_urls),
+                        color_tokens,
+                        shop_vkus_post_link,
+                    )
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
@@ -2089,8 +2101,10 @@ def import_products_from_sources(
 
                 raw_stock = it.get("stock") if isinstance(it, dict) else None
                 has_any_stock_signal = False
+                availability_text_blob = ""
                 if isinstance(it, dict):
                     has_any_stock_signal = any(bool(str(it.get(k) or "").strip()) for k in ("stock", "stock_text", "availability", "наличие"))
+                    availability_text_blob = " ".join(str(it.get(k) or "") for k in ("stock", "stock_text", "availability", "наличие"))
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and (raw_stock is None or not str(raw_stock).strip()):
                     for k in ("stock_text", "availability", "наличие"):
                         v = it.get(k) if isinstance(it, dict) else None
@@ -2098,13 +2112,15 @@ def import_products_from_sources(
                             raw_stock = v
                             break
                 raw_stock_str = str(raw_stock).strip() if raw_stock is not None else ""
-                has_explicit_stock = bool(raw_stock_str)
+                generic_in_stock_signal = bool(raw_stock_str and re.search(r"(?i)(в\s*наличии|есть|in\s*stock|available)", raw_stock_str))
+                has_explicit_stock = False
                 stock_qty_parse_failed = False
                 try:
-                    stock_qty = int(raw_stock_str) if has_explicit_stock else 0
+                    stock_qty = int(raw_stock_str) if raw_stock_str else 0
+                    has_explicit_stock = bool(raw_stock_str)
                 except Exception:
                     stock_qty = 0
-                    stock_qty_parse_failed = has_explicit_stock
+                    stock_qty_parse_failed = bool(raw_stock_str)
                 if stock_qty < 0:
                     stock_qty = 0
 
@@ -2128,7 +2144,12 @@ def import_products_from_sources(
                     map_keys_norm = {str(k).replace(',', '.').strip() for k in stock_map.keys() if str(k).strip()}
                     range_tokens_norm = {str(x).replace(',', '.').strip() for x in split_size_tokens(raw_stock_str) if str(x).strip()}
                     if map_keys_norm and map_keys_norm.issubset(range_tokens_norm):
-                        stock_map = {}
+                        if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
+                            stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in sorted(range_tokens_norm)}
+                            if not size_tokens:
+                                size_tokens = sorted(range_tokens_norm)
+                        else:
+                            stock_map = {}
 
                 # Generic per-row availability rule:
                 # if row size set is explicit and stock cell lists specific sizes,
@@ -2197,13 +2218,25 @@ def import_products_from_sources(
                         stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(listed_in_stock)}
                         availability_sizes_locked = True
 
+                    if not stock_map and plain_range_only:
+                        range_sizes = [str(x).replace(",", ".").strip() for x in split_size_tokens(raw_stock_str) if str(x).strip()]
+                        range_sizes = [x for x in range_sizes if re.fullmatch(r"\d{2,3}(?:[.,]5)?", x)]
+                        if range_sizes:
+                            stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(range_sizes)}
+                            if not size_tokens:
+                                size_tokens = list(dict.fromkeys(range_sizes))
+
+                    if not stock_map and raw_stock_str and re.search(r"(?i)(в\s*наличии|есть|in\s*stock|available)", raw_stock_str):
+                        if valid_sizes:
+                            stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in sorted(valid_sizes)}
+
                     if stock_map and size_range_like and all(int(v or 0) <= 1 for v in stock_map.values()):
                         range_sizes = {str(x).replace(",", ".").strip() for x in split_size_tokens(size_raw) if str(x).strip()}
                         map_sizes = {str(k).replace(",", ".").strip() for k in stock_map.keys() if str(k).strip()}
                         stock_mentions_specific_sizes = bool(re.search(r"\b\d{2,3}(?:[.,]5)?\b", raw_stock_str))
                         generic_in_stock = bool(raw_stock_str and re.search(r"(?i)\b(в\s*наличии|есть|in\s*stock|available)\b", raw_stock_str))
-                        if map_sizes and map_sizes.issubset(range_sizes) and (generic_in_stock or raw_stock_str == ""):
-                            # Generic stock text with a size range should not auto-enable all range sizes.
+                        if map_sizes and map_sizes.issubset(range_sizes) and raw_stock_str == "":
+                            # Empty stock text with size range should not auto-enable all range sizes.
                             stock_map = {}
                     if stock_map and all(int(v or 0) <= 1 for v in stock_map.values()):
                         stock_map = {str(k): int(IMPORT_FALLBACK_STOCK_QTY) for k in stock_map.keys()}
@@ -2232,21 +2265,15 @@ def import_products_from_sources(
                         if listed_sizes and size_list_like and not size_range_like:
                             stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in listed_sizes}
 
-                if (
-                    not size_tokens
-                    and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None)
-                    and raw_stock_str
-                    and stock_qty_parse_failed
-                ):
-                    inferred_from_stock = [
-                        str(x).strip()[:16]
-                        for x in split_size_tokens(raw_stock_str)
-                        if str(x).strip()[:16] and re.fullmatch(r"\d{2,3}(?:[.,]5)?", str(x).strip()[:16])
-                    ]
-                    if inferred_from_stock:
-                        size_tokens = list(dict.fromkeys(inferred_from_stock))
-                        if not stock_map:
-                            stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in size_tokens}
+                if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and not stock_map:
+                    if raw_stock_str and re.search(r"(?i)(в\s*наличии|есть|in\s*stock|available)", raw_stock_str):
+                        if size_tokens:
+                            stock_map = {str(sz): int(IMPORT_FALLBACK_STOCK_QTY) for sz in size_tokens if str(sz).strip()}
+                    elif raw_plain_range_only and not size_tokens:
+                        inferred_range = [str(x).strip() for x in split_size_tokens(raw_stock_str) if str(x).strip()]
+                        if inferred_range:
+                            size_tokens = inferred_range
+                            stock_map = {str(sz): int(IMPORT_FALLBACK_STOCK_QTY) for sz in inferred_range}
 
                 if not size_tokens and stock_map:
                     size_tokens = sorted(
@@ -2255,12 +2282,9 @@ def import_products_from_sources(
                     )
 
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
-                    generic_in_stock_signal = bool(raw_stock_str and re.search(r"(?i)\b(в\s*наличии|есть|in\s*stock|available)\b", raw_stock_str))
-                    if generic_in_stock_signal and size_tokens and size_tokens != [""]:
-                        if not stock_map:
-                            stock_map = {str(sz): int(IMPORT_FALLBACK_STOCK_QTY) for sz in size_tokens if str(sz).strip()}
-                        elif all(int(v or 0) <= 1 for v in stock_map.values()):
-                            stock_map = {str(sz): int(IMPORT_FALLBACK_STOCK_QTY) for sz in size_tokens if str(sz).strip()}
+                    generic_availability = generic_in_stock_signal or bool(re.search(r"(?i)(в\s*наличии|есть|in\s*stock|available)", availability_text_blob))
+                    if generic_availability and size_tokens and (not stock_map or all(int(v or 0) <= 0 for v in stock_map.values())):
+                        stock_map = {str(sz): int(IMPORT_FALLBACK_STOCK_QTY) for sz in size_tokens if str(sz).strip()}
 
                 if not size_tokens:
                     size_tokens = [""]
@@ -2269,25 +2293,37 @@ def import_products_from_sources(
                 has_stock_map = bool(stock_map)
                 has_explicit_stock_data = bool(has_stock_map or has_explicit_stock)
                 base_stock = stock_qty // combinations if stock_qty > 0 and combinations > 1 else stock_qty
+                if is_shop_vkus:
+                    logger.info(
+                        "shop_vkus item '%s': sizes=%s stock_keys=%s has_stock_map=%s",
+                        title,
+                        size_tokens,
+                        sorted(list(stock_map.keys())) if isinstance(stock_map, dict) else [],
+                        has_stock_map,
+                    )
                 remainder_stock = stock_qty % combinations if stock_qty > 0 and combinations > 1 else 0
 
                 row_color_ids: set[int | None] = set()
                 for color_name in color_tokens:
-                    color = get_or_create_color(color_name) if color_name else None
+                    color = get_or_create_color(_color_label_ru(color_name)) if color_name else None
                     row_color_ids.add(color.id if color else None)
                     for size_name in size_tokens:
                         size = get_or_create_size(size_name) if size_name else None
                         size_key = str(size_name or "").strip()
                         if has_stock_map:
                             per_variant_stock = int(stock_map.get(size_key, 0) or 0)
-                        elif has_explicit_stock and not stock_qty_parse_failed:
+                        elif has_explicit_stock:
                             per_variant_stock = int(base_stock)
                             if remainder_stock > 0:
                                 per_variant_stock += 1
                                 remainder_stock -= 1
-                        elif _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_key and not has_any_stock_signal:
-                            # shop_vkus default: listed sizes are available unless explicitly out of stock.
-                            per_variant_stock = int(IMPORT_FALLBACK_STOCK_QTY)
+                        elif _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_key:
+                            generic_availability = generic_in_stock_signal or bool(re.search(r"(?i)(в\s*наличии|есть|in\s*stock|available)", availability_text_blob))
+                            if (not has_any_stock_signal) or generic_availability:
+                                # shop_vkus default: listed sizes are available unless explicitly out of stock.
+                                per_variant_stock = int(IMPORT_FALLBACK_STOCK_QTY)
+                            else:
+                                per_variant_stock = 0
                         else:
                             # Unknown stock should not become "all sizes in stock".
                             per_variant_stock = 0
@@ -2301,18 +2337,6 @@ def import_products_from_sources(
                         )
 
                         variant_images = image_urls or ([image_url] if image_url else None)
-                        if color_tokens and color_name and image_urls:
-                            color_key = str(color_name).strip().lower()
-                            color_specific: list[str] = []
-                            for iu in image_urls:
-                                try:
-                                    dom = str(dominant_color_name_from_url(iu) or "").strip().lower()
-                                except Exception:
-                                    dom = ""
-                                if dom and (dom == color_key or color_key in dom or dom in color_key):
-                                    color_specific.append(iu)
-                            if len(color_specific) >= 2:
-                                variant_images = color_specific
 
                         if variant is None:
                             variant = models.ProductVariant(
@@ -2368,6 +2392,23 @@ def import_products_from_sources(
                             if variant_changed:
                                 updated_variants += 1
                             db.add(variant)
+
+                if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
+                    non_numeric_stock_text = bool(raw_stock_str and not re.fullmatch(r"\d+", raw_stock_str))
+                    if non_numeric_stock_text:
+                        row_variants_fix = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
+                        row_sizes_norm = {str(x).replace(",", ".").strip() for x in size_tokens if str(x).strip()}
+                        size_cache_fix: dict[int, str] = {}
+                        for vv in row_variants_fix:
+                            if vv.size_id:
+                                sid = int(vv.size_id)
+                                if sid not in size_cache_fix:
+                                    sz_obj = db.query(models.Size).filter(models.Size.id == sid).one_or_none()
+                                    size_cache_fix[sid] = str(getattr(sz_obj, "name", "") or "")
+                                sz_name = size_cache_fix.get(sid, "")
+                                if str(sz_name).replace(",", ".").strip() in row_sizes_norm and int(vv.stock_quantity or 0) <= 0:
+                                    vv.stock_quantity = int(IMPORT_FALLBACK_STOCK_QTY)
+                                    db.add(vv)
 
                 if has_stock_map:
                     allowed_sizes = {str(k).replace(",", ".").strip() for k in stock_map.keys() if str(k).strip()}

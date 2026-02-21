@@ -555,7 +555,7 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
         payload_with_text_links["image_urls"] = merged
     images = _normalize_image_urls(payload_with_text_links)
     images = _localize_image_urls(images, title_hint=(payload.get("title") or ""))
-    color_detection = detect_product_color(images, title_hint=(payload.get("title") or text)) if images else {"color": None, "confidence": 0.0, "debug": {"reason": "no_images"}, "per_image": []}
+    color_detection = detect_product_color(images) if images else {"color": None, "confidence": 0.0, "debug": {"reason": "no_images"}, "per_image": []}
     title = None
     for line in (text.splitlines() if text else []):
         ln = line.strip()
