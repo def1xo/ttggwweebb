@@ -1511,20 +1511,20 @@ def test_import_products_shop_vkus_splits_two_rows_by_post_link_into_two_colorwa
             by_color_images.setdefault(c, set()).update(v.images or [])
             s = db.query(models.Size).filter(models.Size.id == v.size_id).one().name if v.size_id else ""
             by_color_sizes.setdefault(c, set()).add(s)
-        assert by_color_images["white"] == {
+        assert by_color_images["белый"] == {
             "https://cdn.example.com/a1.jpg",
             "https://cdn.example.com/a2.jpg",
             "https://cdn.example.com/a3.jpg",
             "https://cdn.example.com/a4.jpg",
         }
-        assert by_color_images["black"] == {
+        assert by_color_images["черный"] == {
             "https://cdn.example.com/b1.jpg",
             "https://cdn.example.com/b2.jpg",
             "https://cdn.example.com/b3.jpg",
             "https://cdn.example.com/b4.jpg",
         }
-        assert by_color_sizes["white"] == {"41", "42", "43"}
-        assert by_color_sizes["black"] == {"42", "43", "44"}
+        assert by_color_sizes["белый"] == {"41", "42", "43"}
+        assert by_color_sizes["черный"] == {"42", "43", "44"}
     finally:
         db.close()
         Base.metadata.drop_all(engine)
@@ -1583,7 +1583,7 @@ def test_import_products_shop_vkus_single_row_keeps_single_colorway_for_four_to_
         p = products[0]
         variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
         colors = {db.query(models.Color).filter(models.Color.id == v.color_id).one().name for v in variants if v.color_id}
-        assert colors == {"white"}
+        assert colors == {"белый"}
         merged_images = set()
         for v in variants:
             merged_images.update(v.images or [])
