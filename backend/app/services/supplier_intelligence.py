@@ -8,8 +8,6 @@ import os
 import re
 import statistics
 import time
-import hashlib
-import random
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any, Iterable, Optional
@@ -64,6 +62,16 @@ def _download_image_bytes(url: str, timeout_sec: int = 20, max_bytes: int = 6_00
     return data
 
 
+SHOE_KEYWORDS: tuple[str, ...] = (
+    "кросс", "sneaker", "shoe", "boot", "кеды", "обув", "ботин", "лофер", "сланц", "dunk", "jordan",
+    "new balance", "nb ", "nike", "adidas", "asics", "puma", "reebok", "yeezy", "forum", "gel", "kahana",
+    "timberland", "salomon", "air force", "air max", "vomero", "retropy", "samba", "gazelle", "campus",
+)
+ACCESSORY_KEYWORDS: tuple[str, ...] = (
+    "belt", "cap", "hat", "beanie", "bag", "backpack", "wallet", "scarf", "gloves", "keychain",
+    "jewelry", "watchband", "sunglasses", "кепк", "шапк", "сумк", "ремень", "аксесс", "рюкзак", "кошелек",
+)
+
 CATEGORY_RULES: dict[str, tuple[str, ...]] = {
     "Кофты": ("худи", "zip", "зип", "толстов", "свитшот", "hoodie"),
     "Футболки": ("футбол", "tee", "t-shirt", "майка"),
@@ -73,12 +81,8 @@ CATEGORY_RULES: dict[str, tuple[str, ...]] = {
     "Рубашки": ("рубаш", "shirt"),
     "Лонгсливы": ("лонгслив", "longsleeve", "long sleeve"),
     "Свитера": ("свитер", "джемпер", "pullover", "костюм", "suit", "set"),
-    "Обувь": (
-        "кросс", "sneaker", "кеды", "обув", "ботин", "лофер", "сланц",
-        "new balance", "nb ", "nike", "adidas", "asics", "puma", "reebok", "jordan", "yeezy",
-        "air force", "air max", "vomero", "retropy", "samba", "gazelle", "campus",
-    ),
-    "Аксессуары": ("кепк", "шапк", "сумк", "ремень", "аксесс", "рюкзак", "кошелек", "wallet", "bag"),
+    "Обувь": SHOE_KEYWORDS,
+    "Аксессуары": ACCESSORY_KEYWORDS,
 }
 
 
@@ -225,7 +229,13 @@ def map_category(raw_title: str) -> str:
     t = (raw_title or "").strip().lower()
     if not t:
         return "Аксессуары"
+    if any(k in t for k in SHOE_KEYWORDS):
+        return "Обувь"
+    if any(k in t for k in ACCESSORY_KEYWORDS):
+        return "Аксессуары"
     for cat, keywords in CATEGORY_RULES.items():
+        if cat in {"Обувь", "Аксессуары"}:
+            continue
         if any(k in t for k in keywords):
             return cat
     return "Аксессуары"
@@ -1090,6 +1100,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             if u not in image_urls:
                 image_urls.append(u)
         image_url = image_urls[0] if image_urls else None
+        post_link = next((u for u in image_urls if re.search(r"(?:t\.me|telegram\.me)/", str(u), flags=re.I)), None)
         description = _norm(row[idx_desc]) if idx_desc is not None and idx_desc < len(row) else ""
 
         out.append({
@@ -1103,6 +1114,7 @@ def extract_catalog_items(rows: list[list[str]], max_items: int = 60) -> list[di
             "stock_map": stock_map or None,
             "image_url": image_url,
             "image_urls": image_urls,
+            "post_link": post_link,
             "description": description or None,
         })
     return out
@@ -1123,78 +1135,50 @@ def infer_colors_with_ai(
 
 def generate_youth_description(title: str, category_name: str | None = None, color: str | None = None) -> str:
     t = _norm(title) or "Эта модель"
-    cat = (_norm(category_name) or "лук").lower()
+    cat = (_norm(category_name) or "товар").lower()
     clr = _norm(color)
 
     seed_src = f"{t}|{cat}|{clr}".encode("utf-8", errors="ignore")
     rng = random.Random(int(hashlib.sha256(seed_src).hexdigest()[:16], 16))
 
-    vibes = ["вайбовый", "сочный", "актуальный", "чёткий", "стильный", "уверенный", "чистый"]
-    use_cases = ["под универ", "на прогулки", "на каждый день", "в поездки", "в вечерний выход"]
-    closers = [
-        "Сочетается с базой и акцентными вещами без лишней суеты.",
-        "Собирает сильный образ даже с простыми джинсами и худи.",
-        "Выглядит свежо в кадре и вживую, без перегруза по деталям.",
-        "Легко миксуется с кроссами, аксессуарами и верхом по сезону.",
+    intros = [
+        f"{t} — уверенная база для стрит-образов без перегруза.",
+        f"{t} выглядит актуально и чисто: это вариант для повседневного стрит-стиля.",
+        f"{t} — практичный {cat}, который легко встраивается в стрит-гардероб.",
     ]
-    feature_map = {
-        "hoodie": "мягкий объём и расслабленный fit",
-        "худи": "мягкий объём и расслабленный fit",
-        "zip": "удобная молния и вариативная посадка",
-        "tee": "лёгкая база на каждый день",
-        "футбол": "лёгкая база на каждый день",
-        "jacket": "структурный силуэт и уверенный верхний слой",
-        "куртк": "структурный силуэт и уверенный верхний слой",
-        "jeans": "плотная фактура и стабильная посадка",
-        "джинс": "плотная фактура и стабильная посадка",
-        "sneaker": "удобная колодка и акцент в образе",
-        "кроссов": "удобная колодка и акцент в образе",
-    }
-    picked_features = [desc for k, desc in feature_map.items() if k in t.lower()]
-    feature_line = rng.choice(picked_features) if picked_features else "комфортный силуэт и аккуратный акцент на деталях"
-
-    color_key = str(clr or "").lower()
-    color_notes = {
-        "purple": ["фиолетовый акцент", "акцентная расцветка", "выразительный фиолетовый тон"],
-        "green": ["зелёный вайб", "сочный акцент", "живой зелёный тон"],
-        "lime": ["зелёный вайб", "сочный акцент", "живой зелёный тон"],
-        "olive": ["зелёный вайб", "сочный акцент", "живой зелёный тон"],
-        "black/white": ["чистая база", "универсальный контраст", "баланс светлого и тёмного"],
-    }
-    color_phrase = rng.choice(color_notes.get(color_key, ["цвет работает как аккуратный акцент", "расцветка легко встраивается в гардероб"]))
-
-    templates = [
-        "{title} — {vibe} {cat}, который легко встраивается в гардероб {use_case}. {feature}. {color_phrase}. {closer}",
-        "{title} — {vibe} вариант для тех, кто любит чистый стиль и удобство {use_case}. {feature}. {color_phrase}. {closer}",
-        "{title} держит баланс между трендом и базой: {vibe} {cat} на {use_case}. {feature}. {color_phrase}. {closer}",
-        "{title} — это {vibe} настроение без перегруза: {cat} для {use_case}. {feature}. {color_phrase}. {closer}",
-        "{title} — {vibe} выбор в ротацию на каждый сезон. Подходит {use_case}, даёт уверенный силуэт. {feature}. {color_phrase}.",
-        "{title} заходит в лук с первого выхода: {vibe} {cat}, который удобно носить {use_case}. {feature}. {color_phrase}.",
-        "{title} выглядит актуально и спокойно: {vibe} {cat} на {use_case}. {feature}. {color_phrase}. {closer}",
-        "{title} — когда нужен чистый стайл без лишнего шума. {vibe} подача для {use_case}. {feature}. {color_phrase}. {closer}",
-        "{title} даёт правильный ритм образу: {vibe} {cat}, удобный в движении и повседневке {use_case}. {feature}. {color_phrase}.",
-        "{title} работает и соло, и в слоях: {vibe} вайб, понятная посадка и комфорт {use_case}. {feature}. {color_phrase}. {closer}",
+    details = [
+        "Модель комфортно носить весь день: от учебы и работы до прогулок и встреч.",
+        "Силуэт собранный, но не душный — подходит под спокойные и акцентные сочетания.",
+        "Дизайн не спорит с остальными вещами, поэтому образ собирается быстро.",
     ]
-    text = rng.choice(templates).format(
-        title=t,
-        vibe=rng.choice(vibes),
-        cat=cat,
-        use_case=rng.choice(use_cases),
-        feature=feature_line[:1].upper() + feature_line[1:],
-        color_phrase=color_phrase[:1].upper() + color_phrase[1:],
-        closer=rng.choice(closers),
-    )
-    if clr:
-        text += f" Цвет: {clr.lower()}."
-    text = " ".join(text.split())
-    text = re.sub(r"\b(\w+)\s+\1\b", r"\1", text, flags=re.IGNORECASE)
-    text = text.replace("на на", "на")
+    combos = [
+        "Хорошо работает с джинсами, карго, базовыми брюками и однотонным верхом.",
+        "Легко сочетается с многослойными комплектами и нейтральными аксессуарами.",
+        "Подходит для капсульного гардероба, где важны универсальность и аккуратный вид.",
+    ]
 
-    if re.search(r"(?i)(кросс|sneaker|yeezy|air|max|forum|dunk|vomero)", t):
-        addon = " Подойдёт под джинсы, карго и базовый худи."
-        if addon.strip().lower() not in text.lower():
-            text += addon
-    return " ".join(text.split())
+    bullets_pool = [
+        "• Актуальный силуэт для города",
+        "• Комфортный формат на каждый день",
+        "• Легко сочетать с базовым гардеробом",
+        "• Уместно смотрится в образах 15–25",
+        "• Без перегруза деталями",
+        "• Подходит под многослойные комбинации",
+    ]
+
+    p1 = intros[rng.randrange(len(intros))]
+    p2 = details[rng.randrange(len(details))]
+    p3 = combos[rng.randrange(len(combos))]
+    color_line = f"Цвет: {clr.lower()}." if clr else ""
+
+    paragraphs = [p1, p2, p3]
+    if color_line:
+        paragraphs.append(color_line)
+    bullets = bullets_pool[rng.randrange(0, 2):rng.randrange(4, 6)]
+    if len(bullets) < 3:
+        bullets = bullets_pool[:4]
+
+    return "\n\n".join(paragraphs[:4]) + "\n\n" + "\n".join(bullets[:6])
 
 
 def generate_ai_product_description(
@@ -1206,22 +1190,9 @@ def generate_ai_product_description(
 ) -> str:
     """Generate local fallback product copy without external providers."""
 
-    text = " ".join(str(generate_youth_description(title, category_name=category_name, color=color) or "").split())
-    if not text:
-        return ""
-    if len(text) <= max_chars:
-        return text
-    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", text) if p.strip()]
-    out = ""
-    for p in parts:
-        candidate = (out + " " + p).strip() if out else p
-        if len(candidate) <= max_chars:
-            out = candidate
-        else:
-            break
-    if out:
-        return out
-    return (text[: max(0, max_chars - 1)].rstrip() + "…") if max_chars > 1 else text[:max_chars]
+    text = generate_youth_description(title, category_name=category_name, color=color)
+    text = " ".join(str(text or "").split())
+    return text[:max_chars] if text else ""
 
 
 MIN_MARKUP_RATIO = 1.40
