@@ -496,6 +496,22 @@ def _compose_top_colors(score: Dict[str, float], total_score: float) -> str | No
     return normalize_color_label(c1) or c1
 
 
+def _finalize_color_from_scores(score: Dict[str, float]) -> str:
+    if not score:
+        return "multicolor"
+    total_score = max(0.001, sum(score.values()))
+    ranked = sorted(score.items(), key=lambda x: x[1], reverse=True)
+    top1, s1 = ranked[0]
+    if len(ranked) == 1:
+        return normalize_color_label(top1)
+    top2, s2 = ranked[1]
+    if {top1, top2} <= {"beige", "yellow", "brown"}:
+        return normalize_color_label(top1)
+    if s2 >= (0.30 * s1) and s2 >= (0.22 * total_score):
+        return normalize_color_label(f"{top1}/{top2}")
+    return normalize_color_label(top1)
+
+
 def detect_product_color(image_sources: Sequence[str], title_hint: str | None = None) -> Dict[str, Any]:
     valid = [str(x).strip() for x in (image_sources or []) if str(x or "").strip()]
     votes: List[ImageColorResult] = []
@@ -533,20 +549,25 @@ def detect_product_color(image_sources: Sequence[str], title_hint: str | None = 
         for p in (parts or [str(v.color)]):
             support_photos[p] += 1
 
+    # crop/zoom outlier suppression: one-photo weak colors are dropped as noise
+    total_score = max(0.001, sum(score.values()))
+    filtered_score: Dict[str, float] = {}
+    for c, s in score.items():
+        if support_photos.get(c, 0) <= 1 and s < (0.18 * total_score):
+            continue
+        filtered_score[c] = s
+    if filtered_score:
+        score = filtered_score
+
     # 5 photos rule: force one stable result (single color or a composite pair)
-    if len(valid) == 5:
-        total_s = sum(score.values())
-        valid_score = {}
-        for c, s in score.items():
-            if support_photos.get(c, 0) >= 2 or s >= 0.55 * max(0.001, total_s):
-                valid_score[c] = s
-        c1 = _compose_top_colors(valid_score or score, sum((valid_score or score).values()))
+    if 4 <= len(valid) <= 6:
+        c1 = _finalize_color_from_scores(score)
         top = sorted(score.items(), key=lambda x: x[1], reverse=True)
         s1 = top[0][1] if top else 0.0
         out = {
             "color": c1,
             "confidence": round(min(0.99, s1 / max(0.001, sum(score.values())) + 0.15), 3),
-            "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "support_photos": dict(support_photos), "forced_single_for_5": True},
+            "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "support_photos": dict(support_photos), "forced_single_for_4_6": True, "forced_single_for_5": (len(valid) == 5)},
             "per_image": per_image,
         }
         if (not out["color"] or float(out.get("confidence") or 0) < 0.35):
@@ -557,12 +578,7 @@ def detect_product_color(image_sources: Sequence[str], title_hint: str | None = 
         return out
 
     top = sorted(score.items(), key=lambda x: x[1], reverse=True)
-    total_s = sum(score.values())
-    valid_score = {}
-    for c, s in score.items():
-        if support_photos.get(c, 0) >= 2 or s >= 0.55 * max(0.001, total_s):
-            valid_score[c] = s
-    color = _compose_top_colors(valid_score or score, sum((valid_score or score).values())) or top[0][0]
+    color = _compose_top_colors(score, sum(score.values())) or top[0][0]
     conf = top[0][1] / max(0.001, sum(score.values()))
 
     out = {

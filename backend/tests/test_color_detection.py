@@ -172,6 +172,33 @@ def test_detect_product_color_zoom_outlier_does_not_add_new_color(monkeypatch):
     assert out["color"] == "black/purple"
 
 
+def test_detect_product_color_5_photos_prefers_single_composite_label(monkeypatch):
+    class R:
+        def __init__(self, color, conf):
+            self.color = color
+            self.confidence = conf
+            self.cluster_share = 0.6
+            self.sat = 0.2
+            self.light = 60
+            self.lab_a = 0
+            self.lab_b = 0
+            self.coverage = 0.5
+            self.zoom_flag = False
+            self.debug = {}
+
+    seq = [
+        R("black/gray", 0.70),
+        R("black/gray", 0.67),
+        R("black/gray", 0.69),
+        R("black/gray", 0.66),
+        R("gray/beige", 0.42),
+    ]
+    monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
+    out = cd.detect_product_color(["1", "2", "3", "4", "5"])
+    assert out["color"] == "black/gray"
+    assert "/" in out["color"]
+
+
 def test_normalize_color_variants_converge_to_canonical_parts():
     vals = [
         cd.normalize_color_label("фиолетовый"),

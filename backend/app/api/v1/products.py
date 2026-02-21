@@ -24,6 +24,7 @@ def _images_overlap_ratio(a: list[str], b: list[str]) -> float:
 
 
 def _build_color_payload(p: models.Product) -> Dict[str, Any]:
+    canonical = normalize_color_label(getattr(p, "detected_color", None)) if getattr(p, "detected_color", None) else None
     variants = list(getattr(p, "variants", []) or [])
     base_images = [im.url for im in sorted((p.images or []), key=lambda x: ((x.sort or 0), x.id))]
     color_groups: Dict[str, Dict[str, Any]] = {}
@@ -78,14 +79,28 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
                 }
             }
 
-    available = sorted([k for k in color_groups.keys() if k and k != "unknown"])
-    selected = available[0] if available else (normalize_color_label(getattr(p, "detected_color", None)) or None)
+    if canonical:
+        available = [canonical]
+        selected = canonical
+    else:
+        available = sorted([k for k in color_groups.keys() if k and k != "unknown"])
+        selected = available[0] if available else None
     if selected and selected in color_groups:
         selected_images = color_groups[selected]["images"]
     else:
         selected_images = list(base_images)
 
-    images_by_color = {str(k): list(v.get("images") or []) for k, v in color_groups.items() if k and k != "unknown"}
+    # 4-6 photos = one colorway: no per-color image filtering on frontend
+    if 4 <= len(base_images) <= 6:
+        selected_images = list(base_images)
+        if selected and selected not in color_groups:
+            color_groups[selected] = {
+                "color": selected,
+                "variant_ids": sorted({int(v.id) for v in variants if getattr(v, "id", None)}),
+                "images": list(base_images),
+            }
+
+    images_by_color = {str(k): (list(base_images) if 4 <= len(base_images) <= 6 else list(v.get("images") or [])) for k, v in color_groups.items() if k and k != "unknown" and (not canonical or str(k) == canonical)}
     return {
         "available_colors": available,
         "selected_color": selected,
