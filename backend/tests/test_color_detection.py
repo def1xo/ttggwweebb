@@ -1,3 +1,5 @@
+from PIL import Image, ImageDraw
+
 from app.services import color_detection as cd
 
 
@@ -44,3 +46,46 @@ def test_detect_product_color_for_5_images_forces_single(monkeypatch):
     out = cd.detect_product_color(["1", "2", "3", "4", "5"])
     assert out["color"] == "beige"
     assert out["debug"]["forced_single_for_5"] is True
+
+
+def test_extract_subject_pixels_keeps_black_and_white_subject():
+    img = Image.new("RGB", (220, 220), "white")
+    d = ImageDraw.Draw(img)
+    d.rectangle((40, 70, 180, 150), fill="black")
+    pixels = cd._extract_subject_pixels(img)
+    assert len(pixels) > 100
+
+
+def test_detect_color_from_image_red_object_white_background(tmp_path):
+    img = Image.new("RGB", (360, 360), "white")
+    d = ImageDraw.Draw(img)
+    d.rectangle((90, 90, 270, 270), fill=(212, 30, 28))
+    p = tmp_path / "red_center.png"
+    img.save(p)
+    out = cd.detect_color_from_image_source(str(p))
+    assert out is not None
+    assert out.color == "red"
+
+
+def test_detect_product_color_black_white_composite(monkeypatch):
+    class R:
+        def __init__(self, color, conf, sat=0.1):
+            self.color = color
+            self.confidence = conf
+            self.cluster_share = 0.58
+            self.sat = sat
+            self.light = 64
+            self.lab_a = 0
+            self.lab_b = 0
+            self.debug = {}
+
+    seq = [R("black", 0.64), R("white", 0.62), R("black", 0.65), R("white", 0.63), R("black", 0.60)]
+    monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
+    out = cd.detect_product_color(["1", "2", "3", "4", "5"])
+    assert out["color"] == "black/white"
+    assert out["color"] != "multicolor"
+    assert out["color"] is not None
+
+
+def test_normalize_color_label_deduplicates_and_limits_parts():
+    assert cd.normalize_color_label("White / black / black") == "black/white"
