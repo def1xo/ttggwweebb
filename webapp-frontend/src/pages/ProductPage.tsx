@@ -102,20 +102,18 @@ function imagesForColor(p: any, color: string | null): string[] {
   const allImages = collectProductImages(p);
   if (allImages.length >= 4 && allImages.length <= 6) return allImages;
   if (!color) return collectProductImages(p);
-  const groups = Array.isArray(p?.color_variants) ? p.color_variants : [];
-  const hit = groups.find((g: any) => String(g?.color || "") === String(color));
-  if (hit?.images?.length) {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const item of hit.images) {
-      const normalized = normalizeMediaUrl(item);
-      if (!normalized || seen.has(normalized)) continue;
-      seen.add(normalized);
-      out.push(normalized);
-    }
-    if (out.length) return out;
+  const byColor = p?.images_by_color && typeof p.images_by_color === "object" ? p.images_by_color : {};
+  const raw = Array.isArray(byColor?.[color]) ? byColor[color] : [];
+  if (!raw.length) return collectProductImages(p);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of raw) {
+    const normalized = normalizeMediaUrl(item);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
   }
-  return collectProductImages(p);
+  return out.length ? out : collectProductImages(p);
 }
 
 function getVariantStock(v: any): number {

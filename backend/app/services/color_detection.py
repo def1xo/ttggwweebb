@@ -144,6 +144,10 @@ def normalize_color_label(color: str | None) -> str:
     return "/".join(out)
 
 
+def normalize_color_key(raw: str | None) -> str:
+    return normalize_color_label(raw)
+
+
 def _nearest_canonical_from_lab(lab: Tuple[float, float, float]) -> str:
     best = "multicolor"
     best_d = 10e9
@@ -510,6 +514,100 @@ def _finalize_color_from_scores(score: Dict[str, float]) -> str:
     if s2 >= (0.30 * s1) and s2 >= (0.22 * total_score):
         return normalize_color_label(f"{top1}/{top2}")
     return normalize_color_label(top1)
+
+
+def _collect_color_scores(votes: Sequence[ImageColorResult]) -> tuple[Dict[str, float], Dict[str, int]]:
+    score: Dict[str, float] = defaultdict(float)
+    support_photos: Dict[str, int] = defaultdict(int)
+    for v in votes:
+        w = max(0.05, float(v.confidence))
+        if bool(getattr(v, "zoom_flag", False)):
+            w *= 0.6
+        parts = [p for p in str(v.color or "").split("/") if p]
+        if parts:
+            part_w = w / float(len(parts))
+            for p in parts:
+                score[p] += part_w
+                support_photos[p] += 1
+        else:
+            key = str(v.color or "multicolor")
+            score[key] += w
+            support_photos[key] += 1
+    return score, support_photos
+
+
+def _remove_single_photo_noise(score: Dict[str, float], support_photos: Dict[str, int]) -> Dict[str, float]:
+    total_score = max(0.001, sum(score.values()))
+    filtered_score: Dict[str, float] = {}
+    for c, s in score.items():
+        if support_photos.get(c, 0) <= 1 and s < (0.18 * total_score):
+            continue
+        filtered_score[c] = s
+    return filtered_score or score
+
+
+def _single_key_from_votes(votes: Sequence[ImageColorResult]) -> str:
+    if not votes:
+        return "multicolor"
+    score, support = _collect_color_scores(votes)
+    score = _remove_single_photo_noise(score, support)
+    return _finalize_color_from_scores(score) or "multicolor"
+
+
+def detect_product_colors_from_photos(image_sources: Sequence[str]) -> Dict[str, Any]:
+    ordered = [str(x).strip() for x in (image_sources or []) if str(x or "").strip()]
+    if not ordered:
+        return {"color_keys": [], "photo_color_keys": [], "ordered_photos": []}
+
+    votes_by_index: dict[int, ImageColorResult] = {}
+    for idx, src in enumerate(ordered):
+        res = detect_color_from_image_source(src)
+        if res is not None:
+            votes_by_index[idx] = res
+
+    def _label_for_indices(indices: Sequence[int]) -> str:
+        local_votes = [votes_by_index[i] for i in indices if i in votes_by_index]
+        if local_votes:
+            return normalize_color_key(_single_key_from_votes(local_votes)) or "multicolor"
+        fallback = [ordered[i] for i in indices if 0 <= i < len(ordered)]
+        guessed = detect_product_color(fallback).get("color") if fallback else None
+        return normalize_color_key(str(guessed or "multicolor")) or "multicolor"
+
+    n = len(ordered)
+    if 4 <= n <= 6:
+        single = _label_for_indices(list(range(n)))
+        return {
+            "color_keys": [single],
+            "photo_color_keys": [single for _ in ordered],
+            "ordered_photos": ordered,
+        }
+
+    if n > 6:
+        first_indices = [0, 1]
+        last_indices = [n - 2, n - 1]
+        color_a = _label_for_indices(first_indices)
+        color_b = _label_for_indices(last_indices)
+        if color_a == color_b:
+            return {
+                "color_keys": [color_a],
+                "photo_color_keys": [color_a for _ in ordered],
+                "ordered_photos": ordered,
+            }
+        photo_keys = [color_a for _ in ordered]
+        photo_keys[n - 2] = color_b
+        photo_keys[n - 1] = color_b
+        return {
+            "color_keys": [color_a, color_b],
+            "photo_color_keys": photo_keys,
+            "ordered_photos": ordered,
+        }
+
+    single = _label_for_indices(list(range(n)))
+    return {
+        "color_keys": [single],
+        "photo_color_keys": [single for _ in ordered],
+        "ordered_photos": ordered,
+    }
 
 
 def detect_product_color(image_sources: Sequence[str], title_hint: str | None = None) -> Dict[str, Any]:

@@ -149,46 +149,10 @@ export function buildDisplayColors(product: any): DisplayColor[] {
   const explicitKeys = Array.isArray(product?.color_keys)
     ? product.color_keys.map((x: any) => normalizeCanonicalColor(String(x || ""))).filter(Boolean)
     : [];
-  if (explicitKeys.length) {
-    const first = explicitKeys[0];
-    return [{ canonical: first, label: toRuLabel(first) }];
-  }
-
-  const canonicalDirect = normalizeCanonicalColor(product?.canonical_color || product?.detected_color || "");
-  if (canonicalDirect && canonicalDirect !== "multicolor") {
-    return [{ canonical: canonicalDirect, label: toRuLabel(canonicalDirect) }];
-  }
-  const variants = Array.isArray(product?.variants) ? product.variants : [];
-  const candidate = [
-    product?.detected_color,
-    product?.selected_color,
-    ...(Array.isArray(product?.available_colors) ? product.available_colors : []),
-    ...(Array.isArray(product?.colors) ? product.colors : []),
-    ...variants.map((v: any) => v?.color?.name || v?.color),
-  ]
-    .map((x) => String(x || ""))
-    .filter(Boolean);
-
-  const canon = Array.from(new Set(candidate.map((c) => normalizeCanonicalColor(c)).filter(Boolean)));
-  if (!canon.length) return [];
-
-  // Drop redundant single color when composite already contains it.
-  const filtered = canon.filter((c) => {
-    if (!c.includes("/")) {
-      return !canon.some((cc) => cc.includes("/") && cc.split("/").includes(c));
-    }
-    return true;
-  });
-  return filtered
-    .sort((a, b) => {
-      const ac = a.includes("/") ? 0 : 1;
-      const bc = b.includes("/") ? 0 : 1;
-      if (ac !== bc) return ac - bc;
-      return a.localeCompare(b);
-    })
-    .slice(0, 2)
-    .map((c) => ({ canonical: c, label: toRuLabel(c) }));
+  const unique = Array.from(new Set(explicitKeys)).slice(0, 2);
+  return unique.map((canonical) => ({ canonical, label: toRuLabel(canonical) }));
 }
+
 
 export function buildDisplayColorChips(product: any, _locale: "ru" | "en" = "ru"): DisplayColor[] {
   return buildDisplayColors(product);
