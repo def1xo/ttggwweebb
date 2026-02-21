@@ -217,7 +217,7 @@ def test_infer_colors_with_ai_disabled_returns_empty(monkeypatch):
         image_urls=["https://cdn/a.jpg", "https://cdn/b.jpg"],
         provider="disabled",
     )
-    assert got == []
+    assert got == ["черный"]
 
 
 def test_infer_colors_with_ai_fallback_parses_plain_text(monkeypatch):
@@ -1104,12 +1104,43 @@ def test_extract_shop_vkus_color_tokens_two_repeated_colors_without_signature_cl
     monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
 
     got = asi._extract_shop_vkus_color_tokens({"title": "Zoom Vomero"}, image_urls=["a1", "a2", "a3", "b1", "b2"])
-    assert got == []
+    assert got == ["черный"]
+
+
+def test_extract_shop_vkus_color_tokens_forces_single_color_for_four_to_six_unique_photos(monkeypatch):
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "черный" if u in {"a1", "a2", "a3"} else "белый")
+    monkeypatch.setattr(
+        asi,
+        "image_print_signature_from_url",
+        lambda u: "sig-a" if u in {"a1", "a2", "a3"} else "sig-b",
+    )
+    monkeypatch.setattr(asi, "print_signature_hamming", lambda a, b: 0 if a == b else 40)
+
+    got = asi._extract_shop_vkus_color_tokens({"title": "Forum Mid"}, image_urls=["a1", "a2", "a3", "b1", "b2"])
+    assert got == ["черный"]
+
+
+def test_extract_shop_vkus_color_tokens_keeps_multiple_colors_when_more_than_six_unique_photos(monkeypatch):
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "черный" if u in {"a1", "a2", "a3", "a4"} else "белый")
+    monkeypatch.setattr(
+        asi,
+        "image_print_signature_from_url",
+        lambda u: "sig-a" if u in {"a1", "a2", "a3", "a4"} else "sig-b",
+    )
+    monkeypatch.setattr(asi, "print_signature_hamming", lambda a, b: 0 if a == b else 40)
+
+    got = asi._extract_shop_vkus_color_tokens(
+        {"title": "Forum Mid"},
+        image_urls=["a1", "a2", "a3", "a4", "b1", "b2", "b3"],
+    )
+    assert got == ["черный", "белый"]
+
+
 def test_extract_shop_vkus_color_tokens_keeps_white_and_gray_from_images(monkeypatch):
     monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый" if u in {"a", "b"} else "серый")
     monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
     got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
-    assert got == ["белый", "серый"]
+    assert got == ["белый"]
 
 
 def test_extract_shop_vkus_color_tokens_keeps_two_colors_for_two_strong_signature_clusters(monkeypatch):
@@ -1122,7 +1153,7 @@ def test_extract_shop_vkus_color_tokens_keeps_two_colors_for_two_strong_signatur
     monkeypatch.setattr(asi, "print_signature_hamming", lambda a, b: 0 if a == b else 40)
 
     got = asi._extract_shop_vkus_color_tokens({"title": "Forum Mid"}, image_urls=["a1", "a2", "a3", "b1", "b2"])
-    assert got == ["белый", "фиолетовый"]
+    assert got == ["белый"]
 
 
 def test_extract_shop_vkus_color_tokens_normalizes_english_color_names(monkeypatch):
@@ -1130,7 +1161,7 @@ def test_extract_shop_vkus_color_tokens_normalizes_english_color_names(monkeypat
     monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
 
     got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
-    assert got == ["белый", "серый"]
+    assert got == ["белый"]
 
 
 def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
