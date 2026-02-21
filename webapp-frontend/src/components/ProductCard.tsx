@@ -4,6 +4,7 @@ import { useFavorites } from "../contexts/FavoritesContext";
 import { hapticImpact } from "../utils/tg";
 import ColorSwatch from "./ColorSwatch";
 import { HeartSmall } from "./Icons";
+import { buildDisplayColors } from "../utils/colorUtils";
 
 type Props = {
   product: any;
@@ -73,11 +74,7 @@ export default function ProductCard({ product }: Props) {
       .filter(Boolean);
     const productSizes = Array.isArray(product?.sizes) ? product.sizes.map((x: any) => String(x || "")).filter(Boolean) : [];
     const sizes = sortSizes(uniq([...variantSizes, ...productSizes]).filter(isReasonableSizeChip));
-    const colors = uniq(
-      (variantList || [])
-        .map((v) => String(v?.color?.name || v?.color || ""))
-        .filter(Boolean)
-    );
+    const colors = buildDisplayColors(product).map((x) => x.canonical);
 
     let sizeLabel = "";
     if (sizes.length === 1) sizeLabel = sizes[0];

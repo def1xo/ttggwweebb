@@ -89,3 +89,49 @@ def test_detect_product_color_black_white_composite(monkeypatch):
 
 def test_normalize_color_label_deduplicates_and_limits_parts():
     assert cd.normalize_color_label("White / black / black") == "black/white"
+
+
+def test_normalize_color_label_maps_ru_and_aliases():
+    assert cd.normalize_color_label("фиолетовый") == "purple"
+    assert cd.normalize_color_label("grey/purple") == "gray/purple"
+
+
+def test_detect_color_from_image_green_object_white_background(tmp_path):
+    img = Image.new("RGB", (360, 360), "white")
+    d = ImageDraw.Draw(img)
+    d.rectangle((90, 90, 270, 270), fill=(25, 165, 55))
+    p = tmp_path / "green_center.png"
+    img.save(p)
+    out = cd.detect_color_from_image_source(str(p))
+    assert out is not None
+    assert out.color == "green"
+
+
+def test_detect_color_from_image_black_white_object(tmp_path):
+    img = Image.new("RGB", (360, 360), "white")
+    d = ImageDraw.Draw(img)
+    d.rectangle((80, 100, 170, 280), fill=(12, 12, 12))
+    d.rectangle((190, 100, 280, 280), fill=(245, 245, 245))
+    p = tmp_path / "bw_center.png"
+    img.save(p)
+    out = cd.detect_color_from_image_source(str(p))
+    assert out is not None
+    assert out.color == "black/white"
+
+
+def test_detect_product_color_prefers_purple_over_gray_noise(monkeypatch):
+    class R:
+        def __init__(self, color, conf):
+            self.color = color
+            self.confidence = conf
+            self.cluster_share = 0.55
+            self.sat = 0.3
+            self.light = 60
+            self.lab_a = 20
+            self.lab_b = -25
+            self.debug = {}
+
+    seq = [R("purple", 0.62), R("purple", 0.66), R("gray", 0.25), R("purple", 0.64), R("gray", 0.20)]
+    monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
+    out = cd.detect_product_color(["1", "2", "3", "4", "5"])
+    assert out["color"] == "purple"

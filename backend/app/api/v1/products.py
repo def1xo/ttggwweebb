@@ -8,6 +8,7 @@ from decimal import Decimal
 from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
 from app.services import media_store
+from app.services.color_detection import normalize_color_label
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -27,7 +28,8 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
     base_images = [im.url for im in sorted((p.images or []), key=lambda x: ((x.sort or 0), x.id))]
     color_groups: Dict[str, Dict[str, Any]] = {}
     for v in variants:
-        color_name = (v.color.name if getattr(v, "color", None) and v.color and v.color.name else None) or getattr(p, "detected_color", None) or "unknown"
+        raw_color = (v.color.name if getattr(v, "color", None) and v.color and v.color.name else None) or getattr(p, "detected_color", None) or "unknown"
+        color_name = normalize_color_label(raw_color) or str(raw_color)
         grp = color_groups.setdefault(color_name, {"color": color_name, "variant_ids": [], "images": []})
         grp["variant_ids"].append(v.id)
         for u in (v.images or []):
@@ -47,7 +49,7 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
             merged_variant_ids: list[int] = []
             for g in groups:
                 merged_variant_ids.extend([int(x) for x in (g.get("variant_ids") or [])])
-            single_color = (getattr(p, "detected_color", None) or groups[0].get("color") or "unknown")
+            single_color = normalize_color_label(getattr(p, "detected_color", None)) or (groups[0].get("color") or "unknown")
             color_groups = {
                 str(single_color): {
                     "color": str(single_color),
@@ -57,7 +59,7 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
             }
 
     available = sorted([k for k in color_groups.keys() if k and k != "unknown"])
-    selected = available[0] if available else (getattr(p, "detected_color", None) or None)
+    selected = available[0] if available else (normalize_color_label(getattr(p, "detected_color", None)) or None)
     if selected and selected in color_groups:
         selected_images = color_groups[selected]["images"]
     else:
@@ -116,7 +118,7 @@ def list_products(
                     if int(getattr(v, "stock_quantity", 0) or 0) > 0:
                         in_stock_sizes.add(size_name)
                 if getattr(v, "color", None) and v.color and v.color.name:
-                    colors.add(v.color.name)
+                    colors.add(normalize_color_label(v.color.name) or v.color.name)
             except Exception:
                 pass
             variants.append(
@@ -187,7 +189,7 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
         if (getattr(v, "size", None) and v.size and v.size.name and int(getattr(v, "stock_quantity", 0) or 0) > 0)
     }
     sizes = sorted((in_stock_sizes or all_sizes), key=lambda x: float(x) if str(x).replace('.', '', 1).isdigit() else str(x))
-    colors = sorted({(v.color.name if getattr(v, "color", None) and v.color else None) for v in (p.variants or []) if (getattr(v, "color", None) and v.color and v.color.name)})
+    colors = sorted({(normalize_color_label(v.color.name) or v.color.name) for v in (p.variants or []) if (getattr(v, "color", None) and v.color and v.color.name)})
 
     color_payload = _build_color_payload(p)
     return {

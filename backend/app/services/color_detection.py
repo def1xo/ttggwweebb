@@ -23,6 +23,34 @@ COLOR_PRIORITY: tuple[str, ...] = (
     "red", "pink", "purple", "blue", "green", "multicolor",
 )
 
+COLOR_SYNONYMS: dict[str, str] = {
+    "grey": "gray",
+    "violet": "purple",
+    "offwhite": "white",
+    "off-white": "white",
+    "lightgray": "gray",
+    "darkgray": "gray",
+    "dark-grey": "gray",
+    "light-grey": "gray",
+    "фиолетовый": "purple",
+    "фиолет": "purple",
+    "серый": "gray",
+    "чёрный": "black",
+    "черный": "black",
+    "белый": "white",
+    "зелёный": "green",
+    "зеленый": "green",
+    "красный": "red",
+    "синий": "blue",
+    "голубой": "blue",
+    "розовый": "pink",
+    "оранжевый": "orange",
+    "желтый": "yellow",
+    "жёлтый": "yellow",
+    "коричневый": "brown",
+    "бежевый": "beige",
+}
+
 
 @dataclass
 class ImageColorResult:
@@ -52,6 +80,7 @@ def normalize_color_label(color: str | None) -> str:
     out: list[str] = []
     seen: set[str] = set()
     for token in src.split("/"):
+        token = COLOR_SYNONYMS.get(token, token)
         if token not in CANONICAL_COLORS:
             continue
         if token in seen:
@@ -62,6 +91,19 @@ def normalize_color_label(color: str | None) -> str:
         return ""
     out = sorted(out, key=lambda x: COLOR_PRIORITY.index(x) if x in COLOR_PRIORITY else 999)[:2]
     return "/".join(out)
+
+
+def _keyword_fallback_color(title: str | None) -> str:
+    t = str(title or "").strip().lower()
+    if not t:
+        return ""
+    if "triple black" in t:
+        return "black"
+    if "oreo" in t:
+        return "black/white"
+    if "grinch" in t:
+        return "green"
+    return ""
 
 
 def _rgb_to_lab(rgb: Tuple[int, int, int]) -> Tuple[float, float, float]:
@@ -313,7 +355,7 @@ def _compose_top_colors(score: Dict[str, float], total_score: float) -> str | No
     return normalize_color_label(c1) or c1
 
 
-def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
+def detect_product_color(image_sources: Sequence[str], title_hint: str | None = None) -> Dict[str, Any]:
     valid = [str(x).strip() for x in (image_sources or []) if str(x or "").strip()]
     votes: List[ImageColorResult] = []
     for src in valid:
@@ -338,20 +380,32 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
         c1 = _compose_top_colors(score, sum(score.values()))
         top = sorted(score.items(), key=lambda x: x[1], reverse=True)
         s1 = top[0][1] if top else 0.0
-        return {
+        out = {
             "color": c1,
             "confidence": round(min(0.99, s1 / max(0.001, sum(score.values())) + 0.15), 3),
             "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "forced_single_for_5": True},
             "per_image": per_image,
         }
+        if (not out["color"] or float(out.get("confidence") or 0) < 0.35):
+            fb = _keyword_fallback_color(title_hint)
+            if fb:
+                out["color"] = fb
+                out["debug"]["keyword_fallback"] = True
+        return out
 
     top = sorted(score.items(), key=lambda x: x[1], reverse=True)
     color = _compose_top_colors(score, sum(score.values())) or top[0][0]
     conf = top[0][1] / max(0.001, sum(score.values()))
 
-    return {
+    out = {
         "color": color,
         "confidence": round(min(0.99, conf), 3),
         "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "forced_single_for_5": False},
         "per_image": per_image,
     }
+    if (not out["color"] or float(out.get("confidence") or 0) < 0.35):
+        fb = _keyword_fallback_color(title_hint)
+        if fb:
+            out["color"] = fb
+            out["debug"]["keyword_fallback"] = True
+    return out

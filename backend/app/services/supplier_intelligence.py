@@ -1160,6 +1160,10 @@ def generate_youth_description(title: str, category_name: str | None = None, col
         "{title} — это {vibe} настроение без перегруза: {cat} для {use_case}. {feature}. {closer}",
         "{title} — {vibe} выбор в ротацию на каждый сезон. Подходит {use_case}, даёт уверенный силуэт. {feature}.",
         "{title} заходит в лук с первого выхода: {vibe} {cat}, который удобно носить {use_case}. {feature}.",
+        "{title} выглядит актуально и спокойно: {vibe} {cat} на {use_case}. {feature}. {closer}",
+        "{title} — когда нужен чистый стайл без лишнего шума. {vibe} подача для {use_case}. {feature}. {closer}",
+        "{title} даёт правильный ритм образу: {vibe} {cat}, удобный в движении и повседневке {use_case}. {feature}.",
+        "{title} работает и соло, и в слоях: {vibe} вайб, понятная посадка и комфорт {use_case}. {feature}. {closer}",
     ]
     text = rng.choice(templates).format(
         title=t,
@@ -1183,9 +1187,22 @@ def generate_ai_product_description(
 ) -> str:
     """Generate local fallback product copy without external providers."""
 
-    text = generate_youth_description(title, category_name=category_name, color=color)
-    text = " ".join(str(text or "").split())
-    return text[:max_chars] if text else ""
+    text = " ".join(str(generate_youth_description(title, category_name=category_name, color=color) or "").split())
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", text) if p.strip()]
+    out = ""
+    for p in parts:
+        candidate = (out + " " + p).strip() if out else p
+        if len(candidate) <= max_chars:
+            out = candidate
+        else:
+            break
+    if out:
+        return out
+    return (text[: max(0, max_chars - 1)].rstrip() + "…") if max_chars > 1 else text[:max_chars]
 
 
 MIN_MARKUP_RATIO = 1.40

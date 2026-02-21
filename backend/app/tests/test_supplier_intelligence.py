@@ -251,6 +251,12 @@ def test_generate_youth_description_is_deterministic_for_same_input():
     assert txt1 == txt2
 
 
+def test_generate_youth_description_varies_by_title_seed():
+    txt1 = generate_youth_description("Худи Alpha", "Кофты", "черный")
+    txt2 = generate_youth_description("Худи Beta", "Кофты", "черный")
+    assert txt1 != txt2
+
+
 def test_split_size_tokens_supports_lists_and_ranges():
     assert split_size_tokens("S M L") == ["S", "M", "L"]
     assert split_size_tokens("42-44") == ["42", "43", "44"]
