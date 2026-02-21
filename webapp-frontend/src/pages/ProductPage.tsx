@@ -99,6 +99,8 @@ function collectProductImages(p: any): string[] {
 
 function imagesForColor(p: any, color: string | null): string[] {
   if (!p) return [];
+  const allImages = collectProductImages(p);
+  if (allImages.length >= 4 && allImages.length <= 6) return allImages;
   if (!color) return collectProductImages(p);
   const byColor = p?.images_by_color && typeof p.images_by_color === "object" ? p.images_by_color : {};
   const raw = Array.isArray(byColor?.[color]) ? byColor[color] : [];
