@@ -92,6 +92,31 @@ def _split_color_tokens(raw: str | None) -> list[str]:
     return out
 
 
+def _count_unique_photo_urls(image_urls: list[str] | None, limit: int = 12) -> int:
+    seen: set[str] = set()
+    for raw in (image_urls or [])[: max(0, int(limit))]:
+        key = str(raw or "").strip()
+        if key:
+            seen.add(key)
+    return len(seen)
+
+
+def _shop_vkus_force_single_color(image_urls: list[str] | None) -> bool:
+    unique_photos = _count_unique_photo_urls(image_urls)
+    return 4 <= unique_photos <= 6
+
+
+def _shop_vkus_finalize_color_tokens(tokens: list[str], image_urls: list[str] | None) -> list[str]:
+    cleaned: list[str] = []
+    for token in tokens:
+        value = str(token or "").strip()
+        if value and value not in cleaned:
+            cleaned.append(value)
+    if _shop_vkus_force_single_color(image_urls):
+        return cleaned[:1]
+    return cleaned
+
+
 
 
 
@@ -139,7 +164,7 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
                 found.append(cc)
 
     if len(found) >= 2:
-        return found[:3]
+        return _shop_vkus_finalize_color_tokens(found[:3], image_urls)
 
     # Fallback: infer colors from gallery with signature clusters.
     # This avoids false two-color splits when one model has one colorway,
@@ -197,7 +222,7 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
                         if color_name not in out:
                             out.append(color_name)
                     if out:
-                        return out
+                        return _shop_vkus_finalize_color_tokens(out, image_urls)
 
     color_hits: dict[str, int] = {}
     for _, key in analyzed:
@@ -209,14 +234,14 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
         # Secondary fallback when signature grouping is fragmented by angle,
         # but two stable colors are repeatedly seen in gallery.
         if int(second_cnt) >= 2 and int(second_cnt) * 10 >= int(lead_cnt) * 5:
-            return [str(lead_color), str(second_color)]
+            return _shop_vkus_finalize_color_tokens([str(lead_color), str(second_color)], image_urls)
     strong = [k for k, v in ranked_hits if int(v or 0) >= 2]
     if strong:
-        return strong[:1]
+        return _shop_vkus_finalize_color_tokens(strong[:1], image_urls)
     if ranked_hits:
-        return [str(ranked_hits[0][0])]
+        return _shop_vkus_finalize_color_tokens([str(ranked_hits[0][0])], image_urls)
     if found:
-        return found[:1]
+        return _shop_vkus_finalize_color_tokens(found[:1], image_urls)
     return []
 
 def _extract_shop_vkus_stock_map(item: dict) -> dict[str, int]:
@@ -548,12 +573,12 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
         return uniq
 
     if supplier_key == "shop_vkus":
-        # shop_vkus feeds often prepend two service frames in longer galleries.
+        # shop_vkus feeds can prepend service frames in some galleries.
+        # Keep clean short galleries in original order and drop the leading pair
+        # only when there are explicit bad-frame signals.
         pre = list(uniq)
         source = raw_norm or uniq
-        if len(source) >= 7:
-            pre = uniq[2:]
-        elif len(source) > 2:
+        if len(source) > 2:
             first_two = source[:2]
             rest = source[2:]
             has_supplier_marker = any(
@@ -2207,11 +2232,36 @@ def import_products_from_sources(
                         if listed_sizes and size_list_like and not size_range_like:
                             stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in listed_sizes}
 
+                if (
+                    not size_tokens
+                    and _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None)
+                    and raw_stock_str
+                    and stock_qty_parse_failed
+                ):
+                    inferred_from_stock = [
+                        str(x).strip()[:16]
+                        for x in split_size_tokens(raw_stock_str)
+                        if str(x).strip()[:16] and re.fullmatch(r"\d{2,3}(?:[.,]5)?", str(x).strip()[:16])
+                    ]
+                    if inferred_from_stock:
+                        size_tokens = list(dict.fromkeys(inferred_from_stock))
+                        if not stock_map:
+                            stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in size_tokens}
+
                 if not size_tokens and stock_map:
                     size_tokens = sorted(
                         stock_map.keys(),
                         key=lambda x: float(x) if str(x).replace(".", "", 1).isdigit() else str(x),
                     )
+
+                if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None):
+                    generic_in_stock_signal = bool(raw_stock_str and re.search(r"(?i)\b(в\s*наличии|есть|in\s*stock|available)\b", raw_stock_str))
+                    if generic_in_stock_signal and size_tokens and size_tokens != [""]:
+                        if not stock_map:
+                            stock_map = {str(sz): int(IMPORT_FALLBACK_STOCK_QTY) for sz in size_tokens if str(sz).strip()}
+                        elif all(int(v or 0) <= 1 for v in stock_map.values()):
+                            stock_map = {str(sz): int(IMPORT_FALLBACK_STOCK_QTY) for sz in size_tokens if str(sz).strip()}
+
                 if not size_tokens:
                     size_tokens = [""]
 
@@ -2230,7 +2280,7 @@ def import_products_from_sources(
                         size_key = str(size_name or "").strip()
                         if has_stock_map:
                             per_variant_stock = int(stock_map.get(size_key, 0) or 0)
-                        elif has_explicit_stock:
+                        elif has_explicit_stock and not stock_qty_parse_failed:
                             per_variant_stock = int(base_stock)
                             if remainder_stock > 0:
                                 per_variant_stock += 1
