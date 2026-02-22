@@ -14,8 +14,10 @@ from PIL import Image
 logger = logging.getLogger("color_detection")
 
 CANONICAL_COLORS: tuple[str, ...] = (
-    "black", "white", "gray", "beige", "brown", "yellow", "orange",
-    "red", "pink", "purple", "blue", "green", "multicolor",
+    "black", "white", "gray", "beige", "brown", "blue", "red", "green", "yellow", "orange", "purple", "pink",
+    "navy", "sky_blue", "teal", "turquoise", "mint", "olive", "lime", "burgundy", "maroon", "coral", "peach",
+    "lavender", "lilac", "violet", "khaki", "sand", "camel", "cream", "off_white", "silver", "gold", "bronze",
+    "multi", "none",
 )
 
 
@@ -73,8 +75,8 @@ def _extract_subject_pixels(img: Image.Image) -> List[Tuple[int, int, int]]:
     img = img.resize((220, 220))
     px = img.load()
 
-    x0, x1 = 24, 196
-    y0, y1 = 24, 196
+    x0, x1 = 52, 168
+    y0, y1 = 52, 168
     pixels: List[Tuple[int, int, int]] = []
     for y in range(y0, y1, 2):
         for x in range(x0, x1, 2):
@@ -82,10 +84,10 @@ def _extract_subject_pixels(img: Image.Image) -> List[Tuple[int, int, int]]:
             h1, s, v = colorsys.rgb_to_hsv(r / 255.0, g / 255.0, b / 255.0)
             if v > 0.95 and s < 0.10:
                 continue
-            if v < 0.06:
+            if v < 0.03:
                 continue
-            # keep more saturated/contrasty pixels, but allow warm neutrals for beige/brown
-            if s < 0.06 and not (r > g >= b and (r - b) > 8):
+            # keep more saturated/contrasty pixels, but allow warm neutrals and dark neutral product zones
+            if s < 0.06 and v > 0.25 and not (r > g >= b and (r - b) > 8):
                 continue
             pixels.append((r, g, b))
     return pixels
@@ -133,14 +135,15 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
     warm = b > 8 and a > -2
 
     if sat_very_low:
-        if l >= 88:
+        if l >= 90:
             return "white"
-        if l <= 28:
+        if l <= 30:
             return "black"
         if warm and l >= 62 and b >= 10:
             return "beige"
         if warm and l < 62:
             return "brown"
+        # low-saturation dark regions should not drift to blue
         return "gray"
 
     if sat_low:
@@ -148,6 +151,8 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
             return "beige"
         if warm and l < 58:
             return "brown"
+        if l < 45:
+            return "black"
 
     # hysteresis buffer: yellow hue with low sat goes beige
     if (0.10 <= h <= 0.18) and s < 0.28 and b < 28 and l > 55:
@@ -197,6 +202,17 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
     share = float(main["count"]) / float(total)
     confidence = max(0.05, min(0.99, share * (0.65 + min(0.35, s))))
 
+    # anti false-blue: if a strong dark neutral cluster exists, prefer black/gray over blue.
+    if color == "blue" and len(clusters) > 1:
+        for cl in clusters[1:]:
+            l2, a2, b2 = cl["center"]
+            rr3, gg3, bb3 = min(pixels, key=lambda p: (_rgb_to_lab(p)[0] - l2) ** 2 + (_rgb_to_lab(p)[1] - a2) ** 2 + (_rgb_to_lab(p)[2] - b2) ** 2)
+            _h2, s2, v2 = colorsys.rgb_to_hsv(rr3 / 255.0, gg3 / 255.0, bb3 / 255.0)
+            neutral_like = s2 < 0.16 and (v2 < 0.30 or l2 < 40)
+            if neutral_like and float(cl.get("count") or 0) / float(total) >= 0.25:
+                color = "black" if (v2 < 0.24 or l2 < 32) else "gray"
+                break
+
     if len(clusters) > 1:
         second = clusters[1]
         second_share = float(second["count"]) / float(total)
@@ -205,7 +221,7 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
         h2, s2, v2 = colorsys.rgb_to_hsv(rr3 / 255.0, gg3 / 255.0, bb3 / 255.0)
         c2 = canonical_color_from_lab_hsv(l2, a2, b2, h2, s2, v2)
         if c2 != color and share <= 0.68 and second_share >= 0.32 and confidence >= 0.45:
-            color = "multicolor"
+            color = "multi"
             confidence = min(confidence, 0.78)
 
     return ImageColorResult(
@@ -229,7 +245,7 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
             votes.append(res)
 
     if not votes:
-        return {"color": None, "confidence": 0.0, "debug": {"reason": "no_votes"}, "per_image": []}
+        return {"color": "none", "confidence": 0.0, "debug": {"reason": "no_votes"}, "per_image": []}
 
     score: Dict[str, float] = defaultdict(float)
     by_color: Dict[str, int] = defaultdict(int)
@@ -268,7 +284,7 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
     if len(top) > 1:
         c2, s2 = top[1]
         if color != c2 and conf <= 0.68 and (s2 / max(0.001, sum(score.values()))) >= 0.30 and min(top[0][1], s2) >= 1.0:
-            color = "multicolor"
+            color = "multi"
             conf = max(conf, s2 / max(0.001, sum(score.values())))
 
     return {

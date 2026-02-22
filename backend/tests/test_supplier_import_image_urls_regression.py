@@ -1479,7 +1479,7 @@ def test_import_products_shop_vkus_splits_two_rows_by_post_link_into_two_colorwa
         monkeypatch.setattr(
             asi,
             "dominant_color_name_from_url",
-            lambda u: "белый" if "/a" in str(u or "") else "черный",
+            lambda u: "white" if "/a" in str(u or "") else "black",
         )
 
         out = import_products_from_sources(
@@ -1499,6 +1499,8 @@ def test_import_products_shop_vkus_splits_two_rows_by_post_link_into_two_colorwa
         products = db.query(models.Product).all()
         assert len(products) == 1
         p = products[0]
+        p_images = [x.url for x in (p.images or [])]
+        assert len(p_images) > 6
         variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
         colors = {db.query(models.Color).filter(models.Color.id == v.color_id).one().name for v in variants if v.color_id}
         assert len(colors) == 2
@@ -1560,7 +1562,7 @@ def test_import_products_shop_vkus_single_row_keeps_single_colorway_for_four_to_
             "https://cdn.example.com/c5.jpg",
         ])
         monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
-        monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый")
+        monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "white")
 
         out = import_products_from_sources(
             ImportProductsIn(

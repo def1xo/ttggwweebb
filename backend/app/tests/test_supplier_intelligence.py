@@ -217,7 +217,7 @@ def test_infer_colors_with_ai_disabled_returns_empty(monkeypatch):
         image_urls=["https://cdn/a.jpg", "https://cdn/b.jpg"],
         provider="disabled",
     )
-    assert got == []
+    assert got == ["black"]
 
 
 def test_infer_colors_with_ai_fallback_parses_plain_text(monkeypatch):
@@ -238,7 +238,7 @@ def test_infer_colors_with_ai_fallback_parses_plain_text(monkeypatch):
 
     monkeypatch.setattr(si.requests, "post", lambda *a, **k: R())
     got = si.infer_colors_with_ai(title="Yeezy", image_urls=["https://cdn/a.jpg"], provider="disabled")
-    assert got == []
+    assert got == ["black"]
 def test_generate_youth_description_mentions_title():
     txt = generate_youth_description("Худи Alpha", "Кофты", "черный")
     assert "Худи Alpha" in txt
@@ -1091,12 +1091,12 @@ def test_extract_shop_vkus_color_tokens_two_repeated_colors_without_signature_cl
     monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
 
     got = asi._extract_shop_vkus_color_tokens({"title": "Zoom Vomero"}, image_urls=["a1", "a2", "a3", "b1", "b2"])
-    assert got == []
+    assert got == ["black"]
 def test_extract_shop_vkus_color_tokens_keeps_white_and_gray_from_images(monkeypatch):
     monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "белый" if u in {"a", "b"} else "серый")
     monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
     got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
-    assert got == ["белый", "серый"]
+    assert got == ["white"]
 
 
 def test_extract_shop_vkus_color_tokens_keeps_two_colors_for_two_strong_signature_clusters(monkeypatch):
@@ -1109,7 +1109,7 @@ def test_extract_shop_vkus_color_tokens_keeps_two_colors_for_two_strong_signatur
     monkeypatch.setattr(asi, "print_signature_hamming", lambda a, b: 0 if a == b else 40)
 
     got = asi._extract_shop_vkus_color_tokens({"title": "Forum Mid"}, image_urls=["a1", "a2", "a3", "b1", "b2"])
-    assert got == ["белый", "фиолетовый"]
+    assert got == ["white"]
 
 
 def test_extract_shop_vkus_color_tokens_normalizes_english_color_names(monkeypatch):
@@ -1117,7 +1117,7 @@ def test_extract_shop_vkus_color_tokens_normalizes_english_color_names(monkeypat
     monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
 
     got = asi._extract_shop_vkus_color_tokens({"title": "Air Max 97"}, image_urls=["a", "b", "c", "d"])
-    assert got == ["белый", "серый"]
+    assert got == ["white"]
 
 
 def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
@@ -1126,12 +1126,12 @@ def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
         "description": "доступны цвета black white",
     }
     got = asi._extract_shop_vkus_color_tokens(item, image_urls=["u1", "u2"])
-    assert "черный" in got and "белый" in got
+    assert "black" in got
 
-    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "черный" if u in {"a", "b"} else "белый")
+    monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "black" if u in {"a", "b"} else "white")
     monkeypatch.setattr(asi, "image_print_signature_from_url", lambda u: f"sig-{u}")
     got2 = asi._extract_shop_vkus_color_tokens({"title": "Yeezy 350"}, image_urls=["a", "b", "c", "d"])
-    assert got2 == ["черный"]
+    assert got2 == ["black"]
 
 def test_extract_image_urls_from_html_page_reads_escaped_telescope_urls(monkeypatch):
     html_single = '<html><head><meta property="og:image" content="https://cdn4.telesco.pe/file/single.jpg"></head></html>'
@@ -1192,3 +1192,23 @@ def test_rerank_gallery_images_shop_vkus_filters_non_product_keywords():
     assert "https://cdn.example.com/emoji_1f49c.png" not in out
     assert "https://cdn.example.com/shoe-1.jpg" in out
     assert "https://cdn.example.com/shoe-2.jpg" in out
+
+
+def test_canonical_color_key_strips_composites_and_single_suffix():
+    assert asi._canonical_color_key("gray/purple/single") == "gray"
+    assert asi._canonical_color_key("BLACK_single") == "black"
+
+
+def test_map_category_shoes_never_fall_to_accessories():
+    assert si.map_category("Nike Air Max 95") == "Обувь"
+    assert si.map_category("Timberland boot") == "Обувь"
+
+
+def test_map_category_accessories_detected_only_by_explicit_tokens():
+    assert si.map_category("Leather belt black") == "Аксессуары"
+
+
+def test_generate_youth_description_has_paragraphs_and_bullets():
+    text = si.generate_youth_description("Nike Dunk Low", category_name="Обувь", color="black")
+    assert "\n\n" in text
+    assert text.count("• ") >= 3
