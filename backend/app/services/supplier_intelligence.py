@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import os
+import random
 import re
 import statistics
 import time
@@ -62,16 +63,6 @@ def _download_image_bytes(url: str, timeout_sec: int = 20, max_bytes: int = 6_00
     return data
 
 
-SHOE_KEYWORDS: tuple[str, ...] = (
-    "кросс", "sneaker", "shoe", "boot", "кеды", "обув", "ботин", "лофер", "сланц", "dunk", "jordan",
-    "new balance", "nb ", "nike", "adidas", "asics", "puma", "reebok", "yeezy", "forum", "gel", "kahana",
-    "timberland", "salomon", "air force", "air max", "vomero", "retropy", "samba", "gazelle", "campus",
-)
-ACCESSORY_KEYWORDS: tuple[str, ...] = (
-    "belt", "cap", "hat", "beanie", "bag", "backpack", "wallet", "scarf", "gloves", "keychain",
-    "jewelry", "watchband", "sunglasses", "кепк", "шапк", "сумк", "ремень", "аксесс", "рюкзак", "кошелек",
-)
-
 CATEGORY_RULES: dict[str, tuple[str, ...]] = {
     "Кофты": ("худи", "zip", "зип", "толстов", "свитшот", "hoodie"),
     "Футболки": ("футбол", "tee", "t-shirt", "майка"),
@@ -81,8 +72,12 @@ CATEGORY_RULES: dict[str, tuple[str, ...]] = {
     "Рубашки": ("рубаш", "shirt"),
     "Лонгсливы": ("лонгслив", "longsleeve", "long sleeve"),
     "Свитера": ("свитер", "джемпер", "pullover", "костюм", "suit", "set"),
-    "Обувь": SHOE_KEYWORDS,
-    "Аксессуары": ACCESSORY_KEYWORDS,
+    "Обувь": (
+        "кросс", "sneaker", "кеды", "обув", "ботин", "лофер", "сланц",
+        "new balance", "nb ", "nike", "adidas", "asics", "puma", "reebok", "jordan", "yeezy",
+        "air force", "air max", "vomero", "retropy", "samba", "gazelle", "campus",
+    ),
+    "Аксессуары": ("кепк", "шапк", "сумк", "ремень", "аксесс", "рюкзак", "кошелек", "wallet", "bag"),
 }
 
 
@@ -229,13 +224,7 @@ def map_category(raw_title: str) -> str:
     t = (raw_title or "").strip().lower()
     if not t:
         return "Аксессуары"
-    if any(k in t for k in SHOE_KEYWORDS):
-        return "Обувь"
-    if any(k in t for k in ACCESSORY_KEYWORDS):
-        return "Аксессуары"
     for cat, keywords in CATEGORY_RULES.items():
-        if cat in {"Обувь", "Аксессуары"}:
-            continue
         if any(k in t for k in keywords):
             return cat
     return "Аксессуары"
@@ -1134,51 +1123,17 @@ def infer_colors_with_ai(
     return []
 
 def generate_youth_description(title: str, category_name: str | None = None, color: str | None = None) -> str:
-    t = _norm(title) or "Эта модель"
-    cat = (_norm(category_name) or "товар").lower()
+    t = _norm(title)
+    cat = _norm(category_name) or "лук"
     clr = _norm(color)
-
-    seed_src = f"{t}|{cat}|{clr}".encode("utf-8", errors="ignore")
-    rng = random.Random(int(hashlib.sha256(seed_src).hexdigest()[:16], 16))
-
-    intros = [
-        f"{t} — уверенная база для стрит-образов без перегруза.",
-        f"{t} выглядит актуально и чисто: это вариант для повседневного стрит-стиля.",
-        f"{t} — практичный {cat}, который легко встраивается в стрит-гардероб.",
-    ]
-    details = [
-        "Модель комфортно носить весь день: от учебы и работы до прогулок и встреч.",
-        "Силуэт собранный, но не душный — подходит под спокойные и акцентные сочетания.",
-        "Дизайн не спорит с остальными вещами, поэтому образ собирается быстро.",
-    ]
-    combos = [
-        "Хорошо работает с джинсами, карго, базовыми брюками и однотонным верхом.",
-        "Легко сочетается с многослойными комплектами и нейтральными аксессуарами.",
-        "Подходит для капсульного гардероба, где важны универсальность и аккуратный вид.",
-    ]
-
-    bullets_pool = [
-        "• Актуальный силуэт для города",
-        "• Комфортный формат на каждый день",
-        "• Легко сочетать с базовым гардеробом",
-        "• Уместно смотрится в образах 15–25",
-        "• Без перегруза деталями",
-        "• Подходит под многослойные комбинации",
-    ]
-
-    p1 = intros[rng.randrange(len(intros))]
-    p2 = details[rng.randrange(len(details))]
-    p3 = combos[rng.randrange(len(combos))]
-    color_line = f"Цвет: {clr.lower()}." if clr else ""
-
-    paragraphs = [p1, p2, p3]
-    if color_line:
-        paragraphs.append(color_line)
-    bullets = bullets_pool[rng.randrange(0, 2):rng.randrange(4, 6)]
-    if len(bullets) < 3:
-        bullets = bullets_pool[:4]
-
-    return "\n\n".join(paragraphs[:4]) + "\n\n" + "\n".join(bullets[:6])
+    mood = ""
+    if clr:
+        mood = f" Цвет: {clr}."
+    return (
+        f"{t} — вайбовый {cat.lower()} для повседневного стрит-стайла. "
+        f"Лёгко собирается в образ под универ, прогулки и вечерние вылазки.{mood} "
+        f"Сидит актуально, смотрится дорого, а носится каждый день без заморочек."
+    )
 
 
 def generate_ai_product_description(

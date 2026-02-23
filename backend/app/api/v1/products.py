@@ -8,6 +8,7 @@ from decimal import Decimal
 from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
 from app.services import media_store
+from app.services.color_detection import normalize_color_to_whitelist, detect_product_colors_from_photos
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -23,8 +24,16 @@ def _images_overlap_ratio(a: list[str], b: list[str]) -> float:
 
 
 def _build_color_payload(p: models.Product) -> Dict[str, Any]:
+    """Build color payload from already-stored DB data.
+
+    CRITICAL: Must NEVER download images or do heavy I/O.
+    Called for every product in every list_products response.
+    Live color detection only happens during import.
+    """
     variants = list(getattr(p, "variants", []) or [])
     base_images = [im.url for im in sorted((p.images or []), key=lambda x: ((x.sort or 0), x.id))]
+
+    # Variant-based color groups
     color_groups: Dict[str, Dict[str, Any]] = {}
     for v in variants:
         color_name = (v.color.name if getattr(v, "color", None) and v.color and v.color.name else None) or "unknown"
@@ -38,20 +47,20 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
         if not grp["images"]:
             grp["images"] = list(base_images)
 
-    # Collapse to a single color when all color groups share essentially same photoset.
+    # Collapse to a single color when all groups share essentially the same photoset
     groups = list(color_groups.values())
     if len(groups) > 1:
         ref_images = max(groups, key=lambda g: len(g.get("images") or [])).get("images") or []
         same_set = all(_images_overlap_ratio(ref_images, g.get("images") or []) >= 0.8 for g in groups)
         if same_set:
-            merged_variant_ids: list[int] = []
+            merged_ids: list[int] = []
             for g in groups:
-                merged_variant_ids.extend([int(x) for x in (g.get("variant_ids") or [])])
+                merged_ids.extend([int(x) for x in (g.get("variant_ids") or [])])
             single_color = (getattr(p, "detected_color", None) or groups[0].get("color") or "unknown")
             color_groups = {
                 str(single_color): {
                     "color": str(single_color),
-                    "variant_ids": sorted(set(merged_variant_ids)),
+                    "variant_ids": sorted(set(merged_ids)),
                     "images": list(ref_images or base_images),
                 }
             }
@@ -64,15 +73,32 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
         selected_images = list(base_images)
 
     images_by_color = {str(k): list(v.get("images") or []) for k, v in color_groups.items() if k and k != "unknown"}
+
+    # color_keys: whitelist-normalized from stored variant color names (NO image downloads)
+    color_keys: List[str] = []
+    normalized_images_by_color: Dict[str, List[str]] = {}
+    for orig_name in available:
+        ck = normalize_color_to_whitelist(orig_name)
+        if ck and ck not in color_keys:
+            color_keys.append(ck)
+        imgs = images_by_color.get(orig_name) or []
+        if ck not in normalized_images_by_color:
+            normalized_images_by_color[ck] = []
+        for u in imgs:
+            if u not in normalized_images_by_color[ck]:
+                normalized_images_by_color[ck].append(u)
+
     return {
         "available_colors": available,
         "selected_color": selected,
         "color_variants": sorted(list(color_groups.values()), key=lambda x: str(x.get("color") or "")),
         "selected_color_images": selected_images,
-        # New unified keys (legacy keys above are preserved for compatibility)
+        # Unified keys (legacy preserved for compatibility)
         "colors": available,
         "default_color": selected,
-        "images_by_color": images_by_color,
+        "images_by_color": normalized_images_by_color or images_by_color,
+        # Whitelist-normalized color keys for frontend filtering
+        "color_keys": color_keys,
     }
 
 
@@ -143,7 +169,6 @@ def list_products(
         result.append(
             {
                 "id": p.id,
-                # alias for frontend compatibility
                 "name": p.title,
                 "title": p.title,
                 "slug": p.slug,
@@ -163,6 +188,7 @@ def list_products(
                 "color_variants": color_payload["color_variants"],
                 "default_color": color_payload["default_color"],
                 "images_by_color": color_payload["images_by_color"],
+                "color_keys": color_payload["color_keys"],
                 "variants": variants,
             }
         )
@@ -207,6 +233,7 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
         "selected_color_images": color_payload["selected_color_images"],
         "default_color": color_payload["default_color"],
         "images_by_color": color_payload["images_by_color"],
+        "color_keys": color_payload["color_keys"],
         "detected_color": getattr(p, "detected_color", None),
         "detected_color_confidence": (float(getattr(p, "detected_color_confidence", 0) or 0) if getattr(p, "detected_color_confidence", None) is not None else None),
         "variants": [
@@ -233,7 +260,6 @@ def get_related_products(
     if not p or not p.visible:
         raise HTTPException(status_code=404, detail="product not found")
 
-    # 1) co-purchase candidates from historical orders
     source_variant_ids = [v.id for v in (p.variants or [])]
     ranked_product_ids: List[int] = []
 
@@ -261,7 +287,6 @@ def get_related_products(
             )
             ranked_product_ids = [int(r[0]) for r in rows if r and r[0]]
 
-    # 2) materialize co-purchase products preserving rank
     selected: List[models.Product] = []
     selected_ids = set()
     if ranked_product_ids:
@@ -280,7 +305,6 @@ def get_related_products(
             if len(selected) >= limit:
                 break
 
-    # 3) fallback to same-category newest if not enough
     if len(selected) < limit:
         q = db.query(models.Product).filter(models.Product.visible == True, models.Product.id != p.id)
         if p.category_id:
@@ -325,7 +349,6 @@ def upload_product_image(product_id: int = Path(...), file: UploadFile = File(..
     p = db.query(models.Product).get(product_id)
     if not p:
         raise HTTPException(status_code=404, detail="product not found")
-    # save file (local uploads)
     try:
         url = media_store.save_upload_file_to_local(file, folder="products")
     except Exception as exc:
