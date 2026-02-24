@@ -7,7 +7,7 @@ export default function ProductCard({ product }: any) {
   return (
     <div className="card" style={{display:'flex', gap:12, alignItems:'center'}}>
       <Link to={`/product/${product.id}`} style={{display:'flex', alignItems:'center', gap:12, textDecoration:'none', color:'inherit'}}>
-        <img src={preview} alt={product.name} style={{width:100, height:100, objectFit:'cover', borderRadius:8}}/>
+        <img src={preview} alt={product.name} loading="lazy" className="image-fade-in" style={{width:100, height:100, objectFit:'cover', borderRadius:8}}/>
         <div style={{flex:1}}>
           <div style={{fontWeight:800}}>{product.name}</div>
           <div style={{color:'var(--muted)'}}>{product.short_description || ''}</div>

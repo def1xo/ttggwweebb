@@ -58,6 +58,24 @@ function isAdminRequest(config?: AxiosRequestConfig): boolean {
 // VITE_BACKEND_URL/VITE_API_URL may be set to "/api" (nginx proxy) or ".../api".
 // The code below already prefixes endpoints with "/api/...", so strip a trailing
 // "/api" to avoid "/api/api/...".
+
+const memoryCache = new Map<string, { ts: number; data: any }>();
+const CACHE_TTL_MS = 60_000;
+
+function getCached(key: string) {
+  const hit = memoryCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.ts > CACHE_TTL_MS) {
+    memoryCache.delete(key);
+    return null;
+  }
+  return hit.data;
+}
+
+function setCached(key: string, data: any) {
+  memoryCache.set(key, { ts: Date.now(), data });
+}
+
 const API_BASE_URL = (
   (import.meta as any).env?.VITE_BACKEND_URL ||
   (import.meta as any).env?.VITE_API_URL ||
@@ -616,6 +634,9 @@ export async function getRelatedProducts(productId: number | string, limit = 8) 
 }
 
 export async function getProduct(id: number | string) {
+  const cacheKey = `product:${id}`;
+  const cached = getCached(cacheKey);
+  if (cached) return cached;
   try {
     const candidates = [
       `${API_BASE_URL}/api/products/${id}`,
@@ -623,13 +644,18 @@ export async function getProduct(id: number | string) {
       `/api/products/${id}`,
       `/products/${id}`,
     ];
-    return await tryCandidates(candidates);
+    const data = await tryCandidates(candidates);
+    setCached(cacheKey, data);
+    return data;
   } catch (e) {
     return handleAxiosError(e);
   }
 }
 
 export async function getCategories(params?: Record<string, any>) {
+  const cacheKey = `categories:${JSON.stringify(params || {})}`;
+  const cached = getCached(cacheKey);
+  if (cached) return cached;
   try {
     const candidates = [
       `${API_BASE_URL}/api/categories`,
@@ -637,7 +663,9 @@ export async function getCategories(params?: Record<string, any>) {
       `/api/categories`,
       `/categories`,
     ];
-    return await tryCandidates(candidates, { method: "get", params });
+    const data = await tryCandidates(candidates, { method: "get", params });
+    setCached(cacheKey, data);
+    return data;
   } catch (e) {
     return handleAxiosError(e);
   }
@@ -1182,7 +1210,9 @@ export async function getAdminProducts(params?: Record<string, any>) {
       "/api/v1/admin/products",
       "/v1/admin/products",
     ];
-    return await tryCandidates(candidates, { method: "get", params });
+    const data = await tryCandidates(candidates, { method: "get", params });
+    setCached(cacheKey, data);
+    return data;
   } catch (e) {
     return handleAxiosError(e);
   }
