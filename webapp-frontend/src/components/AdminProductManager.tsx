@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { useLocation, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import apiDefault from "../services/api";
 import ProductModal from "./ProductModal";
 import ColorSwatch from "./ColorSwatch";
@@ -21,7 +21,6 @@ type Product = {
 };
 
 export default function AdminProductManager() {
-  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [items, setItems] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
@@ -33,15 +32,19 @@ export default function AdminProductManager() {
     const p = Number(searchParams.get("page") || 1);
     return Number.isFinite(p) && p > 0 ? Math.floor(p) : 1;
   });
+  const cacheKey = useMemo(() => {
+    const key = `admin:products:${JSON.stringify({ q: (debouncedQuery || "").trim(), page })}`;
+    return key || "admin:products:default";
+  }, [debouncedQuery, page]);
 
   useEffect(() => {
     load(debouncedQuery);
-  }, [debouncedQuery]);
+  }, [debouncedQuery, page]);
 
   useEffect(() => {
     const timer = window.setInterval(() => load(debouncedQuery), 30000);
     return () => window.clearInterval(timer);
-  }, [debouncedQuery]);
+  }, [debouncedQuery, page]);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -63,7 +66,7 @@ export default function AdminProductManager() {
   }, [query, page]);
 
   useEffect(() => {
-    const key = `scroll:${location.pathname}?${location.search}`;
+    const key = `scroll:${cacheKey || "admin:products:default"}`;
     const raw = sessionStorage.getItem(key);
     const y = Number(raw || 0);
     if (Number.isFinite(y) && y > 0) {
@@ -77,19 +80,21 @@ export default function AdminProductManager() {
       onScroll();
       window.removeEventListener("scroll", onScroll);
     };
-  }, [location.pathname, location.search]);
+  }, [cacheKey]);
 
   async function load(q = "") {
     setLoading(true);
     setErr(null);
     try {
       if (typeof apiDefault.getAdminProducts === "function") {
-        const res = await apiDefault.getAdminProducts({ q: q.trim() || undefined });
+        const res = await apiDefault.getAdminProducts({ q: q.trim() || undefined, page, per_page: 200 });
         const arr = res?.products ?? res ?? [];
         setItems(arr);
       } else {
         const params = new URLSearchParams();
         if (q.trim()) params.set("q", q.trim());
+        params.set("page", String(page));
+        params.set("per_page", "200");
         const r = await fetch(`/api/admin/products${params.toString() ? `?${params.toString()}` : ""}`, { credentials: "include" });
         if (r.ok) {
           const data = await r.json();
@@ -204,7 +209,7 @@ export default function AdminProductManager() {
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button className="btn ghost" onClick={() => setEditing(p)}>Ред.</button>
+                  <button className="btn ghost" onClick={() => { sessionStorage.setItem(`scroll:${cacheKey || "admin:products:default"}`, String(window.scrollY || 0)); setEditing(p); }}>Ред.</button>
                   <button className="btn ghost" onClick={() => remove(p.id)}>Удалить</button>
                 </div>
               </div>

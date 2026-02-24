@@ -1203,6 +1203,9 @@ export async function deleteAdminManager(id: number) {
 }
 
 export async function getAdminProducts(params?: Record<string, any>) {
+  const cacheKey = `admin:products:${JSON.stringify(params || {})}` || "admin:products:default";
+  const cached = getCached(cacheKey);
+  if (cached) return cached;
   try {
     const candidates = [
       "/api/admin/products",
@@ -1211,7 +1214,7 @@ export async function getAdminProducts(params?: Record<string, any>) {
       "/v1/admin/products",
     ];
     const data = await tryCandidates(candidates, { method: "get", params });
-    setCached(cacheKey, data);
+    setCached(cacheKey || "admin:products:default", data);
     return data;
   } catch (e) {
     return handleAxiosError(e);
