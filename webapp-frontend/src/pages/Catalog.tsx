@@ -18,7 +18,6 @@ export default function Catalog() {
   const [searchLoading, setSearchLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [globalMode, setGlobalMode] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -56,7 +55,15 @@ export default function Catalog() {
         const res: any = await api.getProducts({ q, page: 1, per_page: 30 });
         const data = (res as any)?.data ?? res;
         const items = Array.isArray(data) ? data : data?.items || [];
-        setGlobalProducts(Array.isArray(items) ? items : []);
+        const arr = Array.isArray(items) ? items : [];
+        const uniq = new Map<number | string, any>();
+        for (const it of arr) {
+          const key = Number((it as any)?.id);
+          if (Number.isFinite(key) && key > 0) {
+            if (!uniq.has(key)) uniq.set(key, it);
+          }
+        }
+        setGlobalProducts(Array.from(uniq.values()));
       } catch {
         setGlobalProducts([]);
       } finally {
@@ -116,10 +123,6 @@ export default function Catalog() {
               : ""
           }
         />
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <button className={`chip ${!globalMode ? "chip--active" : ""}`} type="button" onClick={() => setGlobalMode(false)}>Категории</button>
-          <button className={`chip ${globalMode ? "chip--active" : ""}`} type="button" onClick={() => setGlobalMode(true)}>Глобально по товарам</button>
-        </div>
 
         {hasQuery ? (
           <div style={{ marginTop: 10, display: "grid", gap: 12 }}>
