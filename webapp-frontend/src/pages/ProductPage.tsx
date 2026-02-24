@@ -1,41 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
-import api, { addCartItem, getRelatedProducts, trackAnalyticsEvent } from "../services/api";
+import { addCartItem, getProduct, getRelatedProducts, trackAnalyticsEvent } from "../services/api";
 import ColorSwatch from "../components/ColorSwatch";
 import { useToast } from "../contexts/ToastContext";
 import { useFavorites } from "../contexts/FavoritesContext";
 import { hapticImpact } from "../utils/tg";
 import { HeartSmall } from "../components/Icons";
+import { getImagesForSelectedColor, isColorInStock } from "../utils/productMedia";
 
 function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
 }
-
-function normalizeColorValue(raw: unknown): string {
-  return String(raw || "").trim().toLowerCase();
-}
-
-function isReasonableSize(v: string): boolean {
-  const t = String(v || "").trim();
-  if (!t) return false;
-  const n = Number(t.replace(",", "."));
-  if (Number.isFinite(n)) return n >= 20 && n <= 60;
-  return true;
-}
-
-function sortSizes(values: string[]) {
-  return values.slice().sort((a, b) => {
-    const na = Number(String(a).replace(",", "."));
-    const nb = Number(String(b).replace(",", "."));
-    const ia = Number.isFinite(na);
-    const ib = Number.isFinite(nb);
-    if (ia && ib) return na - nb;
-    if (ia && !ib) return -1;
-    if (!ia && ib) return 1;
-    return String(a).localeCompare(String(b));
-  });
-}
-
 
 function normalizeMediaUrl(raw: unknown): string | null {
   if (!raw) return null;
@@ -47,106 +22,21 @@ function normalizeMediaUrl(raw: unknown): string | null {
   return base ? `${base}/${url}` : url;
 }
 
-function splitImageCandidates(raw: unknown): string[] {
-  if (!raw) return [];
-  if (Array.isArray(raw)) {
-    return raw.flatMap((item) => splitImageCandidates(item));
-  }
-  if (typeof raw === "object") {
-    const obj = raw as Record<string, unknown>;
-    return splitImageCandidates(obj.url || obj.src || obj.image || obj.image_url);
-  }
-  const value = String(raw).trim();
-  if (!value) return [];
-
-  const chunks = value
-    .replace(/[\n\r\t]+/g, " ")
-    .split(/[;,|]+/g)
-    .map((x) => x.trim())
-    .filter(Boolean);
-
-  if (chunks.length > 1) return chunks;
-
-  const byWhitespace = value
-    .split(/\s+/g)
-    .map((x) => x.trim())
-    .filter(Boolean)
-    .filter((x) => /\.(jpe?g|png|webp|gif|avif)(\?|#|$)/i.test(x) || /^(https?:\/\/|\/)/i.test(x));
-  return byWhitespace.length > 1 ? byWhitespace : [value];
-}
-
 function collectProductImages(p: any): string[] {
   if (!p) return [];
-  const buckets = [
-    p.images,
-    p.image_urls,
-    p.imageUrls,
-    p.gallery,
-    p.photos,
-    p.default_image,
-    ...(Array.isArray(p.variants) ? p.variants.map((v: any) => v?.images) : []),
-    ...(Array.isArray(p.variants) ? p.variants.map((v: any) => v?.image_urls) : []),
-  ];
+  const buckets = [p.images, p.default_image];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const bucket of buckets) {
-    for (const candidate of splitImageCandidates(bucket)) {
-      const normalized = normalizeMediaUrl(candidate);
+    const list = Array.isArray(bucket) ? bucket : [bucket];
+    for (const item of list) {
+      const normalized = normalizeMediaUrl(item);
       if (!normalized || seen.has(normalized)) continue;
       seen.add(normalized);
       out.push(normalized);
     }
   }
   return out;
-}
-
-function imagesForColor(p: any, color: string | null): string[] {
-  if (!p) return [];
-  if (!color) return collectProductImages(p);
-  const selected = normalizeColorValue(color);
-  const groups = Array.isArray(p?.color_variants) ? p.color_variants : [];
-  const hit = groups.find((g: any) => normalizeColorValue(g?.color) === selected);
-  const fromGroup = splitImageCandidates(hit?.images)
-    .map((item) => normalizeMediaUrl(item))
-    .filter((item): item is string => Boolean(item));
-  if (fromGroup.length) return uniq(fromGroup);
-
-  const fromVariantImages = (Array.isArray(p?.variants) ? p.variants : [])
-    .filter((v: any) => normalizeColorValue(v?.color?.name || v?.color) === selected)
-    .flatMap((v: any) => splitImageCandidates(v?.images || v?.image_urls))
-    .map((item) => normalizeMediaUrl(item))
-    .filter((item): item is string => Boolean(item));
-  if (fromVariantImages.length) return uniq(fromVariantImages);
-
-  const byColor = p?.images_by_color;
-  if (byColor && typeof byColor === "object") {
-    const matchKey = Object.keys(byColor).find((k) => normalizeColorValue(k) === selected);
-    if (matchKey) {
-      const fromKey = splitImageCandidates((byColor as Record<string, unknown>)[matchKey])
-        .map((item) => normalizeMediaUrl(item))
-        .filter((item): item is string => Boolean(item));
-      if (fromKey.length) return uniq(fromKey);
-    }
-  }
-
-  // Не смешиваем фото разных цветов, если выбран конкретный цвет.
-  const fallback = splitImageCandidates(p?.selected_color_images)
-    .map((item) => normalizeMediaUrl(item))
-    .filter((item): item is string => Boolean(item));
-  if (fallback.length) return uniq(fallback);
-
-  if (hit?.images?.length) {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const item of hit.images) {
-      const normalized = normalizeMediaUrl(item);
-      if (!normalized || seen.has(normalized)) continue;
-      seen.add(normalized);
-      out.push(normalized);
-    }
-    if (out.length) return out;
-  }
-  return [];
 }
 
 function getVariantStock(v: any): number {
@@ -176,13 +66,11 @@ export default function ProductPage() {
 
   const touchX = useRef<number | null>(null);
   const viewerTouchX = useRef<number | null>(null);
-  const prevSelectedSizeRef = useRef<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.get(`/api/products/${id}`);
-        const p = (res as any).data ?? res;
+        const p: any = await getProduct(String(id || ""));
         setProduct(p);
         if (p?.selected_color) setSelectedColor(String(p.selected_color));
       } catch {
@@ -220,7 +108,7 @@ export default function ProductPage() {
 
 
   const images: string[] = useMemo(() => {
-    return imagesForColor(product, selectedColor);
+    return getImagesForSelectedColor(product, selectedColor);
   }, [product, selectedColor]);
 
   useEffect(() => {
@@ -264,7 +152,7 @@ export default function ProductPage() {
   const colorHasAnyStock = useMemo(() => {
     const out: Record<string, boolean> = {};
     for (const c of colors) {
-      out[c] = variants.some((v) => normalizeColorValue(v?.color?.name || v?.color) === normalizeColorValue(c) && getVariantStock(v) > 0);
+      out[c] = isColorInStock(variants, c);
     }
     return out;
   }, [colors, variants]);
@@ -299,26 +187,7 @@ export default function ProductPage() {
     return out;
   }, [colors, variants, selectedSize]);
 
-  useEffect(() => {
-    const prevSize = prevSelectedSizeRef.current;
-    prevSelectedSizeRef.current = selectedSize;
-    if (prevSize === selectedSize) return;
-    if (!selectedSize || !colors.length) return;
-    const currentStillAvailable = selectedColor ? Boolean(colorAvailabilityBySelectedSize[selectedColor]) : false;
-    if (currentStillAvailable) return;
-    const bestColor = colors.find((c) => colorAvailabilityBySelectedSize[c]);
-    if (bestColor) setSelectedColor(bestColor);
-  }, [selectedSize, colors, selectedColor, colorAvailabilityBySelectedSize]);
 
-  useEffect(() => {
-    if (!colors.length) return;
-    const currentHasStock = selectedColor ? Boolean(colorHasAnyStock[selectedColor]) : false;
-    if (selectedColor && currentHasStock) return;
-    const firstAvailable = colors.find((c) => colorHasAnyStock[c]);
-    if (firstAvailable && firstAvailable !== selectedColor) {
-      setSelectedColor(firstAvailable);
-    }
-  }, [colors, selectedColor, colorHasAnyStock]);
 
   const sizeAvailability = useMemo(() => {
     const out: Record<string, boolean> = {};
@@ -537,15 +406,16 @@ export default function ProductPage() {
           onTouchStart={onTouchStart}
           onTouchEnd={onTouchEnd}
         >
-          <img key={`${activeImage}_${slideDir}`} className={`product-detail-hero product-detail-hero--${slideDir}`} src={activeImage} alt={product.title} style={{ cursor: "zoom-in" }} onClick={() => setIsImageViewerOpen(true)} />
+          <img key={`${activeImage}_${slideDir}`} className={`product-detail-hero product-detail-hero--${slideDir} image-fade-in`} src={activeImage} alt={product.title} style={{ cursor: "zoom-in" }} loading="eager" onClick={() => setIsImageViewerOpen(true)} />
 
           {images.length > 1 ? (
             <div className="thumb-grid" style={{ marginTop: 10 }}>
               {images.map((u, idx) => (
                 <img
                   key={`${u}_${idx}`}
-                  className="thumb"
+                  className="thumb image-fade-in"
                   src={u}
+                  loading="lazy"
                   alt=""
                   style={{ outline: idx === activeIndex ? "2px solid var(--ring)" : "none" }}
                   onClick={() => {
@@ -578,7 +448,7 @@ export default function ProductPage() {
                   key={c}
                   type="button"
                   className="chip"
-                  onClick={() => setSelectedColor((prev) => (prev === c ? null : c))}
+                  onClick={() => setSelectedColor(c)}
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
@@ -597,7 +467,7 @@ export default function ProductPage() {
             </div>
             {selectedColor && !selectedColorInStock ? (
               <div className="small-muted" style={{ marginTop: 8, color: "#ff9b9b" }}>
-                Нет в наличии. Выберите другой цвет.
+                Нет в наличии для выбранного цвета.
               </div>
             ) : null}
           </div>
@@ -608,6 +478,7 @@ export default function ProductPage() {
             <div className="muted" style={{ fontWeight: 800, marginBottom: 8 }}>
               Размер
             </div>
+            {!selectedColorInStock ? (<div className="small-muted" style={{ marginBottom: 8, color: "#ff9b9b" }}>Размеры для этого цвета недоступны</div>) : null}
             <div className="chips">
               {sizeOptions.map((s) => {
                 const active = selectedSize === s;
