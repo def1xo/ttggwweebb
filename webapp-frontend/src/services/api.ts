@@ -1174,7 +1174,7 @@ export async function deleteAdminManager(id: number) {
   }
 }
 
-export async function getAdminProducts() {
+export async function getAdminProducts(params?: Record<string, any>) {
   try {
     const candidates = [
       "/api/admin/products",
@@ -1182,7 +1182,7 @@ export async function getAdminProducts() {
       "/api/v1/admin/products",
       "/v1/admin/products",
     ];
-    return await tryCandidates(candidates, { method: "get" });
+    return await tryCandidates(candidates, { method: "get", params });
   } catch (e) {
     return handleAxiosError(e);
   }
