@@ -6,6 +6,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
 from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
@@ -168,7 +169,16 @@ def list_products(
 ):
     query = db.query(models.Product)
     if q:
-        query = query.filter(models.Product.title.ilike(f"%{q}%"))
+        term = str(q).strip()
+        like = f"%{term}%"
+        filters = [
+            models.Product.title.ilike(like),
+            models.Product.slug.ilike(like),
+            models.Product.variants.any(models.ProductVariant.sku.ilike(like)),
+        ]
+        if term.isdigit():
+            filters.append(models.Product.id == int(term))
+        query = query.filter(or_(*filters))
     items = query.order_by(models.Product.created_at.desc()).all()
     out = []
     for p in items:
@@ -193,9 +203,11 @@ def list_products(
             colors = sorted({(v.color.name if getattr(v, "color", None) else None) for v in (p.variants or []) if (getattr(v, "color", None) and v.color.name)})
         except Exception:
             sizes, colors = [], []
+        sku = next((str(v.sku).strip() for v in (p.variants or []) if getattr(v, "sku", None) and str(v.sku).strip()), None)
         out.append({
             "id": p.id,
             "title": p.title,
+            "sku": sku,
             "name": p.title,
             "slug": p.slug,
             "base_price": float(p.base_price or 0),
