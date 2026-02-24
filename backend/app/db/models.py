@@ -317,6 +317,7 @@ class PromoCode(Base):
     expires_at = Column(DateTime, nullable=True)
     usage_limit = Column(Integer, nullable=True)
     used_count = Column(Integer, nullable=False, default=0)
+    owner_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
