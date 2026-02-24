@@ -1,6 +1,8 @@
 
 from typing import Optional, List
 from decimal import Decimal
+from pathlib import Path
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
 from sqlalchemy.orm import Session
@@ -9,8 +11,10 @@ from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
 from app.services import media_store
 from app.services.importer_notifications import slugify
+from app.services.color_detection import detect_product_colors_from_photos, canonical_color_to_display_name
 
 router = APIRouter(tags=["admin_products"])
+logger = logging.getLogger("admin_products")
 
 
 def _money(v: Optional[str], default: Decimal = Decimal("0.00")) -> Decimal:
@@ -257,8 +261,8 @@ def create_product(
         upload_list.append(image)
     if images:
         upload_list.extend([f for f in images if f is not None])
+    saved_urls: List[str] = []
     if upload_list:
-        saved_urls: List[str] = []
         for f in upload_list:
             try:
                 saved_urls.append(media_store.save_upload_file_to_local(f, folder="products"))
@@ -294,6 +298,24 @@ def create_product(
                 color_objs.append(_get_or_create_color(db, c_name))
         except Exception as exc:
             raise HTTPException(400, detail=f"invalid color: {exc}")
+
+    if not color_objs and saved_urls:
+        # IMPORTANT: if admin did not set a color manually, infer it from uploaded photos
+        # so product variants keep a usable color_id for storefront filters.
+        local_sources: List[str] = []
+        for u in saved_urls:
+            pth = Path(str(u).lstrip("/"))
+            local_sources.append(str(pth if pth.exists() else u))
+        detected = detect_product_colors_from_photos(local_sources)
+        canonical = str(detected.get("color") or "none")
+        if canonical and canonical != "none":
+            color_name = canonical_color_to_display_name(canonical)
+            if color_name:
+                color_objs.append(_get_or_create_color(db, color_name))
+                p.detected_color = canonical
+                p.detected_color_confidence = Decimal(str(detected.get("confidence") or 0))
+                p.detected_color_debug = detected.get("debug")
+                logger.info("create_product color-detect: product=%s color=%s confidence=%s photos=%s", p.id, canonical, detected.get("confidence"), len(local_sources))
 
     if not size_list:
         if color_objs:

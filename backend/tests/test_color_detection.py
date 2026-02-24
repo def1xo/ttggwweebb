@@ -57,3 +57,16 @@ def test_black_product_on_blue_background_is_not_blue(monkeypatch):
     out = cd.detect_product_color(["mock://img"])
     assert out["color"] in {"black", "gray"}
     assert out["color"] != "blue"
+
+
+def test_normalize_color_aliases_and_ru_display():
+    assert cd.normalize_color_to_whitelist("grey") == "gray"
+    assert cd.normalize_color_to_whitelist("серый") == "gray"
+    assert cd.canonical_color_to_display_name("green") == "зеленый"
+
+
+def test_detect_product_colors_from_photos_returns_canonical(monkeypatch):
+    monkeypatch.setattr(cd, "detect_product_color", lambda *_a, **_k: {"color": "grey", "confidence": 0.81, "debug": {}, "per_image": []})
+    out = cd.detect_product_colors_from_photos(["x"])
+    assert out["color"] == "gray"
+    assert out["display_color"] == "серый"
