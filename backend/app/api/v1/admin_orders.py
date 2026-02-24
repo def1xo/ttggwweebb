@@ -66,11 +66,25 @@ def _order_supply_lines(db: Session, order: models.Order) -> list[str]:
                 .order_by(models.ProductCost.created_at.desc(), models.ProductCost.id.desc())
                 .first()
             )
-        cost_val = float(latest_cost.cost_price) if latest_cost and latest_cost.cost_price is not None else None
+        cost_val = None
+        if latest_cost and latest_cost.cost_price is not None:
+            cost_val = float(latest_cost.cost_price)
+        elif variant and getattr(variant, "cost_price", None) is not None:
+            cost_val = float(getattr(variant, "cost_price", 0) or 0)
+        elif product and getattr(product, "cost_price", None) is not None:
+            cost_val = float(getattr(product, "cost_price", 0) or 0)
+
+        supplier = (
+            (str(getattr(product, "supplier_name", "") or "").strip() if product else "")
+            or (str(getattr(product, "import_supplier_name", "") or "").strip() if product else "")
+            or (str(getattr(product, "supplier", "") or "").strip() if product else "")
+            or "не назначен"
+        )
+
         cost_txt = f"{cost_val:.0f} ₽" if isinstance(cost_val, float) and cost_val > 0 else "н/д"
         lines.append(
             f"{idx}) {(product.title if product else 'Товар')} | size: {size_name} | color: {color_name}\n"
-            f"   qty: {int(item.quantity or 0)} • retail: {float(item.price or 0):.0f} ₽ • закупка(оценка): {cost_txt} • поставщик: не назначен"
+            f"   qty: {int(item.quantity or 0)} • retail: {float(item.price or 0):.0f} ₽ • закупка(оценка): {cost_txt} • поставщик: {supplier}"
         )
     return lines or ["• Нет товарных позиций"]
 
@@ -232,8 +246,9 @@ def admin_confirm_payment(
         proof_link = proof or "—"
 
     supply_lines = _order_supply_lines(db, order)
+    title = "✅ Оплата подтверждена" if payload.status != models.OrderStatus.cancelled else "⚠️ Заказ отменён"
     msg = (
-        f"✅ Оплата подтверждена #{order.id}\n"
+        f"{title} #{order.id}\n"
         f"Сумма: {float(order.total_amount or 0):.0f} ₽\n"
         f"Клиент: {(order.fio or '—')} | {(order.phone or '—')}\n"
         f"Статус: {order.status}\n"
@@ -292,8 +307,9 @@ def update_order_status(
         proof_link = proof or "—"
 
     supply_lines = _order_supply_lines(db, order)
+    title = "✅ Оплата подтверждена" if payload.status != models.OrderStatus.cancelled else "⚠️ Заказ отменён"
     msg = (
-        f"✅ Оплата подтверждена #{order.id}\n"
+        f"{title} #{order.id}\n"
         f"Сумма: {float(order.total_amount or 0):.0f} ₽\n"
         f"Клиент: {(order.fio or '—')} | {(order.phone or '—')}\n"
         f"Статус: {order.status}\n"

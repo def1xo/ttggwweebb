@@ -506,31 +506,57 @@ export async function getCartRecommendations(limit = 8) {
 }
 
 export async function applyCartPromo(code: string) {
-  try {
-    const candidates = [
-      `${API_BASE_URL}/api/cart/promo`,
-      `${API_BASE_URL}/api/v1/cart/promo`,
-      `/api/cart/promo`,
-      `/cart/promo`,
-    ];
-    return await tryCandidates(candidates, { method: "post", data: { code } });
-  } catch (e) {
-    return handleAxiosError(e);
+  const candidates = [
+    `${API_BASE_URL}/api/cart/promo`,
+    `${API_BASE_URL}/api/v1/cart/promo`,
+    `/api/cart/promo`,
+    `/api/v1/cart/promo`,
+  ];
+  let lastErr: any = null;
+  for (const url of candidates) {
+    try {
+      const res = await axiosInstance.request({ url, method: "post", data: { code }, headers: { "X-Silent-Error": "1" }, timeout: 20000 });
+      return res.data;
+    } catch (e: any) {
+      lastErr = e;
+      const status = e?.response?.status;
+      const detail = String(e?.response?.data?.detail || "").trim();
+      // Business validation error from active promo endpoint: don't continue to fallback URLs.
+      if ((status === 400 || status === 404) && detail && !/^Not Found$/i.test(detail)) {
+        return handleAxiosError(e);
+      }
+      // Endpoint is missing or method unsupported -> try next candidate.
+      if (status === 404 || status === 405 || status === 400 || !e?.response) continue;
+      return handleAxiosError(e);
+    }
   }
+  return handleAxiosError(lastErr);
 }
 
 export async function removeCartPromo() {
-  try {
-    const candidates = [
-      `${API_BASE_URL}/api/cart/promo`,
-      `${API_BASE_URL}/api/v1/cart/promo`,
-      `/api/cart/promo`,
-      `/cart/promo`,
-    ];
-    return await tryCandidates(candidates, { method: "delete" });
-  } catch (e) {
-    return handleAxiosError(e);
+  const candidates = [
+    `${API_BASE_URL}/api/cart/promo`,
+    `${API_BASE_URL}/api/v1/cart/promo`,
+    `/api/cart/promo`,
+    `/api/v1/cart/promo`,
+  ];
+  let lastErr: any = null;
+  for (const url of candidates) {
+    try {
+      const res = await axiosInstance.request({ url, method: "delete", headers: { "X-Silent-Error": "1" }, timeout: 20000 });
+      return res.data;
+    } catch (e: any) {
+      lastErr = e;
+      const status = e?.response?.status;
+      const detail = String(e?.response?.data?.detail || "").trim();
+      if ((status === 400 || status === 404) && detail && !/^Not Found$/i.test(detail)) {
+        return handleAxiosError(e);
+      }
+      if (status === 404 || status === 405 || status === 400 || !e?.response) continue;
+      return handleAxiosError(e);
+    }
   }
+  return handleAxiosError(lastErr);
 }
 
 // -------- Payment requisites + proof upload --------
