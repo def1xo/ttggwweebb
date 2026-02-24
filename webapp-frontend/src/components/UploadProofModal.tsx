@@ -119,8 +119,9 @@ export default function UploadProofModal({ open, orderId, onClose, onUploaded }:
       onClose();
     } catch (e: any) {
       const msg = e?.response?.data?.detail || e?.message || "Не удалось загрузить чек";
-      setError(String(msg));
-      notify("Не удалось загрузить чек", "error");
+      const text = String(msg);
+      setError(text);
+      notify(text, "error");
     } finally {
       setBusy(false);
     }
@@ -171,9 +172,10 @@ export default function UploadProofModal({ open, orderId, onClose, onUploaded }:
           {file ? (
             <div style={{ display: "grid", gap: 10 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-                <div style={{ textAlign: "left" }}>
-                  <div style={{ fontWeight: 800, overflow: "hidden", textOverflow: "ellipsis" }}>{file.name}</div>
-                  <div style={{ fontSize: 12, color: "var(--muted)" }}>{formatBytes(file.size)}</div>
+                <div style={{ textAlign: "left", minWidth: 0, width: "100%" }}>
+                  <div style={{ fontWeight: 800 }}>Файл выбран</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{formatBytes(file.size)}</div>
+                  <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={file.name}>{file.name}</div>
                 </div>
               </div>
 
