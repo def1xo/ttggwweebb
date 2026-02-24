@@ -7,6 +7,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  default as api,
   addCartItem,
   applyCartPromo,
   clearCart,
@@ -116,6 +117,7 @@ export default function Cart() {
   const [related, setRelated] = useState<any[]>([]);
   const [relatedLoading, setRelatedLoading] = useState(false);
   const [productImageMap, setProductImageMap] = useState<Record<number, string>>({});
+  const [productHasColorChoicesMap, setProductHasColorChoicesMap] = useState<Record<number, boolean>>({});
 
   const reqIdRef = useRef(0);
 
@@ -204,37 +206,75 @@ export default function Cart() {
   }, [availableItems.map((x) => `${x.product_id}:${x.quantity}`).join('|')]);
 
 
+  function hasColorChoices(product: any): boolean {
+    const variants = Array.isArray(product?.variants) ? product.variants : [];
+    if (!variants.length) return false;
+    const uniq = new Set<string>();
+    for (const v of variants) {
+      const raw =
+        v?.color_id ??
+        v?.color?.id ??
+        v?.color?.name ??
+        v?.color_name ??
+        v?.color;
+      const norm = String(raw ?? "").trim().toLowerCase();
+      if (!norm) continue;
+      uniq.add(norm);
+      if (uniq.size > 1) return true;
+    }
+    return false;
+  }
+
   useEffect(() => {
     const missingIds = Array.from(new Set(
       items
-        .filter((it) => !normalizeMediaUrl((it as any)?.image || (it as any)?.image_url || (it as any)?.default_image))
+        .filter((it) => {
+          const missImage = !normalizeMediaUrl((it as any)?.image || (it as any)?.image_url || (it as any)?.default_image);
+          const unknownColorChoice = productHasColorChoicesMap[Number(it.product_id)] === undefined;
+          return missImage || unknownColorChoice;
+        })
         .map((it) => Number(it.product_id))
-        .filter((pid) => Number.isFinite(pid) && pid > 0 && !productImageMap[pid])
+        .filter((pid) => Number.isFinite(pid) && pid > 0)
     ));
     if (!missingIds.length) return;
 
     let cancelled = false;
     (async () => {
       const next: Record<number, string> = {};
+      const nextHasColorChoices: Record<number, boolean> = {};
       for (const pid of missingIds) {
+        const needImage = !productImageMap[pid];
+        const needColorChoices = productHasColorChoicesMap[pid] === undefined;
+        if (!needImage && !needColorChoices) continue;
         try {
           const res: any = await api.get(`/api/products/${pid}`);
           const data = (res as any)?.data ?? res;
-          const img = pickCardImage(data);
+          const product = data?.item ?? data?.product ?? data;
+          const img = pickCardImage(product);
           if (img) next[pid] = img;
+          nextHasColorChoices[pid] = hasColorChoices(product);
         } catch {
           // ignore unresolved product image
         }
       }
-      if (cancelled || !Object.keys(next).length) return;
-      setProductImageMap((prev) => ({ ...prev, ...next }));
+      if (cancelled) return;
+      if (Object.keys(next).length) {
+        setProductImageMap((prev) => ({ ...prev, ...next }));
+      }
+      if (Object.keys(nextHasColorChoices).length) {
+        setProductHasColorChoicesMap((prev) => ({ ...prev, ...nextHasColorChoices }));
+      }
     })();
 
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items.map((it) => `${it.product_id}:${it.variant_id}:${it.image || ""}`).join("|")]);
+  }, [
+    items.map((it) => `${it.product_id}:${it.variant_id}:${it.image || ""}`).join("|"),
+    productHasColorChoicesMap,
+    productImageMap,
+  ]);
 
   async function onClearEnded() {
     if (!endedItems.length) return;
@@ -436,7 +476,7 @@ export default function Cart() {
                       <div style={{ fontWeight: 900 }}>{it.title}</div>
                       <div className="chips" style={{ gap: 6, marginTop: 8 }}>
                         {it.size ? <span className="chip chip-sm">{it.size}</span> : null}
-                        {it.color ? <span className="chip chip-sm">{it.color}</span> : null}
+                        {it.color && productHasColorChoicesMap[Number(it.product_id)] ? <span className="chip chip-sm">{it.color}</span> : null}
                       </div>
                     </div>
 

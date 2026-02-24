@@ -550,8 +550,10 @@ export async function uploadPaymentProof(orderId: number | string, file: File) {
     const candidates = [
       `${API_BASE_URL}/api/orders/${orderId}/payment-proof`,
       `${API_BASE_URL}/api/v1/orders/${orderId}/payment-proof`,
+      `${API_BASE_URL}/v1/orders/${orderId}/payment-proof`,
       `/api/orders/${orderId}/payment-proof`,
       `/api/v1/orders/${orderId}/payment-proof`,
+      `/v1/orders/${orderId}/payment-proof`,
       `/orders/${orderId}/payment-proof`,
     ];
     // Do not force Content-Type manually for FormData in browser:
