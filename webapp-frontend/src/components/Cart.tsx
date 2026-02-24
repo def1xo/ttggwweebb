@@ -78,8 +78,20 @@ function normalizePromoCode(code: string): string {
 
 function normalizeMediaUrl(raw: unknown): string | null {
   if (!raw) return null;
+
+  const asObj = raw as any;
+  if (typeof asObj === "object") {
+    const candidate = asObj?.url || asObj?.image || asObj?.src || asObj?.path || null;
+    if (candidate) return normalizeMediaUrl(candidate);
+    return null;
+  }
+
   const url = String(raw).trim();
   if (!url) return null;
+  // Drop accidental Python repr like "<app.db.models.ProductImage object at 0x...>"
+  if (/^<[^>]+object\s+at\s+0x[0-9a-f]+>$/i.test(url) || /app\.db\.models\.productimage/i.test(url)) {
+    return null;
+  }
   if (/^https?:\/\//i.test(url)) return url;
   const base = String((import.meta as any).env?.VITE_BACKEND_URL || (import.meta as any).env?.VITE_API_URL || "").trim().replace(/\/+$/, "").replace(/\/api$/, "");
   if (url.startsWith("/")) return base ? `${base}${url}` : url;
