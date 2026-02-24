@@ -245,6 +245,10 @@ def patch_me(body: ProfilePatch, current_user: models.User = Depends(get_current
             # allow clearing
             if getattr(current_user, 'promo_code', None) is not None:
                 current_user.promo_code = None
+                db.query(models.PromoCode).filter(
+                    models.PromoCode.owner_user_id == current_user.id,
+                    models.PromoCode.type.in_([models.PromoType.manager, models.PromoType.assistant, models.PromoType.admin]),
+                ).delete(synchronize_session=False)
                 changed = True
         else:
             norm = ''.join(ch for ch in code.upper() if ch.isalnum() or ch in ('_', '-'))
@@ -260,6 +264,20 @@ def patch_me(body: ProfilePatch, current_user: models.User = Depends(get_current
                 raise HTTPException(status_code=400, detail='promo_code already taken')
             if getattr(current_user, 'promo_code', None) != norm:
                 current_user.promo_code = norm
+                # Keep referral promos persisted in promo_codes as source of truth for cart/orders.
+                db.query(models.PromoCode).filter(
+                    models.PromoCode.owner_user_id == current_user.id,
+                    models.PromoCode.type.in_([models.PromoType.manager, models.PromoType.assistant, models.PromoType.admin]),
+                ).delete(synchronize_session=False)
+                role_raw = getattr(getattr(current_user, 'role', None), 'value', getattr(current_user, 'role', None))
+                role_map = {
+                    'manager': models.PromoType.manager,
+                    'assistant': models.PromoType.assistant,
+                    'admin': models.PromoType.admin,
+                }
+                promo_type = role_map.get(str(role_raw or '').lower())
+                if promo_type is not None:
+                    db.add(models.PromoCode(code=norm, type=promo_type, value=5, currency='RUB', owner_user_id=current_user.id))
                 changed = True
 
     # avatar_url update (stored in users.avatar_url)
