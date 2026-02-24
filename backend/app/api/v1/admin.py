@@ -71,14 +71,26 @@ def _build_order_supply_info(db: Session, order: models.Order) -> list[str]:
                 .order_by(models.ProductCost.created_at.desc(), models.ProductCost.id.desc())
                 .first()
             )
-            cost = float(latest_cost.cost_price) if latest_cost and latest_cost.cost_price is not None else None
+            if latest_cost and latest_cost.cost_price is not None:
+                cost = float(latest_cost.cost_price)
+            elif getattr(variant, "cost_price", None) is not None:
+                cost = float(getattr(variant, "cost_price", 0) or 0)
+        if cost is None and product and getattr(product, "cost_price", None) is not None:
+            cost = float(getattr(product, "cost_price", 0) or 0)
+
+        supplier = (
+            (str(getattr(product, "supplier_name", "") or "").strip() if product else "")
+            or (str(getattr(product, "import_supplier_name", "") or "").strip() if product else "")
+            or (str(getattr(product, "supplier", "") or "").strip() if product else "")
+            or "не назначен"
+        )
 
         retail = float(item.price or 0)
         qty = int(item.quantity or 0)
         cost_txt = f"{cost:.0f} ₽" if isinstance(cost, float) and cost > 0 else "н/д"
         lines.append(
             f"{idx}) {(product.title if product else 'Товар')} | size: {size_name} | color: {color_name}\n"
-            f"   qty: {qty} • retail: {retail:.0f} ₽ • закупка(оценка): {cost_txt} • поставщик: не назначен"
+            f"   qty: {qty} • retail: {retail:.0f} ₽ • закупка(оценка): {cost_txt} • поставщик: {supplier}"
         )
     return lines
 

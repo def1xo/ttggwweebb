@@ -4,6 +4,7 @@ import { useFavorites } from "../contexts/FavoritesContext";
 import { hapticImpact } from "../utils/tg";
 import ColorSwatch from "./ColorSwatch";
 import { HeartSmall } from "./Icons";
+import { getImagesForSelectedColor, isColorInStock } from "../utils/productMedia";
 
 type Props = {
   product: any;
@@ -55,10 +56,10 @@ export default function ProductCard({ product }: Props) {
 
   const title = (product?.title || product?.name || "Товар") as string;
   const imgs = (product?.images || product?.image_urls || product?.imageUrls || []) as any[];
-  const rawImage =
-    (Array.isArray(imgs) && imgs.length ? (imgs[0]?.url || imgs[0]) : null) ||
-    product?.default_image ||
-    null;
+  const selectedColor = String(product?.selected_color || "").trim();
+  const canUseSelectedColor = selectedColor && isColorInStock(product?.variants || [], selectedColor);
+  const mediaForCard = getImagesForSelectedColor(product, canUseSelectedColor ? selectedColor : null);
+  const rawImage = product?.default_image || mediaForCard[0] || (Array.isArray(imgs) && imgs.length ? (imgs[0]?.url || imgs[0]) : null) || null;
   const validImage = normalizeMediaUrl(rawImage) || FALLBACK_IMAGE;
   const [cardImage, setCardImage] = useState<string>(validImage);
 
@@ -90,11 +91,11 @@ export default function ProductCard({ product }: Props) {
     const created = product?.created_at ? new Date(product.created_at) : null;
     const isNew = created ? Date.now() - created.getTime() < 7 * 24 * 60 * 60 * 1000 : false;
     const inStock = Boolean(product?.has_stock ?? (variantList || []).some((v) => Number(v?.stock || 0) > 0));
-    const galleryCount = Number(product?.gallery_count || (Array.isArray(imgs) ? imgs.length : 0));
+    const galleryCount = Number(product?.gallery_count || mediaForCard.length || (Array.isArray(imgs) ? imgs.length : 0));
 
     const showColorMeta = colors.length > 1;
     return { sizes, colors, sizeLabel, isNew, inStock, galleryCount, showColorMeta };
-  }, [product, variantList, imgs]);
+  }, [product, variantList, imgs, mediaForCard.length]);
 
 
   const toggleFav = async (e: React.MouseEvent) => {
