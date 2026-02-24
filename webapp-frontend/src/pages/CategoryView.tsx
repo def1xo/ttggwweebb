@@ -133,15 +133,21 @@ export default function CategoryView() {
         const perPage = 500;
         let page = 1;
         const merged: ProductAny[] = [];
+        const seenIds = new Set<number>();
         while (page <= 50) {
           const prods = await api.getProducts({ ...categoryFilter, page, per_page: perPage });
           const data = (prods as any)?.data ?? prods;
           const items = Array.isArray(data) ? data : data?.items || [];
           if (!Array.isArray(items) || items.length === 0) break;
-          merged.push(...items);
+          for (const item of items) {
+            const pid = Number((item as any)?.id);
+            if (!Number.isFinite(pid) || pid <= 0 || seenIds.has(pid)) continue;
+            seenIds.add(pid);
+            merged.push(item);
+          }
 
           const total = Number((data as any)?.total || 0);
-          if (total > 0 && merged.length >= total) break;
+          if (total > 0 && seenIds.size >= total) break;
           if (items.length < perPage) break;
           page += 1;
         }

@@ -207,7 +207,13 @@ def _calc_cart(db: Session, user: models.User) -> CartOut:
             imgs = getattr(p, "images", None)
             if isinstance(imgs, list) and imgs:
                 first = imgs[0]
-                image = first.get("url") if isinstance(first, dict) else str(first)
+                if isinstance(first, dict):
+                    image = first.get("url") or first.get("image") or first.get("src")
+                else:
+                    image = getattr(first, "url", None) or str(first)
+                # Some ORMs may stringify to repr like "<app.db.models.ProductImage object at ...>"
+                if isinstance(image, str) and image.strip().startswith("<") and "ProductImage object" in image:
+                    image = None
         except Exception:
             image = None
 

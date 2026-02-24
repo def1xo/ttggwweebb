@@ -1,13 +1,6 @@
 // src/components/PaymentDetails.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { getPaymentRequisites } from "../services/api";
-
-/**
- * Простой и четкий блок реквизитов.
- * Заменяй значения в константах ниже на свои реальные (телефон, карта, банк, ФИО).
- *
- * Не забудь: если будешь хранить реальные реквизиты в коде — это твоя ответственность.
- */
 
 type Requisites = {
   recipient_name?: string | null;
@@ -17,18 +10,38 @@ type Requisites = {
   note?: string | null;
 };
 
-function Row({ label, value }: { label: string; value: string }) {
+function formatPhone(raw: string): string {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (digits.length === 11 && (digits.startsWith("7") || digits.startsWith("8"))) {
+    const normalized = `7${digits.slice(1)}`;
+    return `+${normalized[0]} ${normalized.slice(1, 4)} ${normalized.slice(4, 7)}-${normalized.slice(7, 9)}-${normalized.slice(9, 11)}`;
+  }
+  if (digits.length === 10) {
+    return `+7 ${digits.slice(0, 3)} ${digits.slice(3, 6)}-${digits.slice(6, 8)}-${digits.slice(8, 10)}`;
+  }
+  return raw;
+}
+
+function formatCard(raw: string): string {
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (!digits || digits.length < 12 || digits.length > 19 || digits.length !== String(raw || "").trim().length) {
+    return raw;
+  }
+  return digits.match(/.{1,4}/g)?.join(" ") || raw;
+}
+
+function Row({ label, value, copyValue }: { label: string; value: string; copyValue?: string }) {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
+    const text = copyValue ?? value;
     try {
-      await navigator.clipboard.writeText(value);
+      await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1300);
     } catch {
-      // fallback
       const ta = document.createElement("textarea");
-      ta.value = value;
+      ta.value = text;
       document.body.appendChild(ta);
       ta.select();
       document.execCommand("copy");
@@ -39,12 +52,12 @@ function Row({ label, value }: { label: string; value: string }) {
   };
 
   return (
-    <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
-      <div style={{ minWidth: 100, color: "var(--muted)", fontSize: 13 }}>{label}</div>
-      <div style={{ flex: 1, background: "rgba(255,255,255,0.02)", padding: 10, borderRadius: 10, border: "1px solid var(--border)", wordBreak: "break-word" }}>
+    <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+      <div style={{ minWidth: 100, color: "var(--muted)", fontSize: 13, flex: "0 0 100%" }}>{label}</div>
+      <div style={{ flex: "1 1 220px", minWidth: 0, background: "rgba(255,255,255,0.02)", padding: 10, borderRadius: 10, border: "1px solid var(--border)", overflowX: "auto", whiteSpace: "nowrap" }}>
         <div style={{ fontWeight: 700 }}>{value}</div>
       </div>
-      <button className="btn ghost" onClick={copy} aria-label={`Copy ${label}`}>
+      <button className="btn ghost" onClick={copy} aria-label={`Copy ${label}`} style={{ flex: "0 0 auto" }}>
         {copied ? "Скопировано" : "Копировать"}
       </button>
     </div>
@@ -76,9 +89,11 @@ export default function PaymentDetails({ amount, subtotal, discount }: { amount?
   }, []);
 
   const fio = req?.recipient_name || "—";
-  const phone = req?.phone || "—";
-  const card = req?.card_number || "—";
+  const rawPhone = req?.phone || "—";
+  const rawCard = req?.card_number || "—";
   const bank = req?.bank_name || "—";
+  const phone = useMemo(() => formatPhone(rawPhone), [rawPhone]);
+  const card = useMemo(() => formatCard(rawCard), [rawCard]);
   const amountNum = Number(amount || 0);
   const subtotalNum = Number(subtotal || 0);
   const discountNum = Number(discount || 0);
@@ -107,8 +122,8 @@ export default function PaymentDetails({ amount, subtotal, discount }: { amount?
           <div style={{ fontWeight: 800 }}>{fio}</div>
         </div>
 
-        <Row label="Телефон (для оплаты / связь)" value={phone} />
-        <Row label="Номер карты" value={card} />
+        <Row label="Телефон (для оплаты / связь)" value={phone} copyValue={rawPhone} />
+        <Row label="Номер карты" value={card} copyValue={rawCard} />
         <Row label="Банк" value={bank} />
 
         {req?.note ? (
