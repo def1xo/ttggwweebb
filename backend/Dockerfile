@@ -22,7 +22,10 @@ RUN mkdir -p /app/uploads \
  && useradd -m appuser \
  && chown -R appuser:appuser /app/uploads
 
-USER appuser
+# NOTE: keep container running as root so bind-mounted /app/uploads from host
+# remains writable across different host UID/GID setups (otherwise payment proof
+# and manual image uploads fail with PermissionError).
+# USER appuser
 
 EXPOSE 8000
 
