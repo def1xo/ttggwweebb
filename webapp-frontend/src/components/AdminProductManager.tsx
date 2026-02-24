@@ -141,6 +141,8 @@ export default function AdminProductManager() {
     });
   }, [items, debouncedQuery]);
 
+  const hasSearch = Boolean(debouncedQuery.trim());
+
   const perPage = 25;
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / perPage));
   const safePage = Math.min(Math.max(1, page), totalPages);
@@ -167,7 +169,7 @@ export default function AdminProductManager() {
           value={query}
           onChange={setQuery}
           placeholder="Поиск по товарам (название / SKU / ID)…"
-          hint={debouncedQuery ? `Найдено: ${filteredItems.length} / ${items.length}` : items.length ? `Товаров: ${items.length}` : ""}
+          hint={hasSearch ? `Найдено: ${filteredItems.length} / ${items.length}` : items.length ? `Товаров: ${items.length}` : ""}
         />
       </div>
 
@@ -217,7 +219,7 @@ export default function AdminProductManager() {
           </div>
         )}
 
-        {!loading && filteredItems.length > perPage ? (
+        {!loading && !hasSearch && filteredItems.length > perPage ? (
           <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
             <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.max(1, v - 1))} disabled={safePage <= 1}>← Назад</button>
             <div className="small-muted">Страница {safePage} / {totalPages}</div>
