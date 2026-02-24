@@ -1583,7 +1583,7 @@ def test_import_products_shop_vkus_single_row_keeps_single_colorway_for_four_to_
         p = products[0]
         variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
         colors = {db.query(models.Color).filter(models.Color.id == v.color_id).one().name for v in variants if v.color_id}
-        assert colors == {"белый"}
+        assert colors == {"white"}
         merged_images = set()
         for v in variants:
             merged_images.update(v.images or [])

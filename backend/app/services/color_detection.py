@@ -4,6 +4,7 @@ import colorsys
 import io
 import math
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -13,11 +14,39 @@ from PIL import Image
 
 logger = logging.getLogger("color_detection")
 
+
+_COLOR_ALIASES: Dict[str, str] = {
+    "grey": "gray",
+    "серый": "gray",
+    "сер": "gray",
+    "чёрный": "black",
+    "черный": "black",
+    "белый": "white",
+    "white_single": "white",
+    "зелёный": "green",
+    "зеленый": "green",
+    "синий": "blue",
+    "голубой": "sky_blue",
+    "бежевый": "beige",
+    "коричневый": "brown",
+    "красный": "red",
+    "розовый": "pink",
+    "black_single": "black",
+    "gray_single": "gray",
+    "grey_single": "gray",
+}
+
+_CANONICAL_TO_RU: Dict[str, str] = {
+    "black": "черный", "white": "белый", "gray": "серый", "beige": "бежевый",
+    "brown": "коричневый", "blue": "синий", "red": "красный", "green": "зеленый",
+    "yellow": "желтый", "orange": "оранжевый", "purple": "фиолетовый", "pink": "розовый",
+    "off_white": "молочный", "cream": "кремовый", "olive": "оливковый", "mint": "мятный",
+}
+
 CANONICAL_COLORS: tuple[str, ...] = (
-    "black", "white", "gray", "beige", "brown", "blue", "red", "green", "yellow", "orange", "purple", "pink",
-    "navy", "sky_blue", "teal", "turquoise", "mint", "olive", "lime", "burgundy", "maroon", "coral", "peach",
-    "lavender", "lilac", "violet", "khaki", "sand", "camel", "cream", "off_white", "silver", "gold", "bronze",
-    "multi", "none",
+    "black", "white", "gray", "beige", "brown", "blue", "navy", "sky_blue", "green", "olive", "lime",
+    "yellow", "orange", "red", "burgundy", "pink", "purple", "lavender", "khaki", "cream", "silver",
+    "gold", "multi",
 )
 
 
@@ -169,6 +198,9 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
     if 0.66 <= h < 0.78:
         return "purple"
     if 0.52 <= h < 0.66:
+        # anti false-blue: dark/neutral regions must stay neutral
+        if s < 0.22 or l < 42 or v < 0.35:
+            return "black" if (l < 32 or v < 0.24) else "gray"
         return "blue"
     if 0.24 <= h < 0.52:
         return "green"
@@ -270,12 +302,14 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
                 alt_conf = sum(v.confidence for v in votes if v.color == c1) / max(1, by_color[c1])
                 if alt_conf < 0.55:
                     c1 = c2
-        return {
+        result = {
             "color": c1,
             "confidence": round(min(0.99, s1 / max(0.001, sum(score.values())) + 0.15), 3),
             "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "forced_single_for_5": True},
             "per_image": per_image,
         }
+        logger.info("detect_product_color: photos=%s color=%s confidence=%.3f top2=%s", len(valid), result["color"], result["confidence"], sorted(score.items(), key=lambda x: x[1], reverse=True)[:2])
+        return result
 
     top = sorted(score.items(), key=lambda x: x[1], reverse=True)
     color = top[0][0]
@@ -287,9 +321,33 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
             color = "multi"
             conf = max(conf, s2 / max(0.001, sum(score.values())))
 
-    return {
+    result = {
         "color": color,
         "confidence": round(min(0.99, conf), 3),
         "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "forced_single_for_5": False},
         "per_image": per_image,
     }
+    logger.info("detect_product_color: photos=%s color=%s confidence=%.3f top2=%s", len(valid), result["color"], result["confidence"], sorted(score.items(), key=lambda x: x[1], reverse=True)[:2])
+    return result
+
+
+def normalize_color_to_whitelist(name: Optional[str]) -> str:
+    raw = (str(name or "").strip().lower() or "gray").replace(" ", "_")
+    raw = re.sub(r"_single$", "", raw)
+    # forbid composite color values like "gray/purple"
+    raw = re.split(r"[/|]+", raw, maxsplit=1)[0].strip() or "gray"
+    raw = _COLOR_ALIASES.get(raw, raw)
+    return raw if raw in CANONICAL_COLORS else "gray"
+
+
+def canonical_color_to_display_name(name: Optional[str]) -> str:
+    canonical = normalize_color_to_whitelist(name)
+    if canonical in _CANONICAL_TO_RU:
+        return _CANONICAL_TO_RU[canonical]
+    return canonical.replace("_", " ")
+
+
+def detect_product_colors_from_photos(image_sources: Sequence[str]) -> Dict[str, Any]:
+    detected = detect_product_color(image_sources)
+    canonical = normalize_color_to_whitelist(detected.get("color"))
+    return {**detected, "color": canonical, "display_color": canonical_color_to_display_name(canonical)}
