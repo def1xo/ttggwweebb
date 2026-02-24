@@ -181,7 +181,7 @@ export default function CategoryView() {
   }, [products, query, sizeFilter, priceMin, priceMax, sortMode]);
 
   const hint = query
-    ? `Найдено: ${filtered.length} / ${products.length}`
+    ? `Найдено в категории: ${filtered.length} / ${products.length}`
     : products.length
     ? `Товаров: ${products.length}`
     : "";
@@ -283,6 +283,21 @@ export default function CategoryView() {
         <div className="card" style={{ marginTop: 12, padding: 16 }}>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>Ничего не найдено</div>
           <div className="muted">Попробуй снять часть фильтров или очисти поиск.</div>
+          <div style={{ marginTop: 10 }}>
+            <button
+              className="btn ghost"
+              type="button"
+              onClick={() => {
+                setQuery("");
+                setSortMode("popular");
+                setSizeFilter("all");
+                setPriceMin("");
+                setPriceMax("");
+              }}
+            >
+              Сбросить поиск
+            </button>
+          </div>
         </div>
       ) : null}
     </div>

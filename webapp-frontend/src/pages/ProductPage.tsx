@@ -11,6 +11,10 @@ function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
 }
 
+function normalizeColorValue(raw: unknown): string {
+  return String(raw || "").trim().toLowerCase();
+}
+
 function isReasonableSize(v: string): boolean {
   const t = String(v || "").trim();
   if (!t) return false;
@@ -99,8 +103,38 @@ function collectProductImages(p: any): string[] {
 function imagesForColor(p: any, color: string | null): string[] {
   if (!p) return [];
   if (!color) return collectProductImages(p);
+  const selected = normalizeColorValue(color);
   const groups = Array.isArray(p?.color_variants) ? p.color_variants : [];
-  const hit = groups.find((g: any) => String(g?.color || "") === String(color));
+  const hit = groups.find((g: any) => normalizeColorValue(g?.color) === selected);
+  const fromGroup = splitImageCandidates(hit?.images)
+    .map((item) => normalizeMediaUrl(item))
+    .filter((item): item is string => Boolean(item));
+  if (fromGroup.length) return uniq(fromGroup);
+
+  const fromVariantImages = (Array.isArray(p?.variants) ? p.variants : [])
+    .filter((v: any) => normalizeColorValue(v?.color?.name || v?.color) === selected)
+    .flatMap((v: any) => splitImageCandidates(v?.images || v?.image_urls))
+    .map((item) => normalizeMediaUrl(item))
+    .filter((item): item is string => Boolean(item));
+  if (fromVariantImages.length) return uniq(fromVariantImages);
+
+  const byColor = p?.images_by_color;
+  if (byColor && typeof byColor === "object") {
+    const matchKey = Object.keys(byColor).find((k) => normalizeColorValue(k) === selected);
+    if (matchKey) {
+      const fromKey = splitImageCandidates((byColor as Record<string, unknown>)[matchKey])
+        .map((item) => normalizeMediaUrl(item))
+        .filter((item): item is string => Boolean(item));
+      if (fromKey.length) return uniq(fromKey);
+    }
+  }
+
+  // Не смешиваем фото разных цветов, если выбран конкретный цвет.
+  const fallback = splitImageCandidates(p?.selected_color_images)
+    .map((item) => normalizeMediaUrl(item))
+    .filter((item): item is string => Boolean(item));
+  if (fallback.length) return uniq(fallback);
+
   if (hit?.images?.length) {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -112,7 +146,7 @@ function imagesForColor(p: any, color: string | null): string[] {
     }
     if (out.length) return out;
   }
-  return collectProductImages(p);
+  return [];
 }
 
 function getVariantStock(v: any): number {
@@ -227,6 +261,14 @@ export default function ProductPage() {
     return uniq([...fromVariants, ...fromProduct, ...fromColorVariants]);
   }, [variants, product?.colors, product?.available_colors]);
 
+  const colorHasAnyStock = useMemo(() => {
+    const out: Record<string, boolean> = {};
+    for (const c of colors) {
+      out[c] = variants.some((v) => normalizeColorValue(v?.color?.name || v?.color) === normalizeColorValue(c) && getVariantStock(v) > 0);
+    }
+    return out;
+  }, [colors, variants]);
+
   const sizeOptions = sizes;
 
   const variantStockBySize = useMemo(() => {
@@ -267,6 +309,16 @@ export default function ProductPage() {
     const bestColor = colors.find((c) => colorAvailabilityBySelectedSize[c]);
     if (bestColor) setSelectedColor(bestColor);
   }, [selectedSize, colors, selectedColor, colorAvailabilityBySelectedSize]);
+
+  useEffect(() => {
+    if (!colors.length) return;
+    const currentHasStock = selectedColor ? Boolean(colorHasAnyStock[selectedColor]) : false;
+    if (selectedColor && currentHasStock) return;
+    const firstAvailable = colors.find((c) => colorHasAnyStock[c]);
+    if (firstAvailable && firstAvailable !== selectedColor) {
+      setSelectedColor(firstAvailable);
+    }
+  }, [colors, selectedColor, colorHasAnyStock]);
 
   const sizeAvailability = useMemo(() => {
     const out: Record<string, boolean> = {};
@@ -309,8 +361,15 @@ export default function ProductPage() {
     }) || null;
   }, [variants, selectedSize, selectedColor]);
 
+  useEffect(() => {
+    if (!selectedSize || !selectedColor) return;
+    if (sizeAvailability[selectedSize]) return;
+    setSelectedSize(null);
+  }, [selectedColor, selectedSize, sizeAvailability]);
+
   const showColorPicker = colors.length > 1;
   const selectionMissing = (sizeOptions.length > 0 && !selectedSize) || (showColorPicker && !selectedColor);
+  const selectedColorInStock = !selectedColor || Boolean(colorHasAnyStock[selectedColor]);
 
   const price = useMemo(() => {
     const base = Number(product?.price ?? product?.base_price ?? 0);
@@ -366,7 +425,11 @@ export default function ProductPage() {
   const addToCart = () => {
     if (!product) return;
     if (selectionMissing) {
-      notify("Выбери размер и цвет перед добавлением", "error");
+      notify(sizeOptions.length > 0 && !selectedSize ? "Выбери размер перед добавлением" : "Выбери цвет перед добавлением", "error");
+      return;
+    }
+    if (!selectedColorInStock) {
+      notify("Нет в наличии. Выберите другой цвет", "error");
       return;
     }
     let variant = variants[0];
@@ -508,7 +571,9 @@ export default function ProductPage() {
               Цвет
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              {colors.map((c) => (
+              {colors.map((c) => {
+                const outOfStock = !colorHasAnyStock[c];
+                return (
                 <button
                   key={c}
                   type="button"
@@ -519,15 +584,22 @@ export default function ProductPage() {
                     alignItems: "center",
                     gap: 8,
                     borderColor: selectedColor === c ? "var(--ring)" : undefined,
-                    opacity: selectedSize && !colorAvailabilityBySelectedSize[c] ? 0.45 : 1,
-                    filter: selectedSize && !colorAvailabilityBySelectedSize[c] ? "grayscale(0.35)" : "none",
+                    opacity: outOfStock || (selectedSize && !colorAvailabilityBySelectedSize[c]) ? 0.45 : 1,
+                    filter: outOfStock || (selectedSize && !colorAvailabilityBySelectedSize[c]) ? "grayscale(0.35)" : "none",
                   }}
                 >
                   <ColorSwatch name={c} size={16} />
                   <span style={{ fontWeight: 800 }}>{c}</span>
+                  {outOfStock ? <span className="small-muted">нет в наличии</span> : null}
                 </button>
-              ))}
+                );
+              })}
             </div>
+            {selectedColor && !selectedColorInStock ? (
+              <div className="small-muted" style={{ marginTop: 8, color: "#ff9b9b" }}>
+                Нет в наличии. Выберите другой цвет.
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -567,9 +639,9 @@ export default function ProductPage() {
           <button
             className="btn btn-primary product-add-btn"
             onClick={addToCart}
-            disabled={!hasAnyStock || (selectedVariant ? getVariantStock(selectedVariant) <= 0 : false)}
+            disabled={!hasAnyStock || !selectedColorInStock || (selectedVariant ? getVariantStock(selectedVariant) <= 0 : false)}
           >
-            {!hasAnyStock ? "Нет в наличии" : "Добавить в корзину"}
+            {!hasAnyStock || !selectedColorInStock ? "Нет в наличии" : "Добавить в корзину"}
           </button>
         </div>
       </div>
