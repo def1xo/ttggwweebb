@@ -34,7 +34,7 @@ export default function Catalog() {
         else list = [];
 
         setCategories(list);
-      } catch (e: any) {
+      } catch {
         setCategories([]);
         setError("Не удалось загрузить каталог");
       } finally {
@@ -44,10 +44,10 @@ export default function Catalog() {
   }, []);
 
   useEffect(() => {
-    if (!globalMode) return;
     const q = query.trim();
     if (!q) {
       setGlobalProducts([]);
+      setSearchLoading(false);
       return;
     }
     const t = window.setTimeout(async () => {
@@ -64,9 +64,9 @@ export default function Catalog() {
       }
     }, 260);
     return () => window.clearTimeout(t);
-  }, [query, globalMode]);
+  }, [query]);
 
-  const filtered = useMemo(() => {
+  const filteredCategories = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return categories;
     return categories.filter((c) => String(c.name || "").toLowerCase().includes(q));
@@ -78,19 +78,14 @@ export default function Catalog() {
     return map;
   }, [categories]);
 
+  const hasQuery = Boolean(query.trim());
+
   if (loading) {
     return (
       <div className="container" style={{ paddingTop: 12 }}>
         <div className="card">
           <div className="panel-title">Каталог</div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
-              gap: 12,
-              marginTop: 12,
-            }}
-          >
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 12, marginTop: 12 }}>
             {Array.from({ length: 8 }).map((_, idx) => (
               <div key={idx} className="card" style={{ padding: 12 }}>
                 <Skeleton height={100} style={{ borderRadius: 8, marginBottom: 8 }} />
@@ -103,9 +98,7 @@ export default function Catalog() {
     );
   }
 
-  if (error) {
-    return <div className="container card">{error}</div>;
-  }
+  if (error) return <div className="container card">{error}</div>;
 
   return (
     <div className="container" style={{ paddingTop: 12 }}>
@@ -114,50 +107,71 @@ export default function Catalog() {
         <StickySearch
           value={query}
           onChange={setQuery}
-          placeholder={globalMode ? "Глобальный поиск по товарам…" : "Поиск по категориям…"}
-          hint={globalMode ? (query ? `Товаров: ${globalProducts.length}` : "Введите название или артикул") : (query ? `Найдено: ${filtered.length} / ${categories.length}` : categories.length ? `Категорий: ${categories.length}` : "")}
+          placeholder="Поиск по товарам и категориям…"
+          hint={
+            hasQuery
+              ? `Товары: ${globalProducts.length} • Категории: ${filteredCategories.length}`
+              : categories.length
+              ? `Категорий: ${categories.length}`
+              : ""
+          }
         />
         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
           <button className={`chip ${!globalMode ? "chip--active" : ""}`} type="button" onClick={() => setGlobalMode(false)}>Категории</button>
           <button className={`chip ${globalMode ? "chip--active" : ""}`} type="button" onClick={() => setGlobalMode(true)}>Глобально по товарам</button>
         </div>
 
-        {!globalMode ? (
-          <>
-            {categories.length === 0 ? (
-              <div className="small-muted" style={{ marginTop: 12 }}>Категорий пока нет</div>
-            ) : (
-              <div className="categories-grid" style={{ marginTop: 8 }}>
-                {filtered.map((c) => (
-                  <Link key={c.id} to={`/catalog/${c.slug || c.id}`} className="category-full-tile" style={{ textDecoration: "none", color: "inherit" }}>
-                    <div className="category-info">
-                      <div className="category-title">{c.name}</div>
-                      <div className="category-sub">Перейти в категорию</div>
-                    </div>
+        {hasQuery ? (
+          <div style={{ marginTop: 10, display: "grid", gap: 12 }}>
+            <div>
+              <div className="small-muted" style={{ marginBottom: 8, fontWeight: 700 }}>Товары</div>
+              {searchLoading ? <Skeleton height={54} /> : null}
+              {!searchLoading && globalProducts.length === 0 ? (
+                <div className="card" style={{ padding: 14 }}>
+                  <div style={{ fontWeight: 800 }}>Товары не найдены</div>
+                  <div className="muted">Попробуй другое название или артикул.</div>
+                </div>
+              ) : null}
+              <div style={{ display: "grid", gap: 10 }}>
+                {globalProducts.map((p: any) => (
+                  <Link key={p.id} to={`/product/${p.id}`} className="card" style={{ textDecoration: "none", color: "inherit", padding: 12 }}>
+                    <div style={{ fontWeight: 800 }}>{p.title || p.name}</div>
+                    <div className="small-muted">{categoryById.get(Number(p.category_id)) || `Категория #${p.category_id || "—"}`}</div>
                   </Link>
                 ))}
               </div>
-            )}
-            {categories.length > 0 && filtered.length === 0 ? (
-              <div className="card" style={{ marginTop: 12, padding: 16 }}>
-                <div style={{ fontWeight: 800, marginBottom: 6 }}>Ничего не найдено</div>
-                <div className="muted">Попробуй другой запрос или очисти поиск.</div>
-              </div>
-            ) : null}
-          </>
+            </div>
+
+            <div>
+              <div className="small-muted" style={{ marginBottom: 8, fontWeight: 700 }}>Категории</div>
+              {filteredCategories.length === 0 ? (
+                <div className="card" style={{ padding: 14 }}>
+                  <div style={{ fontWeight: 800 }}>Категории не найдены</div>
+                </div>
+              ) : (
+                <div className="categories-grid">
+                  {filteredCategories.map((c) => (
+                    <Link key={c.id} to={`/catalog/${c.slug || c.id}`} className="category-full-tile" style={{ textDecoration: "none", color: "inherit" }}>
+                      <div className="category-info">
+                        <div className="category-title">{c.name}</div>
+                        <div className="category-sub">Перейти в категорию</div>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : categories.length === 0 ? (
+          <div className="small-muted" style={{ marginTop: 12 }}>Категорий пока нет</div>
         ) : (
-          <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-            {searchLoading ? <Skeleton height={54} /> : null}
-            {!searchLoading && query.trim() && globalProducts.length === 0 ? (
-              <div className="card" style={{ padding: 14 }}>
-                <div style={{ fontWeight: 800 }}>Ничего не найдено</div>
-                <div className="muted">Попробуй другое название или артикул.</div>
-              </div>
-            ) : null}
-            {globalProducts.map((p: any) => (
-              <Link key={p.id} to={`/product/${p.id}`} className="card" style={{ textDecoration: "none", color: "inherit", padding: 12 }}>
-                <div style={{ fontWeight: 800 }}>{p.title || p.name}</div>
-                <div className="small-muted">{categoryById.get(Number(p.category_id)) || `Категория #${p.category_id || "—"}`}</div>
+          <div className="categories-grid" style={{ marginTop: 8 }}>
+            {categories.map((c) => (
+              <Link key={c.id} to={`/catalog/${c.slug || c.id}`} className="category-full-tile" style={{ textDecoration: "none", color: "inherit" }}>
+                <div className="category-info">
+                  <div className="category-title">{c.name}</div>
+                  <div className="category-sub">Перейти в категорию</div>
+                </div>
               </Link>
             ))}
           </div>
