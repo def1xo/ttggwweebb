@@ -4,7 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body, Query
 from sqlalchemy.orm import Session
 
 from app.api.dependencies import get_db, get_current_admin_user
@@ -161,8 +161,15 @@ def _get_or_create_color(db: Session, name: str) -> models.Color:
 
 
 @router.get("/products")
-def list_products(db: Session = Depends(get_db), admin: models.User = Depends(get_current_admin_user)):
-    items = db.query(models.Product).order_by(models.Product.created_at.desc()).all()
+def list_products(
+    q: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(get_current_admin_user),
+):
+    query = db.query(models.Product)
+    if q:
+        query = query.filter(models.Product.title.ilike(f"%{q}%"))
+    items = query.order_by(models.Product.created_at.desc()).all()
     out = []
     for p in items:
         sizes = []

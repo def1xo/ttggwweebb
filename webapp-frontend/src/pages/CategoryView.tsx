@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useLocation, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import api from "../services/api";
 import ProductCard from "../components/ProductCard";
 import StickySearch from "../components/StickySearch";
@@ -92,9 +92,16 @@ function CustomSelect({
 export default function CategoryView() {
   const { id } = useParams();
   const nav = useNavigate();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [category, setCategory] = useState<any>(null);
   const [products, setProducts] = useState<ProductAny[]>([]);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(() => searchParams.get("q") || "");
+  const [debouncedQuery, setDebouncedQuery] = useState(() => searchParams.get("q") || "");
+  const [page, setPage] = useState<number>(() => {
+    const p = Number(searchParams.get("page") || 1);
+    return Number.isFinite(p) && p > 0 ? Math.floor(p) : 1;
+  });
   const [sortMode, setSortMode] = useState<SortMode>("popular");
   const [sizeFilter, setSizeFilter] = useState("all");
   const [priceMin, setPriceMin] = useState<string>("");
@@ -145,14 +152,51 @@ export default function CategoryView() {
     })();
   }, [id]);
 
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setDebouncedQuery(query);
+      setPage(1);
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [query]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams);
+    if (query.trim()) params.set("q", query.trim());
+    else params.delete("q");
+    if (page > 1) params.set("page", String(page));
+    else params.delete("page");
+    const next = params.toString();
+    const cur = searchParams.toString();
+    if (next !== cur) setSearchParams(params, { replace: true });
+  }, [query, page]);
+
+  useEffect(() => {
+    const key = `scroll:${location.pathname}?${location.search}`;
+    const raw = sessionStorage.getItem(key);
+    const y = Number(raw || 0);
+    if (Number.isFinite(y) && y > 0) {
+      window.setTimeout(() => window.scrollTo(0, y), 0);
+    }
+    const onScroll = () => {
+      sessionStorage.setItem(key, String(window.scrollY || 0));
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      onScroll();
+      window.removeEventListener("scroll", onScroll);
+    };
+  }, [location.pathname, location.search]);
+
   const sizeOptions = useMemo(() => extractValues(products), [products]);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = debouncedQuery.trim().toLowerCase();
 
     let out = products.filter((p) => {
       const title = String((p as any).title || (p as any).name || "").toLowerCase();
-      const titleOk = !q || title.includes(q);
+      const sku = String((p as any).sku || (p as any).article || (p as any).vendor_code || "").toLowerCase();
+      const titleOk = !q || title.includes(q) || sku.includes(q);
 
       const variants = Array.isArray(p?.variants) ? p.variants : [];
       const sizeOk = sizeFilter === "all" || variants.some((v: any) => String(v?.size?.name ?? v?.size ?? "").trim() === sizeFilter);
@@ -178,9 +222,21 @@ export default function CategoryView() {
     });
 
     return out;
-  }, [products, query, sizeFilter, priceMin, priceMax, sortMode]);
+  }, [products, debouncedQuery, sizeFilter, priceMin, priceMax, sortMode]);
 
-  const hint = query
+  const perPage = 24;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const paged = useMemo(() => {
+    const start = (safePage - 1) * perPage;
+    return filtered.slice(start, start + perPage);
+  }, [filtered, safePage]);
+
+  useEffect(() => {
+    if (safePage !== page) setPage(safePage);
+  }, [safePage, page]);
+
+  const hint = debouncedQuery
     ? `Найдено в категории: ${filtered.length} / ${products.length}`
     : products.length
     ? `Товаров: ${products.length}`
@@ -274,10 +330,18 @@ export default function CategoryView() {
       ) : null}
 
       <div className="grid-products">
-        {filtered.map((p) => (
+        {paged.map((p) => (
           <ProductCard key={(p as any).id} product={p} />
         ))}
       </div>
+
+      {filtered.length > perPage ? (
+        <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
+          <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.max(1, v - 1))} disabled={safePage <= 1}>← Назад</button>
+          <div className="small-muted">Страница {safePage} / {totalPages}</div>
+          <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.min(totalPages, v + 1))} disabled={safePage >= totalPages}>Далее →</button>
+        </div>
+      ) : null}
 
       {products.length > 0 && filtered.length === 0 ? (
         <div className="card" style={{ marginTop: 12, padding: 16 }}>
@@ -289,6 +353,8 @@ export default function CategoryView() {
               type="button"
               onClick={() => {
                 setQuery("");
+                setDebouncedQuery("");
+                setPage(1);
                 setSortMode("popular");
                 setSizeFilter("all");
                 setPriceMin("");
