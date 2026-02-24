@@ -13,6 +13,31 @@ from PIL import Image
 
 logger = logging.getLogger("color_detection")
 
+
+_COLOR_ALIASES: Dict[str, str] = {
+    "grey": "gray",
+    "серый": "gray",
+    "сер": "gray",
+    "чёрный": "black",
+    "черный": "black",
+    "белый": "white",
+    "зелёный": "green",
+    "зеленый": "green",
+    "синий": "blue",
+    "голубой": "sky_blue",
+    "бежевый": "beige",
+    "коричневый": "brown",
+    "красный": "red",
+    "розовый": "pink",
+}
+
+_CANONICAL_TO_RU: Dict[str, str] = {
+    "black": "черный", "white": "белый", "gray": "серый", "beige": "бежевый",
+    "brown": "коричневый", "blue": "синий", "red": "красный", "green": "зеленый",
+    "yellow": "желтый", "orange": "оранжевый", "purple": "фиолетовый", "pink": "розовый",
+    "off_white": "молочный", "cream": "кремовый", "olive": "оливковый", "mint": "мятный",
+}
+
 CANONICAL_COLORS: tuple[str, ...] = (
     "black", "white", "gray", "beige", "brown", "blue", "red", "green", "yellow", "orange", "purple", "pink",
     "navy", "sky_blue", "teal", "turquoise", "mint", "olive", "lime", "burgundy", "maroon", "coral", "peach",
@@ -270,12 +295,14 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
                 alt_conf = sum(v.confidence for v in votes if v.color == c1) / max(1, by_color[c1])
                 if alt_conf < 0.55:
                     c1 = c2
-        return {
+        result = {
             "color": c1,
             "confidence": round(min(0.99, s1 / max(0.001, sum(score.values())) + 0.15), 3),
             "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "forced_single_for_5": True},
             "per_image": per_image,
         }
+        logger.info("detect_product_color: photos=%s color=%s confidence=%.3f top2=%s", len(valid), result["color"], result["confidence"], sorted(score.items(), key=lambda x: x[1], reverse=True)[:2])
+        return result
 
     top = sorted(score.items(), key=lambda x: x[1], reverse=True)
     color = top[0][0]
@@ -287,9 +314,30 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
             color = "multi"
             conf = max(conf, s2 / max(0.001, sum(score.values())))
 
-    return {
+    result = {
         "color": color,
         "confidence": round(min(0.99, conf), 3),
         "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "forced_single_for_5": False},
         "per_image": per_image,
     }
+    logger.info("detect_product_color: photos=%s color=%s confidence=%.3f top2=%s", len(valid), result["color"], result["confidence"], sorted(score.items(), key=lambda x: x[1], reverse=True)[:2])
+    return result
+
+
+def normalize_color_to_whitelist(name: Optional[str]) -> str:
+    raw = (str(name or "").strip().lower() or "none").replace(" ", "_")
+    raw = _COLOR_ALIASES.get(raw, raw)
+    return raw if raw in CANONICAL_COLORS else "none"
+
+
+def canonical_color_to_display_name(name: Optional[str]) -> str:
+    canonical = normalize_color_to_whitelist(name)
+    if canonical in _CANONICAL_TO_RU:
+        return _CANONICAL_TO_RU[canonical]
+    return "" if canonical == "none" else canonical.replace("_", " ")
+
+
+def detect_product_colors_from_photos(image_sources: Sequence[str]) -> Dict[str, Any]:
+    detected = detect_product_color(image_sources)
+    canonical = normalize_color_to_whitelist(detected.get("color"))
+    return {**detected, "color": canonical, "display_color": canonical_color_to_display_name(canonical)}
