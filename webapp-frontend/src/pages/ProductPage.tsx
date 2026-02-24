@@ -12,6 +12,27 @@ function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
 }
 
+function isReasonableSize(v: string): boolean {
+  const t = String(v || "").trim();
+  if (!t) return false;
+  const n = Number(t.replace(",", "."));
+  if (Number.isFinite(n)) return n >= 20 && n <= 60;
+  return true;
+}
+
+function sortSizes(values: string[]) {
+  return values.slice().sort((a, b) => {
+    const na = Number(String(a).replace(",", "."));
+    const nb = Number(String(b).replace(",", "."));
+    const ia = Number.isFinite(na);
+    const ib = Number.isFinite(nb);
+    if (ia && ib) return na - nb;
+    if (ia && !ib) return -1;
+    if (!ia && ib) return 1;
+    return String(a).localeCompare(String(b));
+  });
+}
+
 function normalizeMediaUrl(raw: unknown): string | null {
   if (!raw) return null;
   const url = String(raw).trim();
