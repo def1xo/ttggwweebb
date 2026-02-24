@@ -56,5 +56,10 @@ def normalize_title_for_supplier(title: str | None, raw_supplier: str | None) ->
             if token:
                 t = re.sub(re.escape(token), " ", t, flags=re.I)
 
+    # Remove only trailing variant-index suffixes, while preserving model numbers.
+    # Examples to trim at end: "#2", "(2)", "variant 2", "- 2", "v2".
+    # Must not affect core model tokens like "1906R", "990", "550", "Yeezy 350 v2" in middle.
+    t = re.sub(r"(?i)\s*(?:#\s*[23]|\(\s*[23]\s*\)|variant\s*[23]|-\s*[23])\s*$", "", t)
+
     t = re.sub(r"\s+", " ", t).strip(" -_.,;")
     return t

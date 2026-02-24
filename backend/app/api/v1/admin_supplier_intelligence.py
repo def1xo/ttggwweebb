@@ -20,6 +20,7 @@ from app.db import models
 from app.services.importer_notifications import slugify
 from app.services import media_store
 from app.services.supplier_profiles import normalize_title_for_supplier
+from app.services.color_detection import normalize_color_to_whitelist
 from app.services.supplier_importers import (
     ImporterContext,
     get_importer_for_source,
@@ -97,11 +98,8 @@ def _canonical_color_key(raw: str | None) -> str:
     txt = str(raw or "").strip().lower()
     if not txt:
         return ""
-    parts = [re.sub(r"\s+", " ", p).strip() for p in re.split(r"[/|]+", txt) if re.sub(r"\s+", " ", p).strip()]
-    if not parts:
-        return ""
-    uniq = sorted(dict.fromkeys(parts).keys())
-    return "/".join(uniq)
+    # strict single color key from whitelist; composite values are forbidden
+    return normalize_color_to_whitelist(txt)
 
 
 def _shop_vkus_row_post_link(item: dict[str, object], image_urls: list[str] | None = None) -> str:
@@ -2087,21 +2085,17 @@ def import_products_from_sources(
                 if len(color_tokens) == 0:
                     color_tokens = [""]
                 elif is_shop_vkus:
-                    color_tokens = [color_tokens[0]]
-
-                if is_shop_vkus and color_tokens and color_tokens[0] and shop_vkus_post_link:
-                    # when same model rows accidentally resolve to same color, keep row colorway separated by post link
-                    existing_same = (
-                        db.query(models.ProductVariant)
-                        .join(models.Color, models.Color.id == models.ProductVariant.color_id, isouter=True)
-                        .filter(models.ProductVariant.product_id == p.id)
-                        .filter(models.Color.name == color_tokens[0])
-                        .first()
-                    )
-                    if existing_same is not None:
-                        suffix = re.sub(r"\W+", "", shop_vkus_post_link.lower())[-6:]
-                        if suffix:
-                            color_tokens = [f"{color_tokens[0]}/{suffix}"]
+                    # shop_vkus strict policy:
+                    # - 4..6 photos => exactly one color, never multi
+                    # - >6 photos => max two colors
+                    photo_cnt = len([u for u in (image_urls or []) if str(u or "").strip()])
+                    color_tokens = [c for c in color_tokens if c and c != "multi"]
+                    if 4 <= photo_cnt <= 6:
+                        color_tokens = [color_tokens[0]] if color_tokens else ["gray"]
+                    elif photo_cnt > 6:
+                        color_tokens = color_tokens[:2] if color_tokens else ["gray"]
+                    else:
+                        color_tokens = [color_tokens[0]] if color_tokens else ["gray"]
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:

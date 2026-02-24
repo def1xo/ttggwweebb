@@ -11,7 +11,7 @@ from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
 from app.services import media_store
 from app.services.importer_notifications import slugify
-from app.services.color_detection import detect_product_colors_from_photos, canonical_color_to_display_name
+from app.services.color_detection import detect_product_colors_from_photos
 
 router = APIRouter(tags=["admin_products"])
 logger = logging.getLogger("admin_products")
@@ -309,13 +309,12 @@ def create_product(
         detected = detect_product_colors_from_photos(local_sources)
         canonical = str(detected.get("color") or "none")
         if canonical and canonical != "none":
-            color_name = canonical_color_to_display_name(canonical)
-            if color_name:
-                color_objs.append(_get_or_create_color(db, color_name))
-                p.detected_color = canonical
-                p.detected_color_confidence = Decimal(str(detected.get("confidence") or 0))
-                p.detected_color_debug = detected.get("debug")
-                logger.info("create_product color-detect: product=%s color=%s confidence=%s photos=%s", p.id, canonical, detected.get("confidence"), len(local_sources))
+            # Store canonical whitelist key directly for stable API/filter behavior.
+            color_objs.append(_get_or_create_color(db, canonical))
+            p.detected_color = canonical
+            p.detected_color_confidence = Decimal(str(detected.get("confidence") or 0))
+            p.detected_color_debug = detected.get("debug")
+            logger.info("create_product color-detect: product=%s color=%s confidence=%s photos=%s", p.id, canonical, detected.get("confidence"), len(local_sources))
 
     if not size_list:
         if color_objs:

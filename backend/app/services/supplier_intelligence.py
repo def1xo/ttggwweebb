@@ -80,6 +80,16 @@ CATEGORY_RULES: dict[str, tuple[str, ...]] = {
     "Аксессуары": ("кепк", "шапк", "сумк", "ремень", "аксесс", "рюкзак", "кошелек", "wallet", "bag"),
 }
 
+FOOTWEAR_KEYWORDS: tuple[str, ...] = (
+    "sneaker", "dunk", "jordan", "air max", "gel", "forum", "shoe", "boot",
+    "кросс", "кеды", "обув", "ботин", "лофер",
+)
+
+ACCESSORY_KEYWORDS: tuple[str, ...] = (
+    "belt", "cap", "hat", "bag", "wallet", "scarf", "gloves", "sunglasses",
+    "ремень", "кепк", "шапк", "сумк", "кошелек", "шарф", "перчат", "очки",
+)
+
 
 @dataclass
 class SupplierOffer:
@@ -223,11 +233,16 @@ def fetch_tabular_preview(url: str, timeout_sec: int = 20, max_rows: int = 25) -
 def map_category(raw_title: str) -> str:
     t = (raw_title or "").strip().lower()
     if not t:
+        return "Одежда"
+    # critical rule: footwear must never fall into accessories
+    if any(k in t for k in FOOTWEAR_KEYWORDS):
+        return "Обувь"
+    if any(k in t for k in ACCESSORY_KEYWORDS):
         return "Аксессуары"
     for cat, keywords in CATEGORY_RULES.items():
         if any(k in t for k in keywords):
             return cat
-    return "Аксессуары"
+    return "Одежда"
 
 
 def _clean_market_price_values(values: Iterable[float]) -> list[float]:
@@ -1130,9 +1145,14 @@ def generate_youth_description(title: str, category_name: str | None = None, col
     if clr:
         mood = f" Цвет: {clr}."
     return (
-        f"{t} — вайбовый {cat.lower()} для повседневного стрит-стайла. "
-        f"Лёгко собирается в образ под универ, прогулки и вечерние вылазки.{mood} "
-        f"Сидит актуально, смотрится дорого, а носится каждый день без заморочек."
+        f"{t} — стильный выбор на каждый день для тех, кто любит удобные и выразительные вещи. "
+        f"Модель легко вписывается в повседневный гардероб и подходит под разный темп дня.{mood}\n\n"
+        f"Материалы и посадка сбалансированы так, чтобы вещь выглядела аккуратно и оставалась комфортной в носке. "
+        f"Это практичный {cat.lower()}, который можно сочетать как с базовыми, так и с более акцентными образами.\n\n"
+        f"• комфортная посадка на каждый день\n"
+        f"• универсальный дизайн без лишних деталей\n"
+        f"• легко сочетать с разной одеждой\n"
+        f"• аккуратный внешний вид при активной носке"
     )
 
 

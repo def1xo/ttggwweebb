@@ -83,4 +83,4 @@ def test_create_product_detects_color_from_image_when_missing_color(tmp_db, monk
     assert len(variants) == 1
     color = tmp_db.query(models.Color).get(variants[0].color_id)
     assert color is not None
-    assert color.name == "зеленый"
+    assert color.name == "green"

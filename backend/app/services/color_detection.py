@@ -4,6 +4,7 @@ import colorsys
 import io
 import math
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -21,6 +22,7 @@ _COLOR_ALIASES: Dict[str, str] = {
     "чёрный": "black",
     "черный": "black",
     "белый": "white",
+    "white_single": "white",
     "зелёный": "green",
     "зеленый": "green",
     "синий": "blue",
@@ -29,6 +31,9 @@ _COLOR_ALIASES: Dict[str, str] = {
     "коричневый": "brown",
     "красный": "red",
     "розовый": "pink",
+    "black_single": "black",
+    "gray_single": "gray",
+    "grey_single": "gray",
 }
 
 _CANONICAL_TO_RU: Dict[str, str] = {
@@ -39,10 +44,9 @@ _CANONICAL_TO_RU: Dict[str, str] = {
 }
 
 CANONICAL_COLORS: tuple[str, ...] = (
-    "black", "white", "gray", "beige", "brown", "blue", "red", "green", "yellow", "orange", "purple", "pink",
-    "navy", "sky_blue", "teal", "turquoise", "mint", "olive", "lime", "burgundy", "maroon", "coral", "peach",
-    "lavender", "lilac", "violet", "khaki", "sand", "camel", "cream", "off_white", "silver", "gold", "bronze",
-    "multi", "none",
+    "black", "white", "gray", "beige", "brown", "blue", "navy", "sky_blue", "green", "olive", "lime",
+    "yellow", "orange", "red", "burgundy", "pink", "purple", "lavender", "khaki", "cream", "silver",
+    "gold", "multi",
 )
 
 
@@ -194,6 +198,9 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
     if 0.66 <= h < 0.78:
         return "purple"
     if 0.52 <= h < 0.66:
+        # anti false-blue: dark/neutral regions must stay neutral
+        if s < 0.22 or l < 42 or v < 0.35:
+            return "black" if (l < 32 or v < 0.24) else "gray"
         return "blue"
     if 0.24 <= h < 0.52:
         return "green"
@@ -325,16 +332,19 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
 
 
 def normalize_color_to_whitelist(name: Optional[str]) -> str:
-    raw = (str(name or "").strip().lower() or "none").replace(" ", "_")
+    raw = (str(name or "").strip().lower() or "gray").replace(" ", "_")
+    raw = re.sub(r"_single$", "", raw)
+    # forbid composite color values like "gray/purple"
+    raw = re.split(r"[/|]+", raw, maxsplit=1)[0].strip() or "gray"
     raw = _COLOR_ALIASES.get(raw, raw)
-    return raw if raw in CANONICAL_COLORS else "none"
+    return raw if raw in CANONICAL_COLORS else "gray"
 
 
 def canonical_color_to_display_name(name: Optional[str]) -> str:
     canonical = normalize_color_to_whitelist(name)
     if canonical in _CANONICAL_TO_RU:
         return _CANONICAL_TO_RU[canonical]
-    return "" if canonical == "none" else canonical.replace("_", " ")
+    return canonical.replace("_", " ")
 
 
 def detect_product_colors_from_photos(image_sources: Sequence[str]) -> Dict[str, Any]:
