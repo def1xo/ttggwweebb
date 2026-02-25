@@ -382,6 +382,9 @@ def apply_promo(payload: ApplyPromoIn, db: Session = Depends(get_db), user: mode
 
     # referral code
     owner = _resolve_referral_owner(db, code)
+    if owner and owner.id == user.id:
+        raise HTTPException(status_code=400, detail="you cannot apply your own referral code")
+
     if owner and owner.id != user.id:
         # referral promo is one-time per user
         if user.promo_used_code:
