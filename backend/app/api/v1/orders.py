@@ -45,7 +45,17 @@ def _promo_value_to_percent(val: Decimal) -> Decimal:
 def _resolve_referral(db: Session, code: str) -> Optional[models.User]:
     if not code:
         return None
-    return db.query(models.User).filter(models.User.promo_code.ilike(code)).one_or_none()
+    owner = db.query(models.User).filter(models.User.promo_code.ilike(code)).one_or_none()
+    if owner:
+        return owner
+    promo = (
+        db.query(models.PromoCode)
+        .filter(models.PromoCode.code.ilike(code), models.PromoCode.type.in_([models.PromoType.manager, models.PromoType.assistant, models.PromoType.admin]))
+        .one_or_none()
+    )
+    if not promo or not promo.owner_user_id:
+        return None
+    return db.query(models.User).filter(models.User.id == promo.owner_user_id).one_or_none()
 
 
 def _get_cart_items(db: Session, user_id: int) -> List[models.CartItem]:

@@ -64,6 +64,7 @@ ERROR_MESSAGE_MAX_LEN = 500
 IMPORT_FALLBACK_STOCK_QTY = 9_999
 RRC_DISCOUNT_RUB = 300
 MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT = 40
+MAX_TG_MEDIA_PER_POST = 30
 
 
 def _looks_like_direct_image_url(url: str | None) -> bool:
@@ -99,7 +100,12 @@ def _canonical_color_key(raw: str | None) -> str:
     if not txt:
         return ""
     # strict single color key from whitelist; composite values are forbidden
-    return normalize_color_to_whitelist(txt)
+    normalized = normalize_color_to_whitelist(txt)
+    if normalized == "gray" and txt not in {"gray", "grey", "серый", "сер", "graphite", "charcoal"}:
+        logger.info("color_normalize fallback: raw=%r normalized=%r reason=unrecognized_or_composite", raw, normalized)
+    else:
+        logger.info("color_normalize: raw=%r normalized=%r", raw, normalized)
+    return normalized
 
 
 def _shop_vkus_row_post_link(item: dict[str, object], image_urls: list[str] | None = None) -> str:
@@ -578,9 +584,7 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
         # shop_vkus feeds often prepend two service frames in longer galleries.
         pre = list(uniq)
         source = raw_norm or uniq
-        if len(source) >= 7:
-            pre = uniq[2:]
-        elif len(source) > 2:
+        if len(source) > 2:
             first_two = source[:2]
             rest = source[2:]
             has_supplier_marker = any(
@@ -600,16 +604,15 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
             if should_drop_pair:
                 pre = uniq[2:]
 
-        filtered = [u for u in pre if _is_likely_product_image(u)]
+        filtered = [u for u in pre if _is_likely_product_image(u) and _score_gallery_image(u) > -5]
         work = filtered if filtered else pre
 
         work = _filter_gallery_main_signature_cluster(work)
-        if len(work) > 7:
-            work = work[:7]
         return work
 
     ranked = sorted(uniq, key=lambda x: _score_gallery_image(x), reverse=True)
-    return ranked
+    filtered_ranked = [u for u in ranked if _is_likely_product_image(u) and _score_gallery_image(u) > -5]
+    return filtered_ranked if filtered_ranked else ranked
 
 
 def _prefer_local_image_url(url: str | None, *, title_hint: str | None = None, source_page_url: str | None = None) -> str | None:
@@ -1805,7 +1808,7 @@ def import_products_from_sources(
                     image_url = row_image_urls[0]
                 if not image_url and "t.me/" in src_url:
                     try:
-                        tg_limit = 20 if supplier_key == "shop_vkus" else 3
+                        tg_limit = MAX_TG_MEDIA_PER_POST if supplier_key == "shop_vkus" else 3
                         tg_imgs = extract_image_urls_from_html_page(src_url, limit=tg_limit)
                         image_url = tg_imgs[0] if tg_imgs else None
                         if tg_imgs:
@@ -1833,7 +1836,7 @@ def import_products_from_sources(
                         image_urls = merged
                         image_url = image_urls[0] if image_urls else image_url
                     # unified rule: table provides data, Telegram provides photos.
-                    resolved_tg, status = importer.resolve_photos(photos_ref or tg_images, extract_image_urls_from_html_page, limit=(20 if supplier_key == "shop_vkus" else 8))
+                    resolved_tg, status = importer.resolve_photos(photos_ref or tg_images, extract_image_urls_from_html_page, limit=(MAX_TG_MEDIA_PER_POST if supplier_key == "shop_vkus" else 8))
                     images_status = status
                     if resolved_tg:
                         image_urls = resolved_tg
@@ -1857,7 +1860,7 @@ def import_products_from_sources(
                             else:
                                 telegram_media_expand_count += 1
                                 try:
-                                    tg_limit = 20 if supplier_key == "shop_vkus" else 8
+                                    tg_limit = MAX_TG_MEDIA_PER_POST if supplier_key == "shop_vkus" else 8
                                     tg_media = extract_image_urls_from_html_page(cu, limit=tg_limit)
                                 except Exception:
                                     tg_media = []
@@ -2096,6 +2099,13 @@ def import_products_from_sources(
                         color_tokens = color_tokens[:2] if color_tokens else ["gray"]
                     else:
                         color_tokens = [color_tokens[0]] if color_tokens else ["gray"]
+                    logger.info(
+                        "shop_vkus color split: title=%r photos=%s clusters_in=%s colors_out=%s",
+                        title,
+                        photo_cnt,
+                        len([c for c in color_tokens if c]),
+                        color_tokens,
+                    )
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:

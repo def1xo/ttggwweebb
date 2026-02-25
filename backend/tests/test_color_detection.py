@@ -65,6 +65,20 @@ def test_normalize_color_aliases_and_ru_display():
     assert cd.canonical_color_to_display_name("green") == "зеленый"
 
 
+def test_normalize_color_key_whitelist_aliases_and_fallbacks():
+    assert cd.normalize_color_key("Grey") == "gray"
+    assert cd.normalize_color_key("GRAPHITE") == "gray"
+    assert cd.normalize_color_key("charcoal") == "gray"
+    assert cd.normalize_color_key("navy") == "navy"
+    assert cd.normalize_color_key("dark blue") == "navy"
+    assert cd.normalize_color_key("light blue") == "sky_blue"
+    assert cd.normalize_color_key("black/white") in cd.CANONICAL_COLORS
+    assert "/" not in cd.normalize_color_key("black/white")
+    assert cd.normalize_color_key(None) == "gray"
+    assert cd.normalize_color_key("") == "gray"
+    assert cd.normalize_color_key("dark blue/single v2") == "navy"
+
+
 def test_detect_product_colors_from_photos_returns_canonical(monkeypatch):
     monkeypatch.setattr(cd, "detect_product_color", lambda *_a, **_k: {"color": "grey", "confidence": 0.81, "debug": {}, "per_image": []})
     out = cd.detect_product_colors_from_photos(["x"])

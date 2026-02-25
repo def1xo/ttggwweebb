@@ -241,12 +241,40 @@ def test_import_products_shop_vkus_plain_available_sizes_keep_only_those_sizes_i
         Base.metadata.drop_all(engine)
 
 
-def test_rerank_gallery_images_shop_vkus_drops_first_two_and_caps_to_seven():
+def test_rerank_gallery_images_shop_vkus_keeps_long_clean_gallery():
     urls = [f"https://cdn.example.com/{i}.jpg" for i in range(1, 11)]
     out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
-    assert len(out) == 7
-    assert "https://cdn.example.com/1.jpg" not in out
-    assert "https://cdn.example.com/2.jpg" not in out
+    assert out == urls
+
+
+def test_rerank_gallery_images_shop_vkus_drops_low_quality_frames(monkeypatch):
+    urls = [
+        "https://cdn.example.com/cover.jpg",
+        "https://cdn.example.com/meta.jpg",
+        "https://cdn.example.com/good-1.jpg",
+        "https://cdn.example.com/good-2.jpg",
+        "https://cdn.example.com/bad-thumb.jpg",
+        "https://cdn.example.com/good-3.jpg",
+    ]
+
+    monkeypatch.setattr(
+        asi,
+        "_is_likely_product_image",
+        lambda u: ("bad-thumb" not in str(u)) and ("cover" not in str(u)) and ("meta" not in str(u)),
+    )
+    monkeypatch.setattr(
+        asi,
+        "_score_gallery_image",
+        lambda u: -20 if any(x in str(u) for x in ("bad-thumb", "cover", "meta")) else 10,
+    )
+
+    out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
+    assert "https://cdn.example.com/bad-thumb.jpg" not in out
+    assert out == [
+        "https://cdn.example.com/good-1.jpg",
+        "https://cdn.example.com/good-2.jpg",
+        "https://cdn.example.com/good-3.jpg",
+    ]
 
 
 
@@ -1594,6 +1622,65 @@ def test_import_products_shop_vkus_single_row_keeps_single_colorway_for_four_to_
             "https://cdn.example.com/c4.jpg",
             "https://cdn.example.com/c5.jpg",
         }
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+
+
+def test_import_products_shop_vkus_eight_photos_caps_to_two_colorways(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-8/htmlview",
+            supplier_name="shop_vkus",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Цвет", "Фото"],
+                    ["NB 9060", "3900", "41-44", "42", "white/black/red", "https://t.me/shop_vkus/3001?single"],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "extract_image_urls_from_html_page", lambda *a, **k: [
+            "https://cdn.example.com/d1.jpg",
+            "https://cdn.example.com/d2.jpg",
+            "https://cdn.example.com/d3.jpg",
+            "https://cdn.example.com/d4.jpg",
+            "https://cdn.example.com/d5.jpg",
+            "https://cdn.example.com/d6.jpg",
+            "https://cdn.example.com/d7.jpg",
+            "https://cdn.example.com/d8.jpg",
+        ])
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        p = db.query(models.Product).first()
+        variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
+        colors = {db.query(models.Color).filter(models.Color.id == v.color_id).one().name for v in variants if v.color_id}
+        assert len(colors) <= 2
     finally:
         db.close()
         Base.metadata.drop_all(engine)
