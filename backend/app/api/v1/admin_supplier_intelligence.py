@@ -84,7 +84,8 @@ def _split_color_tokens(raw: str | None) -> list[str]:
     txt = str(raw or "").strip()
     if not txt:
         return []
-    no_color_tokens = {"none", "no", "null", "n/a", "na", "без цвета", "нет", "-", "—", "unknown", "неизвестно"}
+    txt = re.sub(r"\bn\s*/\s*a\b", "__na__", txt, flags=re.I)
+    no_color_tokens = {"none", "no", "null", "n/a", "na", "__na__", "без цвета", "нет", "-", "—", "unknown", "неизвестно"}
     out: list[str] = []
     for part in re.split(r"[,;/|]+|\s{2,}|\s+-\s+", txt):
         token = " ".join(part.strip().split())

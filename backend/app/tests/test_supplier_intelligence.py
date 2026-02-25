@@ -1139,6 +1139,11 @@ def test_canonical_color_key_skips_none_like_values():
     assert asi._canonical_color_key("N/A") == ""
     assert asi._canonical_color_key("нет") == ""
 
+
+def test_split_color_tokens_skips_none_like_values():
+    got = asi._split_color_tokens("none, black, N/A, нет, white")
+    assert got == ["black", "white"]
+
 def test_extract_image_urls_from_html_page_reads_escaped_telescope_urls(monkeypatch):
     html_single = '<html><head><meta property="og:image" content="https://cdn4.telesco.pe/file/single.jpg"></head></html>'
     html_public = (
