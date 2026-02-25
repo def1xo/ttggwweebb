@@ -53,7 +53,14 @@ function partToHex(part: string): string {
   for (const m of COLOR_MAP) {
     if (m.re.test(p)) return m.hex;
   }
-  return "#9CA3AF";
+  // Keep unknown colors visually distinct instead of collapsing everything to gray.
+  // This avoids a "missing color becomes gray" effect when suppliers use custom names.
+  let hash = 0;
+  for (let i = 0; i < p.length; i += 1) {
+    hash = (hash * 31 + p.charCodeAt(i)) | 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue} 70% 58%)`;
 }
 
 export function splitColorName(raw?: string): string[] {
@@ -63,9 +70,11 @@ export function splitColorName(raw?: string): string[] {
     .replace(/–|—/g, "-")
     .replace(/\s+/g, " ");
   if (!s) return [];
-  // common separators: -, /, +, &, comma
+  // common separators: /, +, &, comma, semicolon.
+  // Do NOT split plain hyphenated color names (e.g. "темно-синий", "blue-grey").
+  // Split by hyphen only when it's used as an explicit delimiter with spaces.
   const parts = s
-    .split(/[-/+,;&]|\sи\s/gi)
+    .split(/\s-\s|[/+,;&]|\sи\s/gi)
     .map((x) => x.trim())
     .filter(Boolean);
   // special case: "черно" -> treat as "черный" etc (prefix match works)
