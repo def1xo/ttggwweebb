@@ -1539,20 +1539,26 @@ def test_import_products_shop_vkus_splits_two_rows_by_post_link_into_two_colorwa
             by_color_images.setdefault(c, set()).update(v.images or [])
             s = db.query(models.Size).filter(models.Size.id == v.size_id).one().name if v.size_id else ""
             by_color_sizes.setdefault(c, set()).add(s)
-        assert by_color_images["белый"] == {
-            "https://cdn.example.com/a1.jpg",
-            "https://cdn.example.com/a2.jpg",
-            "https://cdn.example.com/a3.jpg",
-            "https://cdn.example.com/a4.jpg",
+        expected_img_groups = {
+            frozenset({
+                "https://cdn.example.com/a1.jpg",
+                "https://cdn.example.com/a2.jpg",
+                "https://cdn.example.com/a3.jpg",
+                "https://cdn.example.com/a4.jpg",
+            }),
+            frozenset({
+                "https://cdn.example.com/b1.jpg",
+                "https://cdn.example.com/b2.jpg",
+                "https://cdn.example.com/b3.jpg",
+                "https://cdn.example.com/b4.jpg",
+            }),
         }
-        assert by_color_images["черный"] == {
-            "https://cdn.example.com/b1.jpg",
-            "https://cdn.example.com/b2.jpg",
-            "https://cdn.example.com/b3.jpg",
-            "https://cdn.example.com/b4.jpg",
+        expected_size_groups = {
+            frozenset({"41", "42", "43"}),
+            frozenset({"42", "43", "44"}),
         }
-        assert by_color_sizes["белый"] == {"41", "42", "43"}
-        assert by_color_sizes["черный"] == {"42", "43", "44"}
+        assert {frozenset(v) for v in by_color_images.values()} == expected_img_groups
+        assert {frozenset(v) for v in by_color_sizes.values()} == expected_size_groups
     finally:
         db.close()
         Base.metadata.drop_all(engine)
@@ -1622,6 +1628,118 @@ def test_import_products_shop_vkus_single_row_keeps_single_colorway_for_four_to_
             "https://cdn.example.com/c4.jpg",
             "https://cdn.example.com/c5.jpg",
         }
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+
+
+def test_import_products_shop_vkus_three_rows_keep_single_product_without_index_suffix(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-three/htmlview",
+            supplier_name="shop_vkus",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото"],
+                    ["Nike air max 97 #2", "4900", "41-43", "41", "https://t.me/shop_vkus/3001?single"],
+                    ["Nike air max 97 #3", "4900", "42-44", "44", "https://t.me/shop_vkus/3002?single"],
+                    ["Nike air max 97", "4900", "40-42", "40", "https://t.me/shop_vkus/3003?single"],
+                ]
+            }
+
+        def _fake_extract(url, *args, **kwargs):
+            if "3001" in str(url):
+                return [f"https://cdn.example.com/a{i}.jpg" for i in range(1, 5)]
+            if "3002" in str(url):
+                return [f"https://cdn.example.com/b{i}.jpg" for i in range(1, 5)]
+            return [f"https://cdn.example.com/c{i}.jpg" for i in range(1, 5)]
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "extract_image_urls_from_html_page", _fake_extract)
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+        monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "white")
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        products = db.query(models.Product).all()
+        assert len(products) == 1
+        assert products[0].title.lower() == "nike air max 97"
+        assert "#" not in products[0].title
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
+
+
+def test_import_products_does_not_use_title_search_or_similar_pool_images(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-no-images/htmlview",
+            supplier_name="shop_vkus",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото"],
+                    ["Nike ZoomX", "4900", "41-43", "41", ""],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "extract_image_urls_from_html_page", lambda *a, **k: [])
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+
+        # these fallbacks must never be called now
+        monkeypatch.setattr(asi, "find_similar_images", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not call find_similar_images")))
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        p = db.query(models.Product).one()
+        assert p.default_image in (None, "")
+        assert db.query(models.ProductImage).filter(models.ProductImage.product_id == p.id).count() == 0
     finally:
         db.close()
         Base.metadata.drop_all(engine)
