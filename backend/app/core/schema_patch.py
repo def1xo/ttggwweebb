@@ -210,6 +210,18 @@ def ensure_columns(engine) -> None:
                 )
             )
 
+    # ---------- promo_codes owner ----------
+    if "promo_codes" in tables:
+        cols = {c["name"] for c in insp.get_columns("promo_codes")}
+        with engine.begin() as conn:
+            if "owner_user_id" not in cols:
+                if _is_postgres(engine):
+                    _add_column_pg(conn, "promo_codes", "owner_user_id", "INTEGER")
+                else:
+                    conn.execute(text("ALTER TABLE promo_codes ADD COLUMN owner_user_id INTEGER"))
+            if _is_postgres(engine):
+                _create_index_pg(conn, "ix_promo_codes_owner_user_id", "promo_codes", "owner_user_id")
+
 
 def ensure_singletons(engine) -> None:
     insp = inspect(engine)
