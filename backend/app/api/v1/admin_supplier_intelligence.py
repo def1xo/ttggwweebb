@@ -35,8 +35,6 @@ from app.services.supplier_intelligence import (
     extract_catalog_items,
     extract_image_urls_from_html_page,
     fetch_tabular_preview,
-    generate_ai_product_description,
-    generate_youth_description,
     infer_colors_with_ai,
     image_print_signature_from_url,
     map_category,
@@ -46,7 +44,6 @@ from app.services.supplier_intelligence import (
     split_size_tokens,
     suggest_sale_price,
     normalize_retail_price,
-    search_image_urls_by_title,
     _extract_size_stock_map as extract_size_stock_map,
 )
 
@@ -1035,9 +1032,9 @@ class ImportProductsIn(BaseModel):
     tg_fallback_limit: int = Field(default_factory=_default_tg_fallback_limit, ge=1, le=1_000_000)
     dry_run: bool = True
     publish_visible: bool = False
-    ai_style_description: bool = True
+    ai_style_description: bool = False
     ai_description_provider: str = Field(default="disabled", max_length=64)
-    ai_description_enabled: bool = True
+    ai_description_enabled: bool = False
     ai_color_distribution_enabled: bool = False
     ai_color_distribution_provider: str = Field(default="disabled", max_length=64)
     use_avito_pricing: bool = True
@@ -1351,7 +1348,6 @@ def import_products_from_sources(
     supplier_tg_fallback_images: dict[str, list[str]] = {}
     existing_product_by_supplier_title: dict[tuple[str, str], models.Product] = {}
     existing_product_by_global_title: dict[tuple[int, str], models.Product] = {}
-    shop_vkus_rows_by_title: dict[str, int] = {}
 
     def _title_key(raw_title: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
@@ -1764,9 +1760,6 @@ def import_products_from_sources(
                 cat_name = map_category(title)
                 category = get_or_create_category(cat_name)
                 effective_title = (title_for_group or title).strip()[:500]
-                if supplier_key == "shop_vkus" and int(shop_vkus_rows_by_title.get(base_title_key, 0)) >= 3:
-                    # Keep maximum two colorways in a single product for shop_vkus.
-                    effective_title = f"{effective_title} #{int(shop_vkus_rows_by_title.get(base_title_key, 0)) - 1}"[:500]
                 slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
                 p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
@@ -1778,25 +1771,16 @@ def import_products_from_sources(
                     shop_vkus_post_link = _shop_vkus_row_post_link(it if isinstance(it, dict) else {}, image_urls=image_urls)
                 except Exception:
                     shop_vkus_post_link = ""
-                shop_vkus_row_idx = 0
-                if supplier_key == "shop_vkus":
-                    shop_vkus_row_idx = int(shop_vkus_rows_by_title.get(base_title_key, 0))
-                    shop_vkus_rows_by_title[base_title_key] = shop_vkus_row_idx + 1
-
                 if not p:
                     p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
-                if not p and supplier_key and not (supplier_key == "shop_vkus" and shop_vkus_row_idx >= 2):
+                if not p and supplier_key:
                     p = _find_existing_supplier_product(supplier_key, getattr(src, "supplier_name", None), _title_key(effective_title))
 
-                if not p and not (supplier_key == "shop_vkus" and shop_vkus_row_idx >= 2):
+                if not p:
                     p = _find_existing_global_product(int(category.id), _title_key(effective_title))
 
-                desc = str(it.get("description") or "").strip()
-                if payload.ai_style_description and not desc:
-                    if payload.ai_description_enabled:
-                        desc = generate_ai_product_description(title, cat_name, it.get("color"))
-                    else:
-                        desc = generate_youth_description(title, cat_name, it.get("color"))
+                # Description generation is intentionally disabled for admin auto-import flows.
+                desc = ""
                 # Guard against anomalously low supplier price parse (e.g. 799 for sneakers).
                 # For footwear-like titles enforce a minimal wholesale floor before retail pricing.
                 if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title):
@@ -1893,43 +1877,9 @@ def import_products_from_sources(
                     image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
                     image_url = image_urls[0]
 
-                # Last-resort quality step: if supplier didn't provide any image,
-                # search by title and download a few images to local storage.
-                if not image_urls:
-                    try:
-                        searched = search_image_urls_by_title(title, limit=3)
-                    except Exception:
-                        searched = []
-                    for remote_u in searched:
-                        try:
-                            local_u = media_store.save_remote_image_to_local(remote_u, folder="products/photos", filename_hint=title, referer=src_url)
-                        except Exception:
-                            continue
-                        if local_u and local_u not in image_urls:
-                            image_urls.append(local_u)
-                    if image_urls:
-                        image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
-                        image_url = image_urls[0]
-
-                # auto-enrich item gallery with similar photos from known supplier pool
-                if image_url and known_image_urls:
-                    try:
-                        sim_items = find_similar_images(image_url, known_image_urls, max_hamming_distance=5, limit=8)
-                        for sim in sim_items:
-                            sim_url = str(sim.get("image_url") or "").strip()
-                            if not sim_url:
-                                continue
-                            matched_meta = known_item_by_image_url.get(sim_url) or {}
-                            if _title_key(str(matched_meta.get("title") or "")) != _title_key(title):
-                                continue
-                            final_sim_url = _prefer_local_image_url(sim_url, title_hint=title, source_page_url=src_url)
-                            if not final_sim_url or final_sim_url in image_urls:
-                                continue
-                            image_urls.append(final_sim_url)
-                            if len(image_urls) >= 8:
-                                break
-                    except Exception:
-                        pass
+                # Strict media policy: only keep supplier/telegram-provided photos.
+                # Do not search by title and do not auto-enrich from external pools,
+                # otherwise products can get unrelated studio/mockup images.
 
                 if image_urls:
                     image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
@@ -2495,8 +2445,8 @@ def run_auto_import_now(
         "source_ids": source_ids,
         "dry_run": False,
         "publish_visible": True,
-        "ai_style_description": True,
-        "ai_description_enabled": True,
+        "ai_style_description": False,
+        "ai_description_enabled": False,
         "ai_color_distribution_enabled": (opts.ai_color_distribution_enabled if opts and opts.ai_color_distribution_enabled is not None else _default_auto_import_ai_color_distribution_enabled()),
         "ai_color_distribution_provider": (str(opts.ai_color_distribution_provider).strip() if opts and opts.ai_color_distribution_provider else _default_auto_import_ai_color_distribution_provider()),
         "use_avito_pricing": False,

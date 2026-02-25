@@ -24,16 +24,51 @@ def _images_overlap_ratio(a: list[str], b: list[str]) -> float:
 
 
 def _build_color_payload(p: models.Product) -> Dict[str, Any]:
-    """Build color payload from already-stored DB data.
-
-    CRITICAL: Must NEVER download images or do heavy I/O.
-    Called for every product in every list_products response.
-    Live color detection only happens during import.
-    """
+    """Build color payload from already-stored DB data."""
     variants = list(getattr(p, "variants", []) or [])
-    base_images = [im.url for im in sorted((p.images or []), key=lambda x: ((x.sort or 0), x.id))]
 
-    # Variant-based color groups
+    raw_base_images = [im.url for im in sorted((p.images or []), key=lambda x: ((x.sort or 0), x.id))]
+    base_images: List[str] = []
+    for u in raw_base_images:
+        uu = str(u or "").strip()
+        if uu and uu not in base_images:
+            base_images.append(uu)
+
+    # Prefer precomputed detector mapping for local/non-http sources (no remote downloads in API path).
+    non_http_images = [u for u in base_images if not str(u).lower().startswith(("http://", "https://"))]
+    try:
+        detected = detect_product_colors_from_photos(non_http_images) if non_http_images else {}
+    except Exception:
+        detected = {}
+
+    det_keys = [str(x).strip() for x in (detected.get("color_keys") or []) if str(x).strip()]
+    det_photos = [str(x).strip() for x in (detected.get("ordered_photos") or []) if str(x).strip()]
+    det_photo_keys = [str(x).strip() for x in (detected.get("photo_color_keys") or []) if str(x).strip()]
+    if det_keys and det_photos and len(det_photos) == len(det_photo_keys):
+        images_by_color: Dict[str, List[str]] = {k: [] for k in det_keys}
+        for img, ck in zip(det_photos, det_photo_keys):
+            key = ck if ck in images_by_color else (det_keys[0] if det_keys else ck)
+            if key not in images_by_color:
+                images_by_color[key] = []
+            if img not in images_by_color[key]:
+                images_by_color[key].append(img)
+
+        selected = det_keys[0]
+        return {
+            "available_colors": det_keys,
+            "selected_color": selected,
+            "color_variants": [
+                {"color": k, "variant_ids": [], "images": list(images_by_color.get(k) or [])}
+                for k in det_keys
+            ],
+            "selected_color_images": list(images_by_color.get(selected) or base_images),
+            "colors": det_keys,
+            "default_color": selected,
+            "images_by_color": images_by_color,
+            "color_keys": det_keys,
+        }
+
+    # Fallback: variant-based color groups.
     color_groups: Dict[str, Dict[str, Any]] = {}
     for v in variants:
         color_name = (v.color.name if getattr(v, "color", None) and v.color and v.color.name else None) or "unknown"
@@ -47,7 +82,6 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
         if not grp["images"]:
             grp["images"] = list(base_images)
 
-    # Collapse to a single color when all groups share essentially the same photoset
     groups = list(color_groups.values())
     if len(groups) > 1:
         ref_images = max(groups, key=lambda g: len(g.get("images") or [])).get("images") or []
@@ -67,14 +101,9 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
 
     available = sorted([k for k in color_groups.keys() if k and k != "unknown"])
     selected = available[0] if available else None
-    if selected and selected in color_groups:
-        selected_images = color_groups[selected]["images"]
-    else:
-        selected_images = list(base_images)
+    selected_images = color_groups[selected]["images"] if selected and selected in color_groups else list(base_images)
 
     images_by_color = {str(k): list(v.get("images") or []) for k, v in color_groups.items() if k and k != "unknown"}
-
-    # color_keys: whitelist-normalized from stored variant color names (NO image downloads)
     color_keys: List[str] = []
     normalized_images_by_color: Dict[str, List[str]] = {}
     for orig_name in available:
@@ -93,11 +122,9 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
         "selected_color": selected,
         "color_variants": sorted(list(color_groups.values()), key=lambda x: str(x.get("color") or "")),
         "selected_color_images": selected_images,
-        # Unified keys (legacy preserved for compatibility)
         "colors": available,
         "default_color": selected,
         "images_by_color": normalized_images_by_color or images_by_color,
-        # Whitelist-normalized color keys for frontend filtering
         "color_keys": color_keys,
     }
 
@@ -306,10 +333,44 @@ def get_related_products(
                 break
 
     if len(selected) < limit:
-        q = db.query(models.Product).filter(models.Product.visible == True, models.Product.id != p.id)
-        if p.category_id:
-            q = q.filter(models.Product.category_id == p.category_id)
-        fallback = q.order_by(models.Product.created_at.desc()).limit(limit * 3).all()
+        # Local co-purchase fallback across ALL categories (not only current one).
+        popular_rows = (
+            db.query(
+                models.ProductVariant.product_id,
+                func.sum(models.OrderItem.quantity).label("score"),
+            )
+            .join(models.OrderItem, models.OrderItem.variant_id == models.ProductVariant.id)
+            .filter(models.ProductVariant.product_id != p.id)
+            .group_by(models.ProductVariant.product_id)
+            .order_by(func.sum(models.OrderItem.quantity).desc())
+            .limit(limit * 8)
+            .all()
+        )
+        popular_ids = [int(r[0]) for r in popular_rows if r and r[0] and int(r[0]) not in selected_ids]
+        if popular_ids:
+            pop_products = (
+                db.query(models.Product)
+                .filter(models.Product.visible == True, models.Product.id.in_(popular_ids))
+                .all()
+            )
+            by_id = {x.id: x for x in pop_products}
+            for pid in popular_ids:
+                x = by_id.get(pid)
+                if not x or x.id in selected_ids:
+                    continue
+                selected.append(x)
+                selected_ids.add(x.id)
+                if len(selected) >= limit:
+                    break
+
+    if len(selected) < limit:
+        fallback = (
+            db.query(models.Product)
+            .filter(models.Product.visible == True, models.Product.id != p.id)
+            .order_by(models.Product.created_at.desc())
+            .limit(limit * 6)
+            .all()
+        )
         for x in fallback:
             if x.id in selected_ids:
                 continue

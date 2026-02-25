@@ -79,7 +79,9 @@ class ImageColorResult:
     light: float
     lab_a: float
     lab_b: float
-    debug: Dict[str, Any]
+    coverage: float = 0.0
+    zoom_flag: bool = False
+    debug: Dict[str, Any] | None = None
 
 
 def _rgb_to_lab(rgb: Tuple[int, int, int]) -> Tuple[float, float, float]:
@@ -398,6 +400,31 @@ def canonical_color_to_display_name(name: Optional[str]) -> str:
 
 
 def detect_product_colors_from_photos(image_sources: Sequence[str]) -> Dict[str, Any]:
-    detected = detect_product_color(image_sources)
-    canonical = normalize_color_to_whitelist(detected.get("color"))
-    return {**detected, "color": canonical, "display_color": canonical_color_to_display_name(canonical)}
+    ordered_photos = [str(x).strip() for x in (image_sources or []) if str(x or "").strip()]
+    detected = detect_product_color(ordered_photos)
+
+    raw_color = str(detected.get("color") or "none").strip().lower()
+    canonical = normalize_color_to_whitelist(raw_color)
+
+    # Keep composite pairs for storefront grouping (e.g. black/gray) when detector emits them.
+    if "/" in raw_color:
+        primary_color = raw_color
+    else:
+        primary_color = canonical
+
+    color_keys: List[str] = [primary_color] if primary_color and primary_color != "none" else []
+
+    # For 4..6 photos we enforce one stable color key to suppress single-photo noise.
+    if 4 <= len(ordered_photos) <= 6 and color_keys:
+        photo_color_keys = [color_keys[0] for _ in ordered_photos]
+    else:
+        photo_color_keys = [color_keys[0] for _ in ordered_photos] if color_keys else []
+
+    return {
+        **detected,
+        "color": canonical,
+        "display_color": canonical_color_to_display_name(canonical),
+        "color_keys": color_keys,
+        "photo_color_keys": photo_color_keys,
+        "ordered_photos": ordered_photos,
+    }

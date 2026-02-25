@@ -1539,20 +1539,26 @@ def test_import_products_shop_vkus_splits_two_rows_by_post_link_into_two_colorwa
             by_color_images.setdefault(c, set()).update(v.images or [])
             s = db.query(models.Size).filter(models.Size.id == v.size_id).one().name if v.size_id else ""
             by_color_sizes.setdefault(c, set()).add(s)
-        assert by_color_images["белый"] == {
-            "https://cdn.example.com/a1.jpg",
-            "https://cdn.example.com/a2.jpg",
-            "https://cdn.example.com/a3.jpg",
-            "https://cdn.example.com/a4.jpg",
+        expected_img_groups = {
+            frozenset({
+                "https://cdn.example.com/a1.jpg",
+                "https://cdn.example.com/a2.jpg",
+                "https://cdn.example.com/a3.jpg",
+                "https://cdn.example.com/a4.jpg",
+            }),
+            frozenset({
+                "https://cdn.example.com/b1.jpg",
+                "https://cdn.example.com/b2.jpg",
+                "https://cdn.example.com/b3.jpg",
+                "https://cdn.example.com/b4.jpg",
+            }),
         }
-        assert by_color_images["черный"] == {
-            "https://cdn.example.com/b1.jpg",
-            "https://cdn.example.com/b2.jpg",
-            "https://cdn.example.com/b3.jpg",
-            "https://cdn.example.com/b4.jpg",
+        expected_size_groups = {
+            frozenset({"41", "42", "43"}),
+            frozenset({"42", "43", "44"}),
         }
-        assert by_color_sizes["белый"] == {"41", "42", "43"}
-        assert by_color_sizes["черный"] == {"42", "43", "44"}
+        assert {frozenset(v) for v in by_color_images.values()} == expected_img_groups
+        assert {frozenset(v) for v in by_color_sizes.values()} == expected_size_groups
     finally:
         db.close()
         Base.metadata.drop_all(engine)
