@@ -84,9 +84,14 @@ def _split_color_tokens(raw: str | None) -> list[str]:
     txt = str(raw or "").strip()
     if not txt:
         return []
+    txt = re.sub(r"\bn\s*/\s*a\b", "__na__", txt, flags=re.I)
+    no_color_tokens = {"none", "no", "null", "n/a", "na", "__na__", "без цвета", "нет", "-", "—", "unknown", "неизвестно"}
     out: list[str] = []
     for part in re.split(r"[,;/|]+|\s{2,}|\s+-\s+", txt):
         token = " ".join(part.strip().split())
+        low = token.lower()
+        if not token or low in no_color_tokens:
+            continue
         if token and token not in out:
             out.append(token)
     return out
@@ -96,13 +101,46 @@ def _canonical_color_key(raw: str | None) -> str:
     txt = str(raw or "").strip().lower()
     if not txt:
         return ""
-    # strict single color key from whitelist; composite values are forbidden
+    no_color_tokens = {"none", "no", "null", "n/a", "na", "без цвета", "нет", "-", "—", "unknown", "неизвестно"}
+    if txt in no_color_tokens:
+        logger.info("color_normalize skip-empty: raw=%r", raw)
+        return ""
+    # Prefer canonical palette when possible, but do not collapse unknown supplier
+    # values into the same "gray" bucket, otherwise distinct colorways merge.
     normalized = normalize_color_to_whitelist(txt)
-    if normalized == "gray" and txt not in {"gray", "grey", "серый", "сер", "graphite", "charcoal"}:
-        logger.info("color_normalize fallback: raw=%r normalized=%r reason=unrecognized_or_composite", raw, normalized)
-    else:
+    explicit_gray = {"gray", "grey", "серый", "сер", "graphite", "charcoal", "графит"}
+    if normalized != "gray" or txt in explicit_gray:
         logger.info("color_normalize: raw=%r normalized=%r", raw, normalized)
-    return normalized
+        return normalized
+
+    # Try extracting a meaningful token from composites like "серый/салатовый"
+    # or "black-lime" before falling back to raw text.
+    tokens = [str(part or "").strip() for part in re.split(r"[/,;|&+]|\s+-\s+|-", txt)]
+    tokens = [t for t in tokens if t]
+
+    # Prefer non-gray canonical tokens first to avoid collapsing combinations
+    # like "серый/зеленый" into plain gray.
+    for token in tokens:
+        norm_token = normalize_color_to_whitelist(token)
+        if norm_token and norm_token != "gray":
+            logger.info("color_normalize token: raw=%r token=%r normalized=%r", raw, token, norm_token)
+            return norm_token
+    for token in tokens:
+        norm_token = normalize_color_to_whitelist(token)
+        if norm_token == "gray" and token in explicit_gray:
+            logger.info("color_normalize token: raw=%r token=%r normalized=%r", raw, token, norm_token)
+            return norm_token
+
+    fallback_raw = re.sub(r"\s+", " ", txt).strip()[:64]
+    if fallback_raw in no_color_tokens:
+        logger.info("color_normalize skip-empty-fallback: raw=%r", raw)
+        return ""
+    logger.info(
+        "color_normalize keep-raw: raw=%r fallback=%r reason=unrecognized_or_composite",
+        raw,
+        fallback_raw,
+    )
+    return fallback_raw or "gray"
 
 
 def _shop_vkus_row_post_link(item: dict[str, object], image_urls: list[str] | None = None) -> str:
@@ -148,7 +186,13 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
         key = str(name or "").strip().lower()
         if not key:
             return ""
-        return str(color_aliases.get(key) or key)
+        raw = str(color_aliases.get(key) or key)
+        normalized = normalize_color_to_whitelist(raw)
+        if normalized and normalized != "gray":
+            return normalized
+        if raw in {"gray", "grey", "серый", "сер", "graphite", "charcoal", "графит"}:
+            return "gray"
+        return raw
 
     palette = (
         "черный", "чёрный", "белый", "серый", "красный", "синий", "голубой", "зеленый", "зелёный",
@@ -1348,6 +1392,7 @@ def import_products_from_sources(
     supplier_tg_fallback_images: dict[str, list[str]] = {}
     existing_product_by_supplier_title: dict[tuple[str, str], models.Product] = {}
     existing_product_by_global_title: dict[tuple[int, str], models.Product] = {}
+    shop_vkus_rows_by_title: dict[str, int] = {}
 
     def _title_key(raw_title: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
@@ -1760,6 +1805,11 @@ def import_products_from_sources(
                 cat_name = map_category(title)
                 category = get_or_create_category(cat_name)
                 effective_title = (title_for_group or title).strip()[:500]
+                if supplier_key == "shop_vkus" and int(shop_vkus_rows_by_title.get(base_title_key, 0)) >= 3:
+                    # Keep maximum two colorways in a single product for shop_vkus.
+                    # Starting from the 3rd row force a separate product suffix to
+                    # avoid over-merging different auto-import rows into one color.
+                    effective_title = f"{effective_title} #{int(shop_vkus_rows_by_title.get(base_title_key, 0)) - 1}"[:500]
                 slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
                 p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
@@ -1771,12 +1821,17 @@ def import_products_from_sources(
                     shop_vkus_post_link = _shop_vkus_row_post_link(it if isinstance(it, dict) else {}, image_urls=image_urls)
                 except Exception:
                     shop_vkus_post_link = ""
-                if not p:
-                    p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
-                if not p and supplier_key:
-                    p = _find_existing_supplier_product(supplier_key, getattr(src, "supplier_name", None), _title_key(effective_title))
+                shop_vkus_row_idx = 0
+                if supplier_key == "shop_vkus":
+                    shop_vkus_row_idx = int(shop_vkus_rows_by_title.get(base_title_key, 0))
+                    shop_vkus_rows_by_title[base_title_key] = shop_vkus_row_idx + 1
 
                 if not p:
+                    p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
+                if not p and supplier_key and not (supplier_key == "shop_vkus" and shop_vkus_row_idx >= 2):
+                    p = _find_existing_supplier_product(supplier_key, getattr(src, "supplier_name", None), _title_key(effective_title))
+
+                if not p and not (supplier_key == "shop_vkus" and shop_vkus_row_idx >= 2):
                     p = _find_existing_global_product(int(category.id), _title_key(effective_title))
 
                 # Description generation is intentionally disabled for admin auto-import flows.

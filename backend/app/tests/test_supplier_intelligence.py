@@ -1133,6 +1133,17 @@ def test_extract_shop_vkus_color_tokens_from_text_and_images(monkeypatch):
     got2 = asi._extract_shop_vkus_color_tokens({"title": "Yeezy 350"}, image_urls=["a", "b", "c", "d"])
     assert got2 == ["black"]
 
+
+def test_canonical_color_key_skips_none_like_values():
+    assert asi._canonical_color_key("none") == ""
+    assert asi._canonical_color_key("N/A") == ""
+    assert asi._canonical_color_key("нет") == ""
+
+
+def test_split_color_tokens_skips_none_like_values():
+    got = asi._split_color_tokens("none, black, N/A, нет, white")
+    assert got == ["black", "white"]
+
 def test_extract_image_urls_from_html_page_reads_escaped_telescope_urls(monkeypatch):
     html_single = '<html><head><meta property="og:image" content="https://cdn4.telesco.pe/file/single.jpg"></head></html>'
     html_public = (

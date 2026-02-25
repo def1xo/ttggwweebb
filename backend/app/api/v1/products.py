@@ -13,6 +13,11 @@ from app.services.color_detection import normalize_color_to_whitelist, detect_pr
 router = APIRouter(prefix="/products", tags=["products"])
 
 
+def _is_none_like_color_token(raw: str | None) -> bool:
+    txt = str(raw or "").strip().lower()
+    return txt in {"", "none", "null", "n/a", "na", "unknown", "нет", "без цвета", "-", "—"}
+
+
 def _images_overlap_ratio(a: list[str], b: list[str]) -> float:
     sa = {str(x).strip() for x in (a or []) if str(x).strip()}
     sb = {str(x).strip() for x in (b or []) if str(x).strip()}
@@ -71,7 +76,8 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
     # Fallback: variant-based color groups.
     color_groups: Dict[str, Dict[str, Any]] = {}
     for v in variants:
-        color_name = (v.color.name if getattr(v, "color", None) and v.color and v.color.name else None) or "unknown"
+        raw_color_name = (v.color.name if getattr(v, "color", None) and v.color and v.color.name else None)
+        color_name = "unknown" if _is_none_like_color_token(raw_color_name) else str(raw_color_name or "unknown")
         grp = color_groups.setdefault(color_name, {"color": color_name, "variant_ids": [], "images": []})
         grp["variant_ids"].append(v.id)
         for u in (v.images or []):
@@ -99,14 +105,20 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
                 }
             }
 
-    available = sorted([k for k in color_groups.keys() if k and k != "unknown"])
+    available = sorted([k for k in color_groups.keys() if k and k != "unknown" and not _is_none_like_color_token(k)])
     selected = available[0] if available else None
     selected_images = color_groups[selected]["images"] if selected and selected in color_groups else list(base_images)
 
-    images_by_color = {str(k): list(v.get("images") or []) for k, v in color_groups.items() if k and k != "unknown"}
+    images_by_color = {
+        str(k): list(v.get("images") or [])
+        for k, v in color_groups.items()
+        if k and k != "unknown" and not _is_none_like_color_token(str(k))
+    }
     color_keys: List[str] = []
     normalized_images_by_color: Dict[str, List[str]] = {}
     for orig_name in available:
+        if _is_none_like_color_token(orig_name):
+            continue
         ck = normalize_color_to_whitelist(orig_name)
         if ck and ck not in color_keys:
             color_keys.append(ck)

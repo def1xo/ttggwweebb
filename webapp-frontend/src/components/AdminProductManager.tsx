@@ -39,12 +39,12 @@ export default function AdminProductManager() {
 
   useEffect(() => {
     load(debouncedQuery);
-  }, [debouncedQuery, page]);
+  }, [debouncedQuery]);
 
   useEffect(() => {
     const timer = window.setInterval(() => load(debouncedQuery), 30000);
     return () => window.clearInterval(timer);
-  }, [debouncedQuery, page]);
+  }, [debouncedQuery]);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -87,14 +87,14 @@ export default function AdminProductManager() {
     setErr(null);
     try {
       if (typeof apiDefault.getAdminProducts === "function") {
-        const res = await apiDefault.getAdminProducts({ q: q.trim() || undefined, page, per_page: 200 });
+        const res = await apiDefault.getAdminProducts({ q: q.trim() || undefined, page: 1, per_page: 1000 });
         const arr = res?.products ?? res ?? [];
         setItems(arr);
       } else {
         const params = new URLSearchParams();
         if (q.trim()) params.set("q", q.trim());
-        params.set("page", String(page));
-        params.set("per_page", "200");
+        params.set("page", "1");
+        params.set("per_page", "1000");
         const r = await fetch(`/api/admin/products${params.toString() ? `?${params.toString()}` : ""}`, { credentials: "include" });
         if (r.ok) {
           const data = await r.json();
@@ -219,7 +219,7 @@ export default function AdminProductManager() {
           </div>
         )}
 
-        {!loading && !hasSearch && filteredItems.length > perPage ? (
+        {!loading && filteredItems.length > perPage ? (
           <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
             <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.max(1, v - 1))} disabled={safePage <= 1}>← Назад</button>
             <div className="small-muted">Страница {safePage} / {totalPages}</div>
