@@ -241,12 +241,40 @@ def test_import_products_shop_vkus_plain_available_sizes_keep_only_those_sizes_i
         Base.metadata.drop_all(engine)
 
 
-def test_rerank_gallery_images_shop_vkus_drops_first_two_and_caps_to_seven():
+def test_rerank_gallery_images_shop_vkus_keeps_long_clean_gallery():
     urls = [f"https://cdn.example.com/{i}.jpg" for i in range(1, 11)]
     out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
-    assert len(out) == 7
-    assert "https://cdn.example.com/1.jpg" not in out
-    assert "https://cdn.example.com/2.jpg" not in out
+    assert out == urls
+
+
+def test_rerank_gallery_images_shop_vkus_drops_low_quality_frames(monkeypatch):
+    urls = [
+        "https://cdn.example.com/cover.jpg",
+        "https://cdn.example.com/meta.jpg",
+        "https://cdn.example.com/good-1.jpg",
+        "https://cdn.example.com/good-2.jpg",
+        "https://cdn.example.com/bad-thumb.jpg",
+        "https://cdn.example.com/good-3.jpg",
+    ]
+
+    monkeypatch.setattr(
+        asi,
+        "_is_likely_product_image",
+        lambda u: ("bad-thumb" not in str(u)) and ("cover" not in str(u)) and ("meta" not in str(u)),
+    )
+    monkeypatch.setattr(
+        asi,
+        "_score_gallery_image",
+        lambda u: -20 if any(x in str(u) for x in ("bad-thumb", "cover", "meta")) else 10,
+    )
+
+    out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
+    assert "https://cdn.example.com/bad-thumb.jpg" not in out
+    assert out == [
+        "https://cdn.example.com/good-1.jpg",
+        "https://cdn.example.com/good-2.jpg",
+        "https://cdn.example.com/good-3.jpg",
+    ]
 
 
 
