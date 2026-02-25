@@ -84,9 +84,13 @@ def _split_color_tokens(raw: str | None) -> list[str]:
     txt = str(raw or "").strip()
     if not txt:
         return []
+    no_color_tokens = {"none", "no", "null", "n/a", "na", "без цвета", "нет", "-", "—", "unknown", "неизвестно"}
     out: list[str] = []
     for part in re.split(r"[,;/|]+|\s{2,}|\s+-\s+", txt):
         token = " ".join(part.strip().split())
+        low = token.lower()
+        if not token or low in no_color_tokens:
+            continue
         if token and token not in out:
             out.append(token)
     return out
@@ -95,6 +99,10 @@ def _split_color_tokens(raw: str | None) -> list[str]:
 def _canonical_color_key(raw: str | None) -> str:
     txt = str(raw or "").strip().lower()
     if not txt:
+        return ""
+    no_color_tokens = {"none", "no", "null", "n/a", "na", "без цвета", "нет", "-", "—", "unknown", "неизвестно"}
+    if txt in no_color_tokens:
+        logger.info("color_normalize skip-empty: raw=%r", raw)
         return ""
     # Prefer canonical palette when possible, but do not collapse unknown supplier
     # values into the same "gray" bucket, otherwise distinct colorways merge.
@@ -123,6 +131,9 @@ def _canonical_color_key(raw: str | None) -> str:
             return norm_token
 
     fallback_raw = re.sub(r"\s+", " ", txt).strip()[:64]
+    if fallback_raw in no_color_tokens:
+        logger.info("color_normalize skip-empty-fallback: raw=%r", raw)
+        return ""
     logger.info(
         "color_normalize keep-raw: raw=%r fallback=%r reason=unrecognized_or_composite",
         raw,
