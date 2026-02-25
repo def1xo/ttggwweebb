@@ -35,8 +35,6 @@ from app.services.supplier_intelligence import (
     extract_catalog_items,
     extract_image_urls_from_html_page,
     fetch_tabular_preview,
-    generate_ai_product_description,
-    generate_youth_description,
     infer_colors_with_ai,
     image_print_signature_from_url,
     map_category,
@@ -1029,9 +1027,9 @@ class ImportProductsIn(BaseModel):
     tg_fallback_limit: int = Field(default_factory=_default_tg_fallback_limit, ge=1, le=1_000_000)
     dry_run: bool = True
     publish_visible: bool = False
-    ai_style_description: bool = True
+    ai_style_description: bool = False
     ai_description_provider: str = Field(default="disabled", max_length=64)
-    ai_description_enabled: bool = True
+    ai_description_enabled: bool = False
     ai_color_distribution_enabled: bool = False
     ai_color_distribution_provider: str = Field(default="disabled", max_length=64)
     use_avito_pricing: bool = True
@@ -1776,12 +1774,8 @@ def import_products_from_sources(
                 if not p:
                     p = _find_existing_global_product(int(category.id), _title_key(effective_title))
 
-                desc = str(it.get("description") or "").strip()
-                if payload.ai_style_description and not desc:
-                    if payload.ai_description_enabled:
-                        desc = generate_ai_product_description(title, cat_name, it.get("color"))
-                    else:
-                        desc = generate_youth_description(title, cat_name, it.get("color"))
+                # Description generation is intentionally disabled for admin auto-import flows.
+                desc = ""
                 # Guard against anomalously low supplier price parse (e.g. 799 for sneakers).
                 # For footwear-like titles enforce a minimal wholesale floor before retail pricing.
                 if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title):
@@ -2439,8 +2433,8 @@ def run_auto_import_now(
         "source_ids": source_ids,
         "dry_run": False,
         "publish_visible": True,
-        "ai_style_description": True,
-        "ai_description_enabled": True,
+        "ai_style_description": False,
+        "ai_description_enabled": False,
         "ai_color_distribution_enabled": (opts.ai_color_distribution_enabled if opts and opts.ai_color_distribution_enabled is not None else _default_auto_import_ai_color_distribution_enabled()),
         "ai_color_distribution_provider": (str(opts.ai_color_distribution_provider).strip() if opts and opts.ai_color_distribution_provider else _default_auto_import_ai_color_distribution_provider()),
         "use_avito_pricing": False,

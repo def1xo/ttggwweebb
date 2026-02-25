@@ -535,6 +535,54 @@ def cart_recommendations(
                 if len(selected) >= limit:
                     break
 
+    if len(selected) < limit:
+        # Cross-category local signal: globally popular products from order history.
+        pop_rows = (
+            db.query(
+                models.ProductVariant.product_id,
+                func.sum(models.OrderItem.quantity).label("score"),
+            )
+            .join(models.OrderItem, models.OrderItem.variant_id == models.ProductVariant.id)
+            .filter(~models.ProductVariant.product_id.in_(list(in_cart_product_ids)))
+            .group_by(models.ProductVariant.product_id)
+            .order_by(func.sum(models.OrderItem.quantity).desc())
+            .limit(limit * 8)
+            .all()
+        )
+        pop_ids = [int(r[0]) for r in pop_rows if r and r[0] and int(r[0]) not in selected_ids]
+        if pop_ids:
+            pop_products = (
+                db.query(models.Product)
+                .filter(models.Product.visible == True, models.Product.id.in_(pop_ids))
+                .all()
+            )
+            by_id = {x.id: x for x in pop_products}
+            for pid in pop_ids:
+                x = by_id.get(pid)
+                if not x or x.id in selected_ids:
+                    continue
+                selected.append(x)
+                selected_ids.add(x.id)
+                if len(selected) >= limit:
+                    break
+
+    if len(selected) < limit:
+        fallback = (
+            db.query(models.Product)
+            .filter(models.Product.visible == True)
+            .filter(~models.Product.id.in_(list(in_cart_product_ids)))
+            .order_by(models.Product.created_at.desc())
+            .limit(limit * 6)
+            .all()
+        )
+        for x in fallback:
+            if x.id in selected_ids:
+                continue
+            selected.append(x)
+            selected_ids.add(x.id)
+            if len(selected) >= limit:
+                break
+
     out: List[RelatedProductOut] = []
     for p in selected[:limit]:
         img_urls = []
