@@ -53,7 +53,14 @@ function partToHex(part: string): string {
   for (const m of COLOR_MAP) {
     if (m.re.test(p)) return m.hex;
   }
-  return "#9CA3AF";
+  // Keep unknown colors visually distinct instead of collapsing everything to gray.
+  // This avoids a "missing color becomes gray" effect when suppliers use custom names.
+  let hash = 0;
+  for (let i = 0; i < p.length; i += 1) {
+    hash = (hash * 31 + p.charCodeAt(i)) | 0;
+  }
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue} 70% 58%)`;
 }
 
 export function splitColorName(raw?: string): string[] {
@@ -63,11 +70,23 @@ export function splitColorName(raw?: string): string[] {
     .replace(/–|—/g, "-")
     .replace(/\s+/g, " ");
   if (!s) return [];
-  // common separators: -, /, +, &, comma
-  const parts = s
-    .split(/[-/+,;&]|\sи\s/gi)
+  // common separators: /, +, &, comma, semicolon.
+  // For hyphenated tokens: split composite pairs ("серо-зеленый", "black-white")
+  // but keep shade modifiers as one color ("темно-синий", "light-blue").
+  const primary = s
+    .split(/\s-\s|[/+,;&]|\sи\s/gi)
     .map((x) => x.trim())
     .filter(Boolean);
+
+  const shadePrefixRe = /^(темно|тёмно|светло|ярко|бледно|deep|dark|light|pale|neon|off)$/i;
+  const parts = primary.flatMap((token) => {
+    if (!token.includes("-")) return [token];
+    const bits = token.split("-").map((x) => x.trim()).filter(Boolean);
+    if (bits.length <= 1) return [token];
+    // "темно-синий" / "light-blue" should stay single.
+    if (shadePrefixRe.test(bits[0])) return [token];
+    return bits;
+  });
   // special case: "черно" -> treat as "черный" etc (prefix match works)
   return parts.length ? parts : [s];
 }
