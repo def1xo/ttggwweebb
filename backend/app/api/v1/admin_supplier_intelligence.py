@@ -111,6 +111,8 @@ def _canonical_color_key(raw: str | None) -> str:
     explicit_gray = {"gray", "grey", "серый", "сер", "graphite", "charcoal", "графит"}
     if normalized != "gray" or txt in explicit_gray:
         logger.info("color_normalize: raw=%r normalized=%r", raw, normalized)
+        if re.search(r"[а-яё]", txt, flags=re.IGNORECASE):
+            return txt
         return normalized
 
     # Try extracting a meaningful token from composites like "серый/салатовый"
@@ -167,19 +169,8 @@ def _shop_vkus_row_post_link(item: dict[str, object], image_urls: list[str] | No
 def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = None) -> list[str]:
     color_aliases = {
         "чёрный": "черный",
-        "black": "черный",
-        "white": "белый",
-        "grey": "серый",
-        "gray": "серый",
-        "red": "красный",
-        "blue": "синий",
-        "green": "зеленый",
-        "beige": "бежевый",
-        "brown": "коричневый",
-        "pink": "розовый",
-        "purple": "фиолетовый",
-        "yellow": "желтый",
-        "orange": "оранжевый",
+        "зелёный": "зеленый",
+        "сер": "серый",
     }
 
     def _canon_color(name: str | None) -> str:
@@ -187,11 +178,10 @@ def _extract_shop_vkus_color_tokens(item: dict, image_urls: list[str] | None = N
         if not key:
             return ""
         raw = str(color_aliases.get(key) or key)
-        normalized = normalize_color_to_whitelist(raw)
-        if normalized and normalized != "gray":
-            return normalized
+        # Keep shop_vkus display colors human-readable (RU aliases) to avoid
+        # collapsing image-inferred variants back to EN canonical keys.
         if raw in {"gray", "grey", "серый", "сер", "graphite", "charcoal", "графит"}:
-            return "gray"
+            return "серый"
         return raw
 
     palette = (
@@ -2244,6 +2234,35 @@ def import_products_from_sources(
                     if listed_in_stock:
                         stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(listed_in_stock)}
                         availability_sizes_locked = True
+
+                    # shop_vkus compatibility: keep range rows in stock when supplier uses
+                    # generic marker ("в наличии") with range in size column.
+                    if (
+                        not stock_map
+                        and raw_stock_str
+                        and re.search(r"(?i)\b(в\s*наличии|есть|in\s*stock|available)\b", raw_stock_str)
+                        and size_range_like
+                    ):
+                        range_sizes = [
+                            str(x).replace(",", ".").strip()
+                            for x in split_size_tokens(size_raw)
+                            if re.fullmatch(r"\d{2,3}(?:[.,]5)?", str(x).replace(",", ".").strip())
+                        ]
+                        if range_sizes:
+                            stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(range_sizes)}
+                            availability_sizes_locked = True
+
+                    # shop_vkus compatibility: when stock cell itself is a plain size range
+                    # (e.g. "41-45") and row size is empty, treat it as in-stock size set.
+                    if not stock_map and raw_stock_str and re.fullmatch(r"\s*\d{2,3}(?:[.,]5)?\s*[-–—]\s*\d{2,3}(?:[.,]5)?\s*", raw_stock_str):
+                        range_sizes = [
+                            str(x).replace(",", ".").strip()
+                            for x in split_size_tokens(raw_stock_str)
+                            if re.fullmatch(r"\d{2,3}(?:[.,]5)?", str(x).replace(",", ".").strip())
+                        ]
+                        if range_sizes:
+                            stock_map = {sz: int(IMPORT_FALLBACK_STOCK_QTY) for sz in dict.fromkeys(range_sizes)}
+                            availability_sizes_locked = True
 
                     if stock_map and size_range_like and all(int(v or 0) <= 1 for v in stock_map.values()):
                         range_sizes = {str(x).replace(",", ".").strip() for x in split_size_tokens(size_raw) if str(x).strip()}
