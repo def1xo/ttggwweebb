@@ -71,12 +71,22 @@ export function splitColorName(raw?: string): string[] {
     .replace(/\s+/g, " ");
   if (!s) return [];
   // common separators: /, +, &, comma, semicolon.
-  // Do NOT split plain hyphenated color names (e.g. "темно-синий", "blue-grey").
-  // Split by hyphen only when it's used as an explicit delimiter with spaces.
-  const parts = s
+  // For hyphenated tokens: split composite pairs ("серо-зеленый", "black-white")
+  // but keep shade modifiers as one color ("темно-синий", "light-blue").
+  const primary = s
     .split(/\s-\s|[/+,;&]|\sи\s/gi)
     .map((x) => x.trim())
     .filter(Boolean);
+
+  const shadePrefixRe = /^(темно|тёмно|светло|ярко|бледно|deep|dark|light|pale|neon|off)$/i;
+  const parts = primary.flatMap((token) => {
+    if (!token.includes("-")) return [token];
+    const bits = token.split("-").map((x) => x.trim()).filter(Boolean);
+    if (bits.length <= 1) return [token];
+    // "темно-синий" / "light-blue" should stay single.
+    if (shadePrefixRe.test(bits[0])) return [token];
+    return bits;
+  });
   // special case: "черно" -> treat as "черный" etc (prefix match works)
   return parts.length ? parts : [s];
 }
