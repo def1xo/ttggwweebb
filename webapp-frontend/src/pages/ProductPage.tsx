@@ -6,10 +6,14 @@ import { useToast } from "../contexts/ToastContext";
 import { useFavorites } from "../contexts/FavoritesContext";
 import { hapticImpact } from "../utils/tg";
 import { HeartSmall } from "../components/Icons";
-import { getImagesForSelectedColor, isColorInStock } from "../utils/productMedia";
+import { getImagesForSelectedColor, isColorInStock, normalizeColorValue } from "../utils/productMedia";
 
 function uniq(arr: string[]) {
   return Array.from(new Set(arr.filter(Boolean)));
+}
+
+function colorKey(v: unknown): string {
+  return normalizeColorValue(String(v || ""));
 }
 
 function isReasonableSize(v: string): boolean {
@@ -153,8 +157,9 @@ export default function ProductPage() {
   const variants: any[] = useMemo(() => (product?.variants || []) as any[], [product]);
 
   const sizes = useMemo(() => {
+    const selectedColorKey = colorKey(selectedColor);
     const relevantVariants = selectedColor
-      ? variants.filter((v) => String(v?.color?.name || v?.color || "") === selectedColor)
+      ? variants.filter((v) => colorKey(v?.color?.name || v?.color) === selectedColorKey)
       : variants;
     const fromVariants = relevantVariants.map((v) => String(v?.size?.name || v?.size || "")).filter(Boolean);
     const fromProduct = !selectedColor && Array.isArray(product?.sizes)
@@ -167,7 +172,14 @@ export default function ProductPage() {
     const fromVariants = variants.map((v) => String(v?.color?.name || v?.color || "")).filter(Boolean);
     const fromProduct = Array.isArray(product?.colors) ? product.colors.map((x: any) => String(x || "")).filter(Boolean) : [];
     const fromColorVariants = Array.isArray(product?.available_colors) ? product.available_colors.map((x: any) => String(x || "")).filter(Boolean) : [];
-    return uniq([...fromVariants, ...fromProduct, ...fromColorVariants]);
+    const merged = [...fromVariants, ...fromProduct, ...fromColorVariants];
+    const byKey = new Map<string, string>();
+    for (const color of merged) {
+      const key = colorKey(color);
+      if (!key || byKey.has(key)) continue;
+      byKey.set(key, color.trim());
+    }
+    return Array.from(byKey.values());
   }, [variants, product?.colors, product?.available_colors]);
 
   const colorHasAnyStock = useMemo(() => {
@@ -200,8 +212,8 @@ export default function ProductPage() {
     for (const c of colors) {
       const hasForSize = variants.some((v) => {
         const s = String(v?.size?.name || v?.size || "").trim();
-        const vc = String(v?.color?.name || v?.color || "");
-        return s === selectedSize && vc === c && getVariantStock(v) > 0;
+        const vc = colorKey(v?.color?.name || v?.color);
+        return s === selectedSize && vc === colorKey(c) && getVariantStock(v) > 0;
       });
       out[c] = hasForSize;
     }
@@ -229,8 +241,8 @@ export default function ProductPage() {
         continue;
       }
       const inStock = vv.some((v) => {
-        const c = String(v?.color?.name || v?.color || "");
-        const colorOk = !selectedColor || c === selectedColor;
+        const c = colorKey(v?.color?.name || v?.color);
+        const colorOk = !selectedColor || c === colorKey(selectedColor);
         return colorOk && getVariantStock(v) > 0;
       });
       out[sz] = inStock;
@@ -244,10 +256,11 @@ export default function ProductPage() {
   );
 
   const selectedVariant = useMemo(() => {
+    const selectedColorKey = colorKey(selectedColor);
     return variants.find((v) => {
       const s = String(v?.size?.name || v?.size || "");
-      const c = String(v?.color?.name || v?.color || "");
-      return (!selectedSize || s === selectedSize) && (!selectedColor || c === selectedColor);
+      const c = colorKey(v?.color?.name || v?.color);
+      return (!selectedSize || s === selectedSize) && (!selectedColor || c === selectedColorKey);
     }) || null;
   }, [variants, selectedSize, selectedColor]);
 
