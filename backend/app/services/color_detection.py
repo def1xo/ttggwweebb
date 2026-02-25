@@ -36,6 +36,26 @@ _COLOR_ALIASES: Dict[str, str] = {
     "grey_single": "gray",
 }
 
+_COLOR_NOISE_TOKENS = {
+    "single", "v2", "v3", "ver2", "ver3", "version2", "version3",
+    "new", "updated", "update", "color", "цвет",
+}
+
+_COLOR_ALIAS_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"\b(light|baby)\s*blue\b", "sky_blue"),
+    (r"\bdark\s*blue\b", "navy"),
+    (r"\bnavy\b", "navy"),
+    (r"\b(off\s*white|ivory)\b", "cream"),
+    (r"\b(graphite|charcoal|grey|gray)\b", "gray"),
+    (r"\b(tan|sand)\b", "beige"),
+    (r"\b(burgundy|maroon|wine)\b", "burgundy"),
+    (r"\b(lime|neon\s*green)\b", "lime"),
+    (r"\b(olive|army)\b", "olive"),
+    (r"\bkhaki\b", "khaki"),
+    (r"\bsilver\b", "silver"),
+    (r"\bgold\b", "gold"),
+)
+
 _CANONICAL_TO_RU: Dict[str, str] = {
     "black": "черный", "white": "белый", "gray": "серый", "beige": "бежевый",
     "brown": "коричневый", "blue": "синий", "red": "красный", "green": "зеленый",
@@ -334,12 +354,42 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
 
 
 def normalize_color_to_whitelist(name: Optional[str]) -> str:
-    raw = (str(name or "").strip().lower() or "gray").replace(" ", "_")
-    raw = re.sub(r"_single$", "", raw)
-    # forbid composite color values like "gray/purple"
-    raw = re.split(r"[/|]+", raw, maxsplit=1)[0].strip() or "gray"
-    raw = _COLOR_ALIASES.get(raw, raw)
-    return raw if raw in CANONICAL_COLORS else "gray"
+    return normalize_color_key(name)
+
+
+def normalize_color_key(raw: Optional[str]) -> str:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return "gray"
+
+    text = re.sub(r"[\[\]{}()]+", " ", text)
+    text = re.sub(r"\b(single|v\d+|ver\d+|version\d+)\b", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    for pattern, target in _COLOR_ALIAS_PATTERNS:
+        if re.search(pattern, text, flags=re.I):
+            return target if target in CANONICAL_COLORS else "gray"
+
+    # composites are forbidden: choose first meaningful token that maps to whitelist
+    parts = [p.strip() for p in re.split(r"[/,&|]+", text) if p and p.strip()]
+    candidates = parts if parts else [text]
+    for part in candidates:
+        token = part.replace(" ", "_")
+        token = re.sub(r"[^a-zа-я_\-]", "", token)
+        token = token.strip("_-")
+        if not token or token in _COLOR_NOISE_TOKENS:
+            continue
+        alias = _COLOR_ALIASES.get(token, token)
+        if alias in CANONICAL_COLORS:
+            return alias
+
+    # fallback keyword match in whole string
+    tokenized = text.replace("-", "_").replace(" ", "_")
+    alias = _COLOR_ALIASES.get(tokenized, tokenized)
+    if alias in CANONICAL_COLORS:
+        return alias
+
+    return "gray"
 
 
 def canonical_color_to_display_name(name: Optional[str]) -> str:

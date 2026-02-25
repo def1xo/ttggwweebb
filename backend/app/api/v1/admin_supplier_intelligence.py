@@ -97,7 +97,12 @@ def _canonical_color_key(raw: str | None) -> str:
     if not txt:
         return ""
     # strict single color key from whitelist; composite values are forbidden
-    return normalize_color_to_whitelist(txt)
+    normalized = normalize_color_to_whitelist(txt)
+    if normalized == "gray" and txt not in {"gray", "grey", "серый", "сер", "graphite", "charcoal"}:
+        logger.info("color_normalize fallback: raw=%r normalized=%r reason=unrecognized_or_composite", raw, normalized)
+    else:
+        logger.info("color_normalize: raw=%r normalized=%r", raw, normalized)
+    return normalized
 
 
 def _shop_vkus_row_post_link(item: dict[str, object], image_urls: list[str] | None = None) -> str:
@@ -2044,6 +2049,13 @@ def import_products_from_sources(
                         color_tokens = color_tokens[:2] if color_tokens else ["gray"]
                     else:
                         color_tokens = [color_tokens[0]] if color_tokens else ["gray"]
+                    logger.info(
+                        "shop_vkus color split: title=%r photos=%s clusters_in=%s colors_out=%s",
+                        title,
+                        photo_cnt,
+                        len([c for c in color_tokens if c]),
+                        color_tokens,
+                    )
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:

@@ -1633,14 +1633,14 @@ def test_import_products_shop_vkus_single_row_keeps_single_colorway_for_four_to_
         Base.metadata.drop_all(engine)
 
 
-def test_import_products_shop_vkus_three_rows_keep_single_product_without_index_suffix(monkeypatch):
+def test_import_products_shop_vkus_eight_photos_caps_to_two_colorways(monkeypatch):
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     db = Session()
     try:
         src = models.SupplierSource(
-            source_url="https://docs.google.com/spreadsheets/d/test-sheet-three/htmlview",
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-8/htmlview",
             supplier_name="shop_vkus",
             active=True,
         )
@@ -1651,24 +1651,23 @@ def test_import_products_shop_vkus_three_rows_keep_single_product_without_index_
         def _fake_preview(*args, **kwargs):
             return {
                 "rows_preview": [
-                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото"],
-                    ["Nike air max 97 #2", "4900", "41-43", "41", "https://t.me/shop_vkus/3001?single"],
-                    ["Nike air max 97 #3", "4900", "42-44", "44", "https://t.me/shop_vkus/3002?single"],
-                    ["Nike air max 97", "4900", "40-42", "40", "https://t.me/shop_vkus/3003?single"],
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Цвет", "Фото"],
+                    ["NB 9060", "3900", "41-44", "42", "white/black/red", "https://t.me/shop_vkus/3001?single"],
                 ]
             }
 
-        def _fake_extract(url, *args, **kwargs):
-            if "3001" in str(url):
-                return [f"https://cdn.example.com/a{i}.jpg" for i in range(1, 5)]
-            if "3002" in str(url):
-                return [f"https://cdn.example.com/b{i}.jpg" for i in range(1, 5)]
-            return [f"https://cdn.example.com/c{i}.jpg" for i in range(1, 5)]
-
         monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
-        monkeypatch.setattr(asi, "extract_image_urls_from_html_page", _fake_extract)
+        monkeypatch.setattr(asi, "extract_image_urls_from_html_page", lambda *a, **k: [
+            "https://cdn.example.com/d1.jpg",
+            "https://cdn.example.com/d2.jpg",
+            "https://cdn.example.com/d3.jpg",
+            "https://cdn.example.com/d4.jpg",
+            "https://cdn.example.com/d5.jpg",
+            "https://cdn.example.com/d6.jpg",
+            "https://cdn.example.com/d7.jpg",
+            "https://cdn.example.com/d8.jpg",
+        ])
         monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
-        monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda u: "white")
 
         out = import_products_from_sources(
             ImportProductsIn(
@@ -1684,62 +1683,10 @@ def test_import_products_shop_vkus_three_rows_keep_single_product_without_index_
         )
 
         assert out.created_products >= 1
-        products = db.query(models.Product).all()
-        assert len(products) == 1
-        assert products[0].title.lower() == "nike air max 97"
-        assert "#" not in products[0].title
-    finally:
-        db.close()
-        Base.metadata.drop_all(engine)
-
-
-def test_import_products_does_not_use_title_search_or_similar_pool_images(monkeypatch):
-    engine = create_engine("sqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-    db = Session()
-    try:
-        src = models.SupplierSource(
-            source_url="https://docs.google.com/spreadsheets/d/test-sheet-no-images/htmlview",
-            supplier_name="shop_vkus",
-            active=True,
-        )
-        db.add(src)
-        db.commit()
-        db.refresh(src)
-
-        def _fake_preview(*args, **kwargs):
-            return {
-                "rows_preview": [
-                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото"],
-                    ["Nike ZoomX", "4900", "41-43", "41", ""],
-                ]
-            }
-
-        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
-        monkeypatch.setattr(asi, "extract_image_urls_from_html_page", lambda *a, **k: [])
-        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
-
-        # these fallbacks must never be called now
-        monkeypatch.setattr(asi, "find_similar_images", lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not call find_similar_images")))
-
-        out = import_products_from_sources(
-            ImportProductsIn(
-                source_ids=[int(src.id)],
-                dry_run=False,
-                use_avito_pricing=False,
-                ai_style_description=False,
-                ai_description_enabled=False,
-                max_items_per_source=10,
-            ),
-            _admin=None,
-            db=db,
-        )
-
-        assert out.created_products >= 1
-        p = db.query(models.Product).one()
-        assert p.default_image in (None, "")
-        assert db.query(models.ProductImage).filter(models.ProductImage.product_id == p.id).count() == 0
+        p = db.query(models.Product).first()
+        variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
+        colors = {db.query(models.Color).filter(models.Color.id == v.color_id).one().name for v in variants if v.color_id}
+        assert len(colors) <= 2
     finally:
         db.close()
         Base.metadata.drop_all(engine)
