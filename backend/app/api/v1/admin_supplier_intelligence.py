@@ -71,6 +71,13 @@ MIN_IMAGE_BYTES = 40 * 1024
 MAX_ASPECT_RATIO = 5.0
 _COLOR_PREFIX_RE = re.compile(r"^(?:color|colour|col\.?|цвет)\s*[:\-]?\s*", flags=re.IGNORECASE)
 _COLOR_TOKEN_DENYLIST = {"", "unknown", "multi", "none", "null", "n/a", "-", "—"}
+_TITLE_SUFFIX_PATTERNS = [
+    re.compile(r"\s*#\d+\s*$", flags=re.IGNORECASE),
+    re.compile(r"\s*\(\d+\)\s*$", flags=re.IGNORECASE),
+    re.compile(r"\s*(?:вариант|variant|цвет|color|size)\s*\d+\s*$", flags=re.IGNORECASE),
+    re.compile(r"\s*[-–—]\s*\d+\s*$", flags=re.IGNORECASE),
+    re.compile(r"\s+\d+\s*$", flags=re.IGNORECASE),
+]
 
 
 
@@ -208,6 +215,60 @@ def _looks_like_direct_image_url(url: str | None) -> bool:
     if any(ext in u for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif")):
         return True
     return any(token in u for token in ("/file/", "/image/", "/photo/"))
+
+
+def _extract_image_urls(it: dict) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _push(candidate: str | None) -> None:
+        if len(out) >= 30:
+            return
+        value = str(candidate or "").strip()
+        if not value:
+            return
+        # accept CSV/space/newline separated sources
+        chunks = re.split(r"[\s,;]+", value) if any(sep in value for sep in [",", ";", "\n", "\t", " "]) else [value]
+        for chunk in chunks:
+            url = str(chunk or "").strip()
+            if not url:
+                continue
+            if not url.lower().startswith(("http://", "https://")):
+                continue
+            if url in seen:
+                continue
+            seen.add(url)
+            out.append(url)
+            if len(out) >= 30:
+                break
+
+    if isinstance(it.get("image_urls"), list):
+        for raw in (it.get("image_urls") or []):
+            _push(raw)
+    if isinstance(it.get("images"), list):
+        for raw in (it.get("images") or []):
+            _push(raw)
+    if isinstance(it.get("photos"), list):
+        for raw in (it.get("photos") or []):
+            _push(raw)
+    for key in ("image", "photo", "img"):
+        if isinstance(it.get(key), str):
+            _push(str(it.get(key) or ""))
+
+    return out[:30]
+
+
+def _clean_title_suffixes(title: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(title or "").strip())
+    if not cleaned:
+        return ""
+    while True:
+        prev = cleaned
+        for pattern in _TITLE_SUFFIX_PATTERNS:
+            cleaned = pattern.sub("", cleaned).strip()
+        if cleaned == prev:
+            break
+    return cleaned
 
 
 def _normalize_error_message(exc: Exception) -> str:
@@ -1817,14 +1878,14 @@ def import_products_from_sources(
             source_items_map[int(src.id)] = items
             for it in items:
                 title = normalize_title_for_supplier(str(it.get("title") or "").strip(), getattr(src, "supplier_name", None))
+                title = _clean_title_suffixes(title)
                 ds_price = float(it.get("dropship_price") or 0)
                 if title and ds_price > 0 and not _is_placeholder_title(title):
                     k = _title_key(title)
                     prev = title_min_dropship.get(k)
                     title_min_dropship[k] = ds_price if prev is None else min(prev, ds_price)
-                row_image_urls = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
-                image_url = str(it.get("image_url") or "").strip()
-                pool = [image_url, *row_image_urls]
+                pool = _extract_image_urls(it if isinstance(it, dict) else {})
+                image_url = pool[0] if pool else ""
                 if title and ds_price > 0 and not _is_placeholder_title(title):
                     for u in pool:
                         uu = str(u or "").strip()
@@ -1894,6 +1955,7 @@ def import_products_from_sources(
             shop_vkus_post_link: str = ""  # safe default; overwritten below after images are resolved
             try:
                 title = normalize_title_for_supplier(str(it.get("title") or "").strip(), getattr(src, "supplier_name", None))
+                title = _clean_title_suffixes(title)
                 ds_price = float(it.get("dropship_price") or 0)
                 is_tg_fallback = bool(it.get("__tg_fallback__")) or _is_placeholder_title(title)
                 if is_tg_fallback:
@@ -1974,28 +2036,44 @@ def import_products_from_sources(
                 if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title):
                     ds_price = max(float(ds_price or 0), 1800.0)
                 sale_price = pick_sale_price(title, ds_price, min_dropship_price=min_dropship, rrc_price=(it.get("rrc_price") if isinstance(it, dict) else None))
-                row_image_urls = [str(x).strip() for x in (it.get("image_urls") or []) if str(x).strip()]
-                image_url = str(it.get("image_url") or "").strip() or None
-                if not image_url and row_image_urls:
-                    image_url = row_image_urls[0]
+                logger.info(
+                    "import raw image keys: image_urls=%r images=%r image=%r photo=%r photos=%r url=%r",
+                    it.get("image_urls"),
+                    it.get("images"),
+                    it.get("image"),
+                    it.get("photo"),
+                    it.get("photos"),
+                    it.get("url"),
+                )
+                image_urls = _extract_image_urls(it if isinstance(it, dict) else {})
+                image_url = image_urls[0] if image_urls else ""
+                photo_cnt = len(image_urls)
+                logger.info(
+                    "import normalized images: image_urls_preview=%s image_url=%r photo_cnt=%s",
+                    image_urls[:5],
+                    image_url,
+                    photo_cnt,
+                )
                 if not image_url and "t.me/" in src_url:
                     try:
                         tg_limit = 20 if supplier_key == "shop_vkus" else 3
                         tg_imgs = extract_image_urls_from_html_page(src_url, limit=tg_limit)
                         image_url = tg_imgs[0] if tg_imgs else None
                         if tg_imgs:
-                            row_image_urls = [str(x).strip() for x in tg_imgs if str(x).strip()]
+                            image_urls = [str(x).strip() for x in tg_imgs if str(x).strip()]
                     except Exception:
                         image_url = None
 
-                image_urls = []
-                for u in [image_url, *row_image_urls]:
+                resolved_image_urls: list[str] = []
+                for u in image_urls:
                     uu = _resolve_source_image_url(u, src_url)
-                    if uu and uu not in image_urls:
-                        image_urls.append(uu)
+                    if uu and uu not in resolved_image_urls:
+                        resolved_image_urls.append(uu)
+                image_urls = resolved_image_urls
+                image_url = image_urls[0] if image_urls else image_url
 
                 # Prefer Telegram channel photos for suppliers that have paired table+TG sources.
-                photos_ref: list[str] = [str(x).strip() for x in ([image_url] + row_image_urls) if str(x or "").strip() and ("t.me/" in str(x) or "telegram.me/" in str(x))]
+                photos_ref: list[str] = [str(x).strip() for x in image_urls if str(x or "").strip() and ("t.me/" in str(x) or "telegram.me/" in str(x))]
                 images_status = "resolved"
                 if supplier_key and src_kind != "telegram_channel":
                     tg_images = _pick_tg_images_for_title(supplier_key, title)
@@ -2140,26 +2218,12 @@ def import_products_from_sources(
                         changed = True
                     if image_urls:
                         existing_rows = db.query(models.ProductImage).filter(models.ProductImage.product_id == p.id).all()
-                        existing_urls = [str(x.url).strip() for x in existing_rows if str(x.url).strip()]
-                        should_reset_gallery = (
-                            len(existing_urls) <= 1 and len(image_urls) >= 2
-                        )
-                        if should_reset_gallery:
-                            for row in existing_rows:
-                                db.delete(row)
-                            db.flush()
-                            for idx, img_u in enumerate(image_urls[:MAX_PRODUCT_IMAGES_PER_ITEM]):
-                                db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
-                            changed = True
-                        else:
-                            known_urls = set(existing_urls)
-                            next_sort = len(existing_urls)
-                            for img_u in image_urls[:MAX_PRODUCT_IMAGES_PER_ITEM]:
-                                if img_u in known_urls:
-                                    continue
-                                db.add(models.ProductImage(product_id=p.id, url=img_u, sort=next_sort))
-                                next_sort += 1
-                                changed = True
+                        for row in existing_rows:
+                            db.delete(row)
+                        db.flush()
+                        for idx, img_u in enumerate(image_urls[:MAX_PRODUCT_IMAGES_PER_ITEM]):
+                            db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
+                        changed = True
                     if changed:
                         db.add(p)
                         updated_products += 1

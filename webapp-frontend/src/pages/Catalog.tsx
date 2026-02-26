@@ -52,7 +52,7 @@ export default function Catalog() {
     const t = window.setTimeout(async () => {
       setSearchLoading(true);
       try {
-        const res: any = await api.getProducts({ q, page: 1, per_page: 30 });
+        const res: any = await api.getProducts({ q, page: 1, limit: 25 });
         const data = (res as any)?.data ?? res;
         const items = Array.isArray(data) ? data : data?.items || [];
         const arr = Array.isArray(items) ? items : [];
@@ -168,7 +168,7 @@ export default function Catalog() {
         ) : categories.length === 0 ? (
           <div className="small-muted" style={{ marginTop: 12 }}>Категорий пока нет</div>
         ) : (
-          <div className="categories-grid" style={{ marginTop: 8 }}>
+          <div className="categories-grid catalog-grid-animated" style={{ marginTop: 8 }}>
             {categories.map((c) => (
               <Link key={c.id} to={`/catalog/${c.slug || c.id}`} className="category-full-tile" style={{ textDecoration: "none", color: "inherit" }}>
                 <div className="category-info">
