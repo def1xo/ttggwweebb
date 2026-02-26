@@ -3,7 +3,6 @@ import { Link, useSearchParams } from "react-router-dom";
 import api from "../services/api";
 import Skeleton from "../components/Skeleton";
 import StickySearch from "../components/StickySearch";
-import ProductCard from "../components/ProductCard";
 
 type Category = {
   id: number;
@@ -17,7 +16,6 @@ export default function Catalog() {
   const [query, setQuery] = useState(searchParams.get("q") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchParams.get("q") || "");
   const [categories, setCategories] = useState<Category[]>([]);
-  const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,25 +35,14 @@ export default function Catalog() {
         ]);
 
         const catsRaw: any = (catsRes as any)?.data ?? catsRes;
-        const prodsRaw: any = (prodRes as any)?.data ?? prodRes;
-
         const catItems = Array.isArray(catsRaw)
           ? catsRaw
           : Array.isArray(catsRaw?.items)
           ? catsRaw.items
           : [];
-
-        const prodItems = Array.isArray(prodsRaw)
-          ? prodsRaw
-          : Array.isArray(prodsRaw?.items)
-          ? prodsRaw.items
-          : [];
-
         setCategories(catItems);
-        setProducts(prodItems);
       } catch {
         setCategories([]);
-        setProducts([]);
         setError("Не удалось загрузить каталог");
       } finally {
         setLoading(false);
@@ -72,8 +59,8 @@ export default function Catalog() {
         <StickySearch
           value={query}
           onChange={setQuery}
-          placeholder="Поиск по категориям и товарам…"
-          hint={query ? `Категорий: ${categories.length}, товаров: ${products.length}` : ""}
+          placeholder="Поиск категорий (можно по названию товара)…"
+          hint={query ? `Категорий: ${categories.length}` : ""}
         />
 
         {error ? <div className="small-muted" style={{ marginTop: 12 }}>{error}</div> : null}
@@ -105,25 +92,7 @@ export default function Catalog() {
           </div>
         )}
 
-        <div style={{ marginTop: 16, marginBottom: 8, fontWeight: 700 }}>Товары</div>
-        {loading ? (
-          <div className="grid-products">
-            {Array.from({ length: 6 }).map((_, idx) => (
-              <div key={idx} className="card" style={{ padding: 10 }}>
-                <Skeleton height={180} style={{ borderRadius: 10, marginBottom: 8 }} />
-                <Skeleton height={14} width="80%" />
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="grid-products fade-in-list">
-            {products.map((p) => (
-              <ProductCard key={p.id} product={p} />
-            ))}
-          </div>
-        )}
-
-        {!loading && !error && topCategories.length === 0 && products.length === 0 ? (
+        {!loading && !error && topCategories.length === 0 ? (
           <div className="card" style={{ marginTop: 12, padding: 16 }}>
             <div style={{ fontWeight: 800, marginBottom: 6 }}>Ничего не найдено</div>
           </div>
