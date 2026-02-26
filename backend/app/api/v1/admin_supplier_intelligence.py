@@ -258,6 +258,15 @@ def _extract_image_urls(it: dict) -> list[str]:
     return out[:30]
 
 
+def _sync_product_images(db: Session, product_id: int, urls: list[str]) -> int:
+    db.query(models.ProductImage).filter(models.ProductImage.product_id == product_id).delete(synchronize_session=False)
+    inserted = 0
+    for i, url in enumerate(urls):
+        db.add(models.ProductImage(product_id=product_id, url=url, sort=i))
+        inserted += 1
+    return inserted
+
+
 def _clean_title_suffixes(title: str) -> str:
     cleaned = re.sub(r"\s+", " ", str(title or "").strip())
     if not cleaned:
@@ -2036,16 +2045,16 @@ def import_products_from_sources(
                 if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title):
                     ds_price = max(float(ds_price or 0), 1800.0)
                 sale_price = pick_sale_price(title, ds_price, min_dropship_price=min_dropship, rrc_price=(it.get("rrc_price") if isinstance(it, dict) else None))
-                logger.info(
-                    "import raw image keys: image_urls=%r images=%r image=%r photo=%r photos=%r url=%r",
-                    it.get("image_urls"),
-                    it.get("images"),
-                    it.get("image"),
-                    it.get("photo"),
-                    it.get("photos"),
-                    it.get("url"),
-                )
                 image_urls = _extract_image_urls(it if isinstance(it, dict) else {})
+                if not image_urls:
+                    logger.info(
+                        "import raw image fields: image_urls=%r images=%r image=%r photo=%r photos=%r",
+                        it.get("image_urls"),
+                        it.get("images"),
+                        it.get("image"),
+                        it.get("photo"),
+                        it.get("photos"),
+                    )
                 image_url = image_urls[0] if image_urls else ""
                 photo_cnt = len(image_urls)
                 logger.info(
@@ -2174,9 +2183,14 @@ def import_products_from_sources(
                     )
                     db.add(p)
                     db.flush()
-                    if image_urls:
-                        for idx, img_u in enumerate(image_urls[:MAX_PRODUCT_IMAGES_PER_ITEM]):
-                            db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
+                    inserted_images = _sync_product_images(db, p.id, image_urls)
+                    logger.info(
+                        "import product_images: product_id=%s inserted=%s title=%r preview=%s",
+                        p.id,
+                        inserted_images,
+                        title,
+                        image_urls[:2],
+                    )
                     created_products += 1
                 else:
                     changed = False
@@ -2216,14 +2230,15 @@ def import_products_from_sources(
                     if next_media_meta != prev_media_meta:
                         p.import_media_meta = next_media_meta
                         changed = True
-                    if image_urls:
-                        existing_rows = db.query(models.ProductImage).filter(models.ProductImage.product_id == p.id).all()
-                        for row in existing_rows:
-                            db.delete(row)
-                        db.flush()
-                        for idx, img_u in enumerate(image_urls[:MAX_PRODUCT_IMAGES_PER_ITEM]):
-                            db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
-                        changed = True
+                    inserted_images = _sync_product_images(db, p.id, image_urls)
+                    logger.info(
+                        "import product_images: product_id=%s inserted=%s title=%r preview=%s",
+                        p.id,
+                        inserted_images,
+                        title,
+                        image_urls[:2],
+                    )
+                    changed = True
                     if changed:
                         db.add(p)
                         updated_products += 1
@@ -2715,6 +2730,8 @@ def import_products_from_sources(
             ],
         )
 
+    # Acceptance check after import:
+    # select count(*) from product_images;  -- expected > 0
     logger.info(
         "supplier_import_summary created_products=%s updated_products=%s created_variants=%s updated_variants=%s",
         created_products,
