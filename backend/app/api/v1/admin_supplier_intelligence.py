@@ -2105,13 +2105,13 @@ def import_products_from_sources(
                     color_tokens = [""]
                 elif is_shop_vkus:
                     # shop_vkus strict policy:
-                    # - 4..6 photos => exactly one color, never multi
-                    # - >6 photos => max two colors
+                    # - 5..7 photos => exactly one color, never multi
+                    # - >7 photos => max two colors
                     photo_cnt = len([u for u in (image_urls or []) if str(u or "").strip()])
                     color_tokens = [c for c in color_tokens if c and c != "multi"]
-                    if 4 <= photo_cnt <= 6:
+                    if 5 <= photo_cnt <= 7:
                         color_tokens = [color_tokens[0]] if color_tokens else []
-                    elif photo_cnt > 6:
+                    elif photo_cnt > 7:
                         color_tokens = color_tokens[:2] if color_tokens else []
                     else:
                         color_tokens = [color_tokens[0]] if color_tokens else []

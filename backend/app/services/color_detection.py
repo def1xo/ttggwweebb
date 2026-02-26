@@ -340,8 +340,8 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
         by_color[v.color] += 1
         per_image.append({"idx": idx, "color": v.color, "confidence": round(v.confidence, 3), "share": round(v.cluster_share, 3)})
 
-    # 5 photos rule: force single color via weighted majority + tie-breaks
-    if len(valid) == 5:
+    # 5..7 photos rule: force a single non-composite color via weighted majority + tie-breaks
+    if 5 <= len(valid) <= 7:
         top = sorted(score.items(), key=lambda x: x[1], reverse=True)
         c1, s1 = top[0]
         c2, s2 = top[1] if len(top) > 1 else (None, 0.0)
@@ -361,9 +361,14 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
         purple_s = float(score.get("purple", 0.0)) + float(score.get("pink", 0.0))
 
         if black_s >= 0.30 * total_score and white_s >= 0.24 * total_score and (black_s + white_s) >= 0.62 * total_score:
-            c1 = "black-white"
+            # explicit business rule: photo sets of 5-7 must map to ONE color only.
+            c1 = "black" if black_s >= white_s else "white"
         elif c1 == "gray" and purple_s >= 0.24 * total_score:
             c1 = "purple"
+        elif c1 == "gray" and black_s >= 0.26 * total_score:
+            c1 = "black"
+        elif c1 == "gray" and white_s >= 0.26 * total_score:
+            c1 = "white"
         result = {
             "color": c1,
             "confidence": round(min(0.99, s1 / max(0.001, sum(score.values())) + 0.15), 3),

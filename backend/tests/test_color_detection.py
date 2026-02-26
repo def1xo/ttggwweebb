@@ -97,5 +97,36 @@ def test_detect_product_color_avoids_false_gray_for_black_white_mix(monkeypatch)
 
     monkeypatch.setattr(cd, "detect_color_from_image_source", fake_detect)
     out = cd.detect_product_color(["1", "2", "3", "4", "5"])
-    assert out["color"] == "black-white"
+    assert out["color"] == "black"
     assert out["color"] != "gray"
+
+
+def test_detect_product_color_for_7_images_still_forces_single(monkeypatch):
+    class R:
+        def __init__(self, color, conf, sat):
+            self.color = color
+            self.confidence = conf
+            self.cluster_share = 0.6
+            self.sat = sat
+            self.light = 70
+            self.lab_a = 1
+            self.lab_b = 10
+            self.debug = {}
+
+    seq = [
+        R("gray", 0.62, 0.18),
+        R("black", 0.61, 0.17),
+        R("white", 0.59, 0.16),
+        R("black", 0.57, 0.15),
+        R("white", 0.55, 0.14),
+        R("black", 0.56, 0.16),
+        R("white", 0.53, 0.15),
+    ]
+
+    def fake_detect(_src):
+        return seq.pop(0)
+
+    monkeypatch.setattr(cd, "detect_color_from_image_source", fake_detect)
+    out = cd.detect_product_color(["1", "2", "3", "4", "5", "6", "7"])
+    assert out["color"] in {"black", "white", "purple", "gray", "beige", "yellow"}
+    assert out["color"] not in {"multi", "black-white"}
