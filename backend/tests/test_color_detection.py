@@ -70,3 +70,10 @@ def test_detect_product_colors_from_photos_returns_canonical(monkeypatch):
     out = cd.detect_product_colors_from_photos(["x"])
     assert out["color"] == "gray"
     assert out["display_color"] == "серый"
+
+
+def test_normalize_color_to_whitelist_can_keep_unknown_when_requested():
+    from app.services.color_detection import normalize_color_to_whitelist
+
+    assert normalize_color_to_whitelist("Цвет: Green") == "gray"
+    assert normalize_color_to_whitelist("Цвет: Green", unknown_fallback="") == ""

@@ -1183,12 +1183,12 @@ def test_rerank_gallery_images_prefers_higher_score(monkeypatch):
 def test_rerank_gallery_images_shop_vkus_filters_non_product_keywords():
     out = asi._rerank_gallery_images([
         "https://cdn.example.com/shoe-1.jpg",
-        "https://cdn.example.com/shop_vkus_logo_banner.jpg",
+        "https://cdn.example.com/shop_vkus_logo_banner.png",
         "https://cdn.example.com/shoe-2.jpg",
         "https://cdn.example.com/emoji_1f49c.png",
     ], supplier_key="shop_vkus")
 
-    assert "https://cdn.example.com/shop_vkus_logo_banner.jpg" not in out
+    assert "https://cdn.example.com/shop_vkus_logo_banner.png" not in out
     assert "https://cdn.example.com/emoji_1f49c.png" not in out
     assert "https://cdn.example.com/shoe-1.jpg" in out
     assert "https://cdn.example.com/shoe-2.jpg" in out
@@ -1212,3 +1212,39 @@ def test_generate_youth_description_has_paragraphs_and_bullets():
     text = si.generate_youth_description("Nike Dunk Low", category_name="Обувь", color="black")
     assert "\n\n" in text
     assert text.count("• ") >= 3
+
+
+def test_normalize_color_token_handles_prefix_alias_and_unknown():
+    assert asi._normalize_color_token("Цвет: Green") == "green"
+    assert asi._normalize_color_token(" col. Lime ") == "lime"
+    assert asi._normalize_color_token("Color: Neon Blast") == "neon blast"
+
+
+def test_filter_supplier_gallery_images_filters_small_and_keeps_good(monkeypatch, tmp_path):
+    from PIL import Image
+
+    good = tmp_path / "good.png"
+    small = tmp_path / "small.png"
+    banner = tmp_path / "banner.png"
+
+    Image.new("RGB", (800, 800), color=(10, 120, 200)).save(good, format="PNG")
+    Image.new("RGB", (300, 300), color=(10, 120, 200)).save(small, format="PNG")
+    Image.new("RGB", (1600, 200), color=(10, 120, 200)).save(banner, format="PNG")
+
+    mapping = {
+        "https://supplier.example/good.png?utm_source=tg": str(good),
+        "https://supplier.example/good.png?utm_campaign=x": str(good),
+        "https://supplier.example/small.png": str(small),
+        "https://supplier.example/banner.png": str(banner),
+    }
+
+    monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: mapping.get(url))
+    monkeypatch.setattr(asi, "MIN_IMAGE_BYTES", 1)
+
+    out = asi._filter_supplier_gallery_images(
+        list(mapping.keys()),
+        source_url="https://supplier.example/catalog",
+        supplier_name="shop_vkus",
+    )
+
+    assert out == [str(good)]

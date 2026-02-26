@@ -3,6 +3,7 @@ import { useLocation, useParams, useNavigate, useSearchParams } from "react-rout
 import api from "../services/api";
 import ProductCard from "../components/ProductCard";
 import StickySearch from "../components/StickySearch";
+import Skeleton from "../components/Skeleton";
 
 type SortMode = "popular" | "price_asc" | "price_desc" | "title_asc";
 
@@ -96,6 +97,7 @@ export default function CategoryView() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [category, setCategory] = useState<any>(null);
   const [products, setProducts] = useState<ProductAny[]>([]);
+  const [loadingProducts, setLoadingProducts] = useState<boolean>(false);
   const [query, setQuery] = useState(() => searchParams.get("q") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(() => searchParams.get("q") || "");
   const [page, setPage] = useState<number>(() => {
@@ -110,6 +112,22 @@ export default function CategoryView() {
 
   useEffect(() => {
     (async () => {
+      const cacheKey = `category-products:${id}`;
+      setLoadingProducts(true);
+      try {
+        const cachedRaw = sessionStorage.getItem(cacheKey);
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw);
+          if (Array.isArray(cached?.products)) {
+            setProducts(cached.products);
+          }
+          if (cached?.category) {
+            setCategory(cached.category);
+          }
+        }
+      } catch {
+        // ignore cache read errors
+      }
       try {
         const cat = await api.getCategories();
         const catRaw = (cat as any)?.data ?? cat;
@@ -128,8 +146,6 @@ export default function CategoryView() {
           ? { category_id: categoryId }
           : {};
 
-        // Backend defaults to per_page=50. For categories with larger catalogs,
-        // fetch all pages to avoid "new items push old out" effect.
         const perPage = 500;
         let page = 1;
         const merged: ProductAny[] = [];
@@ -152,8 +168,19 @@ export default function CategoryView() {
           page += 1;
         }
         setProducts(merged);
+        try {
+          sessionStorage.setItem(cacheKey, JSON.stringify({
+            category: catData || null,
+            products: merged,
+            updated_at: Date.now(),
+          }));
+        } catch {
+          // ignore cache write errors
+        }
       } catch {
         // noop
+      } finally {
+        setLoadingProducts(false);
       }
     })();
   }, [id]);
@@ -335,11 +362,23 @@ export default function CategoryView() {
         </div>
       ) : null}
 
-      <div className="grid-products">
-        {paged.map((p) => (
-          <ProductCard key={(p as any).id} product={p} />
-        ))}
-      </div>
+      {loadingProducts && products.length === 0 ? (
+        <div className="grid-products">
+          {Array.from({ length: 6 }).map((_, idx) => (
+            <div key={idx} className="card" style={{ padding: 12 }}>
+              <Skeleton height={220} style={{ borderRadius: 14, marginBottom: 10 }} />
+              <Skeleton height={16} width="70%" style={{ marginBottom: 8 }} />
+              <Skeleton height={14} width="45%" />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="grid-products">
+          {paged.map((p) => (
+            <ProductCard key={(p as any).id} product={p} />
+          ))}
+        </div>
+      )}
 
       {filtered.length > perPage ? (
         <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
