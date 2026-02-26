@@ -102,52 +102,35 @@ function collectProductImages(p: any): string[] {
 
 function imagesForColor(p: any, color: string | null): string[] {
   if (!p) return [];
-  if (!color) return collectProductImages(p);
-  const selected = normalizeColorValue(color);
-  const groups = Array.isArray(p?.color_variants) ? p.color_variants : [];
-  const hit = groups.find((g: any) => normalizeColorValue(g?.color) === selected);
-  const fromGroup = splitImageCandidates(hit?.images)
-    .map((item) => normalizeMediaUrl(item))
-    .filter((item): item is string => Boolean(item));
-  if (fromGroup.length) return uniq(fromGroup);
+  const selected = normalizeColorValue(color || p?.selected_color_key || p?.selected_color);
+  const byColor = (p?.images_by_color_key || p?.images_by_color || {}) as Record<string, unknown>;
 
-  const fromVariantImages = (Array.isArray(p?.variants) ? p.variants : [])
-    .filter((v: any) => normalizeColorValue(v?.color?.name || v?.color) === selected)
-    .flatMap((v: any) => splitImageCandidates(v?.images || v?.image_urls))
-    .map((item) => normalizeMediaUrl(item))
-    .filter((item): item is string => Boolean(item));
-  if (fromVariantImages.length) return uniq(fromVariantImages);
-
-  const byColor = p?.images_by_color;
-  if (byColor && typeof byColor === "object") {
+  if (selected && byColor && typeof byColor === "object") {
     const matchKey = Object.keys(byColor).find((k) => normalizeColorValue(k) === selected);
     if (matchKey) {
-      const fromKey = splitImageCandidates((byColor as Record<string, unknown>)[matchKey])
+      const fromKey = splitImageCandidates(byColor[matchKey])
         .map((item) => normalizeMediaUrl(item))
         .filter((item): item is string => Boolean(item));
       if (fromKey.length) return uniq(fromKey);
     }
   }
 
-  // Не смешиваем фото разных цветов, если выбран конкретный цвет.
-  const fallback = splitImageCandidates(p?.selected_color_images)
+  const general = splitImageCandidates(p?.general_images)
     .map((item) => normalizeMediaUrl(item))
     .filter((item): item is string => Boolean(item));
-  if (fallback.length) return uniq(fallback);
+  if (general.length) return uniq(general);
 
-  if (hit?.images?.length) {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const item of hit.images) {
-      const normalized = normalizeMediaUrl(item);
-      if (!normalized || seen.has(normalized)) continue;
-      seen.add(normalized);
-      out.push(normalized);
-    }
-    if (out.length) return out;
+  const firstKey = Object.keys(byColor || {})[0];
+  if (firstKey) {
+    const firstImages = splitImageCandidates(byColor[firstKey])
+      .map((item) => normalizeMediaUrl(item))
+      .filter((item): item is string => Boolean(item));
+    if (firstImages.length) return uniq(firstImages);
   }
-  return [];
+
+  return collectProductImages(p);
 }
+
 
 function getVariantStock(v: any): number {
   const raw = v?.stock_quantity ?? v?.stock ?? v?.quantity ?? v?.qty ?? 0;
@@ -184,7 +167,7 @@ export default function ProductPage() {
         const res = await api.get(`/api/products/${id}`);
         const p = (res as any).data ?? res;
         setProduct(p);
-        if (p?.selected_color) setSelectedColor(String(p.selected_color));
+        if (p?.selected_color_key || p?.selected_color) setSelectedColor(String(p.selected_color_key || p.selected_color));
       } catch {
         setProduct(null);
       }
@@ -255,11 +238,17 @@ export default function ProductPage() {
   }, [variants, product?.sizes, selectedColor]);
 
   const colors = useMemo(() => {
-    const fromVariants = variants.map((v) => String(v?.color?.name || v?.color || "")).filter(Boolean);
-    const fromProduct = Array.isArray(product?.colors) ? product.colors.map((x: any) => String(x || "")).filter(Boolean) : [];
-    const fromColorVariants = Array.isArray(product?.available_colors) ? product.available_colors.map((x: any) => String(x || "")).filter(Boolean) : [];
-    return uniq([...fromVariants, ...fromProduct, ...fromColorVariants]);
-  }, [variants, product?.colors, product?.available_colors]);
+    const fromKeys = Array.isArray(product?.available_color_keys)
+      ? product.available_color_keys.map((x: any) => String(x || "")).filter(Boolean)
+      : [];
+    const fromLegacy = Array.isArray(product?.available_colors)
+      ? product.available_colors.map((x: any) => String(x || "")).filter(Boolean)
+      : [];
+    const merged = uniq([...fromKeys, ...fromLegacy]);
+    const primary = String(product?.selected_color_key || product?.selected_color || "").trim();
+    if (!primary) return merged;
+    return [primary, ...merged.filter((x) => normalizeColorValue(x) !== normalizeColorValue(primary))];
+  }, [product?.available_color_keys, product?.available_colors, product?.selected_color_key, product?.selected_color]);
 
   const colorHasAnyStock = useMemo(() => {
     const out: Record<string, boolean> = {};
