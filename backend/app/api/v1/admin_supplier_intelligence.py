@@ -64,6 +64,9 @@ ERROR_MESSAGE_MAX_LEN = 500
 IMPORT_FALLBACK_STOCK_QTY = 9_999
 RRC_DISCOUNT_RUB = 300
 MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT = 40
+MIN_IMAGE_SIDE_PX = 600
+MIN_IMAGE_FILE_SIZE_BYTES = 40 * 1024
+MAX_IMAGE_ASPECT_RATIO = 5.0
 
 
 def _looks_like_direct_image_url(url: str | None) -> bool:
@@ -439,7 +442,10 @@ def _is_likely_product_image(url: str) -> bool:
             from PIL import Image, ImageStat  # type: ignore
             with Image.open(local_path) as img:
                 w, h = img.size
-                if w < 320 or h < 320:
+                if min(w, h) < MIN_IMAGE_SIDE_PX:
+                    return False
+                ratio = max(w, h) / max(1, min(w, h))
+                if ratio > MAX_IMAGE_ASPECT_RATIO:
                     return False
                 gray = img.convert("L")
                 stat = ImageStat.Stat(gray)
@@ -500,14 +506,12 @@ def _score_gallery_image(url: str | None) -> float:
                 if entropy < 3.4:
                     score -= 55.0
 
-                if pixels < 220_000:
-                    score -= 70.0
-                elif pixels < 500_000:
-                    score -= 20.0
+                if min(w, h) < MIN_IMAGE_SIDE_PX:
+                    score -= 120.0
 
                 ratio = (w / h) if h else 1.0
-                if ratio < 0.45 or ratio > 2.4:
-                    score -= 20.0
+                if max(ratio, 1.0 / max(0.0001, ratio)) > MAX_IMAGE_ASPECT_RATIO:
+                    score -= 60.0
                 if 0.85 <= ratio <= 1.15 and std < 18:
                     score -= 30.0
         except Exception:
@@ -604,8 +608,6 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
         work = filtered if filtered else pre
 
         work = _filter_gallery_main_signature_cluster(work)
-        if len(work) > 7:
-            work = work[:7]
         return work
 
     ranked = sorted(uniq, key=lambda x: _score_gallery_image(x), reverse=True)
@@ -1955,7 +1957,7 @@ def import_products_from_sources(
                     db.add(p)
                     db.flush()
                     if image_urls:
-                        for idx, img_u in enumerate(image_urls[:8]):
+                        for idx, img_u in enumerate(image_urls):
                             db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
                     created_products += 1
                 else:
@@ -1992,7 +1994,24 @@ def import_products_from_sources(
                         p.import_supplier_name = getattr(src, "supplier_name", None)
                         changed = True
                     prev_media_meta = getattr(p, "import_media_meta", None) or {}
-                    next_media_meta = {"photos_ref": photos_ref, "images_status": images_status}
+                    images_by_color_key: dict[str, list[str]] = {}
+                    general_images: list[str] = []
+                    for _u in (image_urls or []):
+                        try:
+                            _c = dominant_color_name_from_url(_u)
+                        except Exception:
+                            _c = None
+                        _ck = normalize_color_to_whitelist(_c) if _c else ""
+                        if _ck:
+                            images_by_color_key.setdefault(_ck, []).append(_u)
+                        else:
+                            general_images.append(_u)
+                    next_media_meta = {
+                        "photos_ref": photos_ref,
+                        "images_status": images_status,
+                        "images_by_color_key": images_by_color_key,
+                        "general_images": general_images,
+                    }
                     if next_media_meta != prev_media_meta:
                         p.import_media_meta = next_media_meta
                         changed = True
@@ -2006,13 +2025,13 @@ def import_products_from_sources(
                             for row in existing_rows:
                                 db.delete(row)
                             db.flush()
-                            for idx, img_u in enumerate(image_urls[:8]):
+                            for idx, img_u in enumerate(image_urls):
                                 db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
                             changed = True
                         else:
                             known_urls = set(existing_urls)
                             next_sort = len(existing_urls)
-                            for img_u in image_urls[:8]:
+                            for img_u in image_urls:
                                 if img_u in known_urls:
                                     continue
                                 db.add(models.ProductImage(product_id=p.id, url=img_u, sort=next_sort))
@@ -2086,16 +2105,16 @@ def import_products_from_sources(
                     color_tokens = [""]
                 elif is_shop_vkus:
                     # shop_vkus strict policy:
-                    # - 4..6 photos => exactly one color, never multi
-                    # - >6 photos => max two colors
+                    # - 5..7 photos => exactly one color, never multi
+                    # - >7 photos => max two colors
                     photo_cnt = len([u for u in (image_urls or []) if str(u or "").strip()])
                     color_tokens = [c for c in color_tokens if c and c != "multi"]
-                    if 4 <= photo_cnt <= 6:
-                        color_tokens = [color_tokens[0]] if color_tokens else ["gray"]
-                    elif photo_cnt > 6:
-                        color_tokens = color_tokens[:2] if color_tokens else ["gray"]
+                    if 5 <= photo_cnt <= 7:
+                        color_tokens = [color_tokens[0]] if color_tokens else []
+                    elif photo_cnt > 7:
+                        color_tokens = color_tokens[:2] if color_tokens else []
                     else:
-                        color_tokens = [color_tokens[0]] if color_tokens else ["gray"]
+                        color_tokens = [color_tokens[0]] if color_tokens else []
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:

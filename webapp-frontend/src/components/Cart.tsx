@@ -29,6 +29,7 @@ type CartItem = {
   image?: string | null;
   size?: string | null;
   color?: string | null;
+  color_variants_count?: number | null;
   in_stock?: boolean;
 };
 
@@ -436,7 +437,7 @@ export default function Cart() {
                       <div style={{ fontWeight: 900 }}>{it.title}</div>
                       <div className="chips" style={{ gap: 6, marginTop: 8 }}>
                         {it.size ? <span className="chip chip-sm">{it.size}</span> : null}
-                        {it.color ? <span className="chip chip-sm">{it.color}</span> : null}
+                        {it.color && Number(it.color_variants_count || 0) > 1 ? <span className="chip chip-sm">{it.color}</span> : null}
                       </div>
                     </div>
 

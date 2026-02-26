@@ -8,7 +8,7 @@ from decimal import Decimal
 from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
 from app.services import media_store
-from app.services.color_detection import normalize_color_to_whitelist, detect_product_colors_from_photos
+from app.services.color_detection import normalize_color_to_whitelist, canonical_color_to_display_name
 
 router = APIRouter(prefix="/products", tags=["products"])
 
@@ -33,72 +33,66 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
     variants = list(getattr(p, "variants", []) or [])
     base_images = [im.url for im in sorted((p.images or []), key=lambda x: ((x.sort or 0), x.id))]
 
-    # Variant-based color groups
+    import_media_meta = getattr(p, "import_media_meta", None) or {}
+    stored_images_by_key = import_media_meta.get("images_by_color_key") if isinstance(import_media_meta, dict) else None
+    general_images = list(import_media_meta.get("general_images") or []) if isinstance(import_media_meta, dict) else []
+
     color_groups: Dict[str, Dict[str, Any]] = {}
     for v in variants:
-        color_name = (v.color.name if getattr(v, "color", None) and v.color and v.color.name else None) or "unknown"
-        grp = color_groups.setdefault(color_name, {"color": color_name, "variant_ids": [], "images": []})
+        raw_name = (v.color.name if getattr(v, "color", None) and v.color and v.color.name else None) or ""
+        color_key = normalize_color_to_whitelist(raw_name)
+        if not color_key:
+            continue
+        grp = color_groups.setdefault(color_key, {"color": color_key, "variant_ids": [], "images": []})
         grp["variant_ids"].append(v.id)
         for u in (v.images or []):
             if u and u not in grp["images"]:
                 grp["images"].append(u)
 
+    if isinstance(stored_images_by_key, dict):
+        for k, imgs in stored_images_by_key.items():
+            key = normalize_color_to_whitelist(k)
+            if not key:
+                continue
+            grp = color_groups.setdefault(key, {"color": key, "variant_ids": [], "images": []})
+            for u in (imgs or []):
+                if u and u not in grp["images"]:
+                    grp["images"].append(u)
+
     for grp in color_groups.values():
-        if not grp["images"]:
-            grp["images"] = list(base_images)
+        if not grp["images"] and general_images:
+            grp["images"] = list(general_images)
 
-    # Collapse to a single color when all groups share essentially the same photoset
-    groups = list(color_groups.values())
-    if len(groups) > 1:
-        ref_images = max(groups, key=lambda g: len(g.get("images") or [])).get("images") or []
-        same_set = all(_images_overlap_ratio(ref_images, g.get("images") or []) >= 0.8 for g in groups)
-        if same_set:
-            merged_ids: list[int] = []
-            for g in groups:
-                merged_ids.extend([int(x) for x in (g.get("variant_ids") or [])])
-            single_color = (getattr(p, "detected_color", None) or groups[0].get("color") or "unknown")
-            color_groups = {
-                str(single_color): {
-                    "color": str(single_color),
-                    "variant_ids": sorted(set(merged_ids)),
-                    "images": list(ref_images or base_images),
-                }
-            }
+    available = list(color_groups.keys())
+    selected = normalize_color_to_whitelist(getattr(p, "detected_color", None)) if getattr(p, "detected_color", None) else ""
+    if selected not in available:
+        selected = available[0] if available else None
 
-    available = sorted([k for k in color_groups.keys() if k and k != "unknown"])
-    selected = available[0] if available else None
-    if selected and selected in color_groups:
-        selected_images = color_groups[selected]["images"]
-    else:
+    selected_images = color_groups.get(selected, {}).get("images") if selected else []
+    if not selected_images:
+        selected_images = list(general_images)
+    if not selected_images and available:
+        selected_images = list(color_groups.get(available[0], {}).get("images") or [])
+    if not selected_images:
         selected_images = list(base_images)
 
-    images_by_color = {str(k): list(v.get("images") or []) for k, v in color_groups.items() if k and k != "unknown"}
-
-    # color_keys: whitelist-normalized from stored variant color names (NO image downloads)
-    color_keys: List[str] = []
-    normalized_images_by_color: Dict[str, List[str]] = {}
-    for orig_name in available:
-        ck = normalize_color_to_whitelist(orig_name)
-        if ck and ck not in color_keys:
-            color_keys.append(ck)
-        imgs = images_by_color.get(orig_name) or []
-        if ck not in normalized_images_by_color:
-            normalized_images_by_color[ck] = []
-        for u in imgs:
-            if u not in normalized_images_by_color[ck]:
-                normalized_images_by_color[ck].append(u)
+    images_by_color = {k: list(v.get("images") or []) for k, v in color_groups.items()}
+    color_key_to_display = {k: canonical_color_to_display_name(k) for k in available}
 
     return {
         "available_colors": available,
         "selected_color": selected,
         "color_variants": sorted(list(color_groups.values()), key=lambda x: str(x.get("color") or "")),
         "selected_color_images": selected_images,
-        # Unified keys (legacy preserved for compatibility)
         "colors": available,
         "default_color": selected,
-        "images_by_color": normalized_images_by_color or images_by_color,
-        # Whitelist-normalized color keys for frontend filtering
-        "color_keys": color_keys,
+        "images_by_color": images_by_color,
+        "color_keys": available,
+        "available_color_keys": available,
+        "selected_color_key": selected,
+        "color_key_to_display": color_key_to_display,
+        "images_by_color_key": images_by_color,
+        "general_images": general_images,
     }
 
 
@@ -161,6 +155,7 @@ def list_products(
                     "stock": v.stock_quantity,
                     "size": (v.size.name if getattr(v, "size", None) and v.size else None),
                     "color": (v.color.name if getattr(v, "color", None) and v.color else None),
+                    "color_key": normalize_color_to_whitelist((v.color.name if getattr(v, "color", None) and v.color else None)),
                     "images": (v.images or None),
                 }
             )
@@ -198,6 +193,11 @@ def list_products(
                 "default_color": color_payload["default_color"],
                 "images_by_color": color_payload["images_by_color"],
                 "color_keys": color_payload["color_keys"],
+                "available_color_keys": color_payload["available_color_keys"],
+                "selected_color_key": color_payload["selected_color_key"],
+                "color_key_to_display": color_payload["color_key_to_display"],
+                "images_by_color_key": color_payload["images_by_color_key"],
+                "general_images": color_payload["general_images"],
                 "variants": variants,
             }
         )
@@ -244,6 +244,11 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
         "default_color": color_payload["default_color"],
         "images_by_color": color_payload["images_by_color"],
         "color_keys": color_payload["color_keys"],
+        "available_color_keys": color_payload["available_color_keys"],
+        "selected_color_key": color_payload["selected_color_key"],
+        "color_key_to_display": color_payload["color_key_to_display"],
+        "images_by_color_key": color_payload["images_by_color_key"],
+        "general_images": color_payload["general_images"],
         "detected_color": getattr(p, "detected_color", None),
         "detected_color_confidence": (float(getattr(p, "detected_color_confidence", 0) or 0) if getattr(p, "detected_color_confidence", None) is not None else None),
         "variants": [
@@ -253,6 +258,7 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
                 "stock": v.stock_quantity,
                 "size": (v.size.name if getattr(v, "size", None) and v.size else None),
                 "color": (v.color.name if getattr(v, "color", None) and v.color else None),
+                "color_key": normalize_color_to_whitelist((v.color.name if getattr(v, "color", None) and v.color else None)),
                 "images": v.images,
             }
             for v in p.variants

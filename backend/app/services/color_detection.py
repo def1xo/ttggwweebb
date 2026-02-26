@@ -34,6 +34,10 @@ _COLOR_ALIASES: Dict[str, str] = {
     "black_single": "black",
     "gray_single": "gray",
     "grey_single": "gray",
+    "графит": "gray",
+    "молочный": "white",
+    "молоко": "white",
+    "айвори": "white",
 }
 
 _CANONICAL_TO_RU: Dict[str, str] = {
@@ -48,6 +52,54 @@ CANONICAL_COLORS: tuple[str, ...] = (
     "yellow", "orange", "red", "burgundy", "pink", "purple", "lavender", "khaki", "cream", "silver",
     "gold", "multi",
 )
+
+_COLOR_PRIORITY: tuple[str, ...] = (
+    "black", "white", "gray", "beige", "brown", "blue", "navy", "sky_blue", "green", "olive", "lime",
+    "yellow", "orange", "red", "burgundy", "pink", "purple", "lavender", "khaki", "cream", "silver", "gold", "multi",
+)
+
+_ALLOWED_COLOR_COMBOS: set[tuple[str, str]] = {
+    ("black", "white"),
+    ("black", "gray"),
+    ("white", "gray"),
+    ("red", "black"),
+    ("blue", "black"),
+    ("green", "black"),
+    ("blue", "white"),
+    ("red", "white"),
+}
+
+
+def normalize_color_key(raw: Optional[str]) -> str:
+    txt = str(raw or "").strip().lower()
+    if not txt:
+        return ""
+    txt = txt.replace("ё", "е")
+    txt = re.sub(r"[()\[\]{}]", " ", txt)
+    txt = re.sub(r"\s+", " ", txt).strip().replace(" ", "_")
+    txt = re.sub(r"_single$", "", txt)
+    txt = _COLOR_ALIASES.get(txt, txt)
+    return txt if txt in CANONICAL_COLORS else ""
+
+
+def normalize_combo_color_key(keys: Sequence[str]) -> str:
+    normalized = []
+    for k in (keys or []):
+        nk = normalize_color_key(k)
+        if nk and nk not in normalized:
+            normalized.append(nk)
+    if not normalized:
+        return ""
+
+    order = {c: i for i, c in enumerate(_COLOR_PRIORITY)}
+    normalized.sort(key=lambda x: order.get(x, 999))
+    if len(normalized) == 1:
+        return normalized[0]
+
+    pair = tuple(normalized[:2])
+    if pair not in _ALLOWED_COLOR_COMBOS:
+        return ""
+    return f"{pair[0]}-{pair[1]}"
 
 
 @dataclass
@@ -166,7 +218,7 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
     if sat_very_low:
         if l >= 90:
             return "white"
-        if l <= 30:
+        if l <= 42:
             return "black"
         if warm and l >= 62 and b >= 10:
             return "beige"
@@ -180,7 +232,7 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
             return "beige"
         if warm and l < 58:
             return "brown"
-        if l < 45:
+        if l < 52:
             return "black"
 
     # hysteresis buffer: yellow hue with low sat goes beige
@@ -288,8 +340,8 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
         by_color[v.color] += 1
         per_image.append({"idx": idx, "color": v.color, "confidence": round(v.confidence, 3), "share": round(v.cluster_share, 3)})
 
-    # 5 photos rule: force single color via weighted majority + tie-breaks
-    if len(valid) == 5:
+    # 5..7 photos rule: force a single non-composite color via weighted majority + tie-breaks
+    if 5 <= len(valid) <= 7:
         top = sorted(score.items(), key=lambda x: x[1], reverse=True)
         c1, s1 = top[0]
         c2, s2 = top[1] if len(top) > 1 else (None, 0.0)
@@ -302,6 +354,21 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
                 alt_conf = sum(v.confidence for v in votes if v.color == c1) / max(1, by_color[c1])
                 if alt_conf < 0.55:
                     c1 = c2
+
+        total_score = max(0.001, sum(score.values()))
+        black_s = float(score.get("black", 0.0))
+        white_s = float(score.get("white", 0.0))
+        purple_s = float(score.get("purple", 0.0)) + float(score.get("pink", 0.0))
+
+        if black_s >= 0.30 * total_score and white_s >= 0.24 * total_score and (black_s + white_s) >= 0.62 * total_score:
+            # explicit business rule: photo sets of 5-7 must map to ONE color only.
+            c1 = "black" if black_s >= white_s else "white"
+        elif c1 == "gray" and purple_s >= 0.24 * total_score:
+            c1 = "purple"
+        elif c1 == "gray" and black_s >= 0.26 * total_score:
+            c1 = "black"
+        elif c1 == "gray" and white_s >= 0.26 * total_score:
+            c1 = "white"
         result = {
             "color": c1,
             "confidence": round(min(0.99, s1 / max(0.001, sum(score.values())) + 0.15), 3),
@@ -313,13 +380,33 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
 
     top = sorted(score.items(), key=lambda x: x[1], reverse=True)
     color = top[0][0]
-    conf = top[0][1] / max(0.001, sum(score.values()))
+    total_score = max(0.001, sum(score.values()))
+    conf = top[0][1] / total_score
+
+    # Anti-false-gray: avoid collapsing black/white/purple mixes into neutral gray.
+    if color == "gray":
+        black_s = float(score.get("black", 0.0))
+        white_s = float(score.get("white", 0.0))
+        purple_s = float(score.get("purple", 0.0)) + float(score.get("pink", 0.0))
+
+        if black_s >= 0.28 * total_score and white_s >= 0.22 * total_score and (black_s + white_s) >= 0.60 * total_score:
+            color = "black-white"
+            conf = max(conf, min(0.98, (black_s + white_s) / total_score))
+        elif purple_s >= 0.22 * total_score and purple_s >= float(score.get("gray", 0.0)) * 0.60:
+            color = "purple"
+            conf = max(conf, min(0.95, purple_s / total_score))
+        elif black_s >= 0.28 * total_score and black_s >= float(score.get("gray", 0.0)) * 0.65:
+            color = "black"
+            conf = max(conf, min(0.95, black_s / total_score))
+        elif white_s >= 0.28 * total_score and white_s >= float(score.get("gray", 0.0)) * 0.65:
+            color = "white"
+            conf = max(conf, min(0.95, white_s / total_score))
 
     if len(top) > 1:
         c2, s2 = top[1]
-        if color != c2 and conf <= 0.68 and (s2 / max(0.001, sum(score.values()))) >= 0.30 and min(top[0][1], s2) >= 1.0:
+        if color != c2 and conf <= 0.68 and (s2 / total_score) >= 0.30 and min(top[0][1], s2) >= 1.0:
             color = "multi"
-            conf = max(conf, s2 / max(0.001, sum(score.values())))
+            conf = max(conf, s2 / total_score)
 
     result = {
         "color": color,
@@ -332,16 +419,23 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
 
 
 def normalize_color_to_whitelist(name: Optional[str]) -> str:
-    raw = (str(name or "").strip().lower() or "gray").replace(" ", "_")
-    raw = re.sub(r"_single$", "", raw)
-    # forbid composite color values like "gray/purple"
-    raw = re.split(r"[/|]+", raw, maxsplit=1)[0].strip() or "gray"
-    raw = _COLOR_ALIASES.get(raw, raw)
-    return raw if raw in CANONICAL_COLORS else "gray"
+    raw = str(name or "").strip().lower()
+    if not raw:
+        return ""
+    if re.search(r"[-/|,;]", raw):
+        parts = [x for x in re.split(r"[-/|,;]+", raw) if str(x).strip()]
+        return normalize_combo_color_key(parts)
+    return normalize_color_key(raw)
 
 
 def canonical_color_to_display_name(name: Optional[str]) -> str:
     canonical = normalize_color_to_whitelist(name)
+    if not canonical:
+        return ""
+    if "-" in canonical:
+        parts = [p for p in canonical.split("-") if p]
+        labels = [_CANONICAL_TO_RU.get(p, p.replace("_", " ")) for p in parts]
+        return "-".join([l.capitalize() if i == 0 else l for i, l in enumerate(labels)])
     if canonical in _CANONICAL_TO_RU:
         return _CANONICAL_TO_RU[canonical]
     return canonical.replace("_", " ")
