@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import api from "../services/api";
 import Skeleton from "../components/Skeleton";
 import StickySearch from "../components/StickySearch";
+import ProductCard from "../components/ProductCard";
 
 type Category = {
   id: number;
@@ -12,68 +13,64 @@ type Category = {
 };
 
 export default function Catalog() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [query, setQuery] = useState(searchParams.get("q") || "");
+  const [debouncedQuery, setDebouncedQuery] = useState(searchParams.get("q") || "");
   const [categories, setCategories] = useState<Category[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [query]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams);
+    if (query.trim()) params.set("q", query.trim());
+    else params.delete("q");
+    if (params.toString() !== searchParams.toString()) setSearchParams(params, { replace: true });
+  }, [query, searchParams, setSearchParams]);
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        const res: any = await api.getCategories();
-        let list: Category[] = [];
+        const [catsRes, prodRes] = await Promise.all([
+          api.getCategories(debouncedQuery ? { q: debouncedQuery } : {}),
+          api.getProducts({ q: debouncedQuery || undefined, page: 1, limit: 25 }),
+        ]);
 
-        if (Array.isArray(res)) list = res;
-        else if (Array.isArray(res?.data)) list = res.data;
-        else if (Array.isArray(res?.items)) list = res.items;
-        else list = [];
+        const catsRaw: any = (catsRes as any)?.data ?? catsRes;
+        const prodsRaw: any = (prodRes as any)?.data ?? prodRes;
 
-        setCategories(list);
-      } catch (e: any) {
+        const catItems = Array.isArray(catsRaw)
+          ? catsRaw
+          : Array.isArray(catsRaw?.items)
+          ? catsRaw.items
+          : [];
+
+        const prodItems = Array.isArray(prodsRaw)
+          ? prodsRaw
+          : Array.isArray(prodsRaw?.items)
+          ? prodsRaw.items
+          : [];
+
+        setCategories(catItems);
+        setProducts(prodItems);
+      } catch {
         setCategories([]);
+        setProducts([]);
         setError("Не удалось загрузить каталог");
       } finally {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [debouncedQuery]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return categories;
-    return categories.filter((c) => String(c.name || "").toLowerCase().includes(q));
-  }, [categories, query]);
-
-  if (loading) {
-    return (
-      <div className="container" style={{ paddingTop: 12 }}>
-        <div className="card">
-          <div className="panel-title">Каталог</div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
-              gap: 12,
-              marginTop: 12,
-            }}
-          >
-            {Array.from({ length: 8 }).map((_, idx) => (
-              <div key={idx} className="card" style={{ padding: 12 }}>
-                <Skeleton height={100} style={{ borderRadius: 8, marginBottom: 8 }} />
-                <Skeleton height={14} width="70%" />
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return <div className="container card">{error}</div>;
-  }
+  const topCategories = useMemo(() => categories.slice(0, 10), [categories]);
 
   return (
     <div className="container" style={{ paddingTop: 12 }}>
@@ -82,17 +79,24 @@ export default function Catalog() {
         <StickySearch
           value={query}
           onChange={setQuery}
-          placeholder="Поиск по категориям…"
-          hint={query ? `Найдено: ${filtered.length} / ${categories.length}` : categories.length ? `Категорий: ${categories.length}` : ""}
+          placeholder="Поиск по категориям и товарам…"
+          hint={query ? `Категорий: ${categories.length}, товаров: ${products.length}` : ""}
         />
 
-        {categories.length === 0 ? (
-          <div className="small-muted" style={{ marginTop: 12 }}>
-            Категорий пока нет
+        {error ? <div className="small-muted" style={{ marginTop: 12 }}>{error}</div> : null}
+
+        <div style={{ marginTop: 12, marginBottom: 8, fontWeight: 700 }}>Категории</div>
+        {loading ? (
+          <div className="categories-grid">
+            {Array.from({ length: 8 }).map((_, idx) => (
+              <div key={idx} className="card" style={{ padding: 12 }}>
+                <Skeleton height={56} style={{ borderRadius: 8 }} />
+              </div>
+            ))}
           </div>
         ) : (
-          <div className="categories-grid" style={{ marginTop: 8 }}>
-            {filtered.map((c) => (
+          <div className="categories-grid fade-in-list">
+            {topCategories.map((c) => (
               <Link
                 key={c.id}
                 to={`/catalog/${c.slug || c.id}`}
@@ -108,10 +112,27 @@ export default function Catalog() {
           </div>
         )}
 
-        {categories.length > 0 && filtered.length === 0 ? (
+        <div style={{ marginTop: 16, marginBottom: 8, fontWeight: 700 }}>Товары</div>
+        {loading ? (
+          <div className="grid-products">
+            {Array.from({ length: 6 }).map((_, idx) => (
+              <div key={idx} className="card" style={{ padding: 10 }}>
+                <Skeleton height={180} style={{ borderRadius: 10, marginBottom: 8 }} />
+                <Skeleton height={14} width="80%" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="grid-products fade-in-list">
+            {products.map((p) => (
+              <ProductCard key={p.id} product={p} />
+            ))}
+          </div>
+        )}
+
+        {!loading && !error && topCategories.length === 0 && products.length === 0 ? (
           <div className="card" style={{ marginTop: 12, padding: 16 }}>
             <div style={{ fontWeight: 800, marginBottom: 6 }}>Ничего не найдено</div>
-            <div className="muted">Попробуй другой запрос или очисти поиск.</div>
           </div>
         ) : null}
       </div>
