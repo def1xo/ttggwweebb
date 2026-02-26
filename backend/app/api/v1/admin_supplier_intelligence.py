@@ -70,6 +70,7 @@ MIN_IMAGE_SIDE_PX = 600
 MIN_IMAGE_BYTES = 40 * 1024
 MAX_ASPECT_RATIO = 5.0
 _COLOR_PREFIX_RE = re.compile(r"^(?:color|colour|col\.?|цвет)\s*[:\-]?\s*", flags=re.IGNORECASE)
+_COLOR_TOKEN_DENYLIST = {"", "unknown", "multi", "none", "null", "n/a", "-", "—"}
 
 
 
@@ -2246,11 +2247,20 @@ def import_products_from_sources(
                     photo_cnt = len([u for u in (image_urls or []) if str(u or "").strip()])
                     color_tokens = [c for c in color_tokens if c and c != "multi"]
                     if 4 <= photo_cnt <= 6:
-                        color_tokens = [color_tokens[0]] if color_tokens else ["unknown"]
+                        color_tokens = [color_tokens[0]] if color_tokens else [""]
                     elif photo_cnt > 6:
-                        color_tokens = color_tokens[:2] if color_tokens else ["unknown"]
+                        color_tokens = color_tokens[:2] if color_tokens else [""]
                     else:
-                        color_tokens = [color_tokens[0]] if color_tokens else ["unknown"]
+                        color_tokens = [color_tokens[0]] if color_tokens else [""]
+
+                logger.info(
+                    "import color debug: source=%r inferred_title=%s inferred_image=%r final=%s title=%r",
+                    src_color,
+                    inferred_from_title,
+                    inferred_from_image,
+                    color_tokens,
+                    title,
+                )
 
                 logger.info(
                     "import color debug: source=%r inferred_title=%s inferred_image=%r final=%s title=%r",
@@ -2445,8 +2455,21 @@ def import_products_from_sources(
 
                 row_color_ids: set[int | None] = set()
                 for color_name in color_tokens:
-                    color = get_or_create_color(color_name) if color_name else None
-                    row_color_ids.add(color.id if color else None)
+                    cn = _normalize_color_token(color_name)
+                    deny_key = cn.strip().lower() if cn else ""
+                    color = None
+                    if deny_key not in _COLOR_TOKEN_DENYLIST:
+                        color = get_or_create_color(cn)
+                    created_color_id = color.id if color else None
+                    row_color_ids.add(created_color_id)
+                    logger.info(
+                        "import color persistence: source=%r normalized=%r created_color_id=%r row_color_ids=%s title=%r",
+                        color_name,
+                        cn,
+                        created_color_id,
+                        sorted(x for x in row_color_ids if x is not None),
+                        title,
+                    )
                     for size_name in size_tokens:
                         size = get_or_create_size(size_name) if size_name else None
                         size_key = str(size_name or "").strip()
