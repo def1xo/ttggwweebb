@@ -5,7 +5,9 @@ import os
 import random
 from decimal import Decimal
 import re
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qsl, urlencode, urlunparse
+
+from PIL import Image
 
 from fastapi import APIRouter, Depends, HTTPException
 from celery.result import AsyncResult
@@ -46,7 +48,6 @@ from app.services.supplier_intelligence import (
     split_size_tokens,
     suggest_sale_price,
     normalize_retail_price,
-    search_image_urls_by_title,
     _extract_size_stock_map as extract_size_stock_map,
 )
 
@@ -64,6 +65,139 @@ ERROR_MESSAGE_MAX_LEN = 500
 IMPORT_FALLBACK_STOCK_QTY = 9_999
 RRC_DISCOUNT_RUB = 300
 MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT = 40
+MAX_PRODUCT_IMAGES_PER_ITEM = 40
+MIN_IMAGE_SIDE_PX = 600
+MIN_IMAGE_BYTES = 40 * 1024
+MAX_ASPECT_RATIO = 5.0
+_COLOR_PREFIX_RE = re.compile(r"^(?:color|colour|col\.?|цвет)\s*[:\-]?\s*", flags=re.IGNORECASE)
+
+
+
+def _normalize_supplier_image_url(url: str | None) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+        if not parsed.scheme or not parsed.netloc:
+            return raw
+        pairs = []
+        for k, v in parse_qsl(parsed.query, keep_blank_values=True):
+            kk = str(k or "").lower()
+            if kk in {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid"}:
+                continue
+            pairs.append((k, v))
+        query = urlencode(sorted(pairs), doseq=True)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, parsed.fragment))
+    except Exception:
+        return raw
+
+
+def _is_supplier_image_allowed(url: str | None, source_url: str | None, supplier_name: str | None) -> bool:
+    u = str(url or "").strip()
+    if not u:
+        return False
+    if not str(u).lower().startswith(("http://", "https://")):
+        return True
+    source_host = str(urlparse(str(source_url or "").strip()).netloc or "").lower()
+    cand_host = str(urlparse(u).netloc or "").lower()
+    if not source_host or not cand_host:
+        return False
+    if cand_host == source_host or cand_host.endswith(f".{source_host}"):
+        return True
+
+    supplier_key = _supplier_key(supplier_name)
+    allowed_suffixes = {"t.me", "telegram.me", "cdn4.cdn-telegram.org", "cdn5.cdn-telegram.org"}
+    if supplier_key == "shop_vkus":
+        allowed_suffixes.update({"telegra.ph", "graph.org", "cdn.jsdelivr.net"})
+
+    return any(cand_host == h or cand_host.endswith(f".{h}") for h in allowed_suffixes)
+
+
+def _inspect_local_image_quality(local_url: str | None) -> tuple[bool, dict[str, float]]:
+    u = str(local_url or "").strip()
+    if not u:
+        return (False, {})
+    if os.path.isabs(u):
+        fp = u
+    elif u.startswith("/"):
+        fp = os.path.abspath(u[1:])
+    else:
+        fp = os.path.abspath(u)
+    if not os.path.isfile(fp):
+        return (False, {})
+    try:
+        size_bytes = int(os.path.getsize(fp) or 0)
+    except Exception:
+        size_bytes = 0
+    if size_bytes < MIN_IMAGE_BYTES:
+        return (False, {"bytes": float(size_bytes)})
+    try:
+        with Image.open(fp) as img:
+            w, h = img.size
+    except Exception:
+        return (False, {"bytes": float(size_bytes)})
+    if w < MIN_IMAGE_SIDE_PX or h < MIN_IMAGE_SIDE_PX:
+        return (False, {"width": float(w), "height": float(h), "bytes": float(size_bytes)})
+    ratio = max(w / max(1, h), h / max(1, w))
+    if ratio > MAX_ASPECT_RATIO:
+        return (False, {"width": float(w), "height": float(h), "bytes": float(size_bytes), "ratio": float(ratio)})
+    return (True, {"width": float(w), "height": float(h), "bytes": float(size_bytes), "ratio": float(ratio)})
+
+
+def _filter_supplier_gallery_images(
+    image_urls: list[str],
+    *,
+    source_url: str,
+    supplier_name: str | None,
+) -> list[str]:
+    out: list[str] = []
+    seen_raw: set[str] = set()
+    seen_norm: set[str] = set()
+    for raw in image_urls or []:
+        if len(out) >= MAX_PRODUCT_IMAGES_PER_ITEM:
+            break
+        cand = str(raw or "").strip()
+        if not cand:
+            continue
+        if cand in seen_raw:
+            continue
+        seen_raw.add(cand)
+
+        if not _is_supplier_image_allowed(cand, source_url, supplier_name):
+            continue
+
+        local_u = _prefer_local_image_url(cand, title_hint=None, source_page_url=source_url)
+        if not local_u:
+            continue
+
+        norm = _normalize_supplier_image_url(cand)
+        if norm and norm in seen_norm:
+            continue
+
+        ok, _meta = _inspect_local_image_quality(local_u)
+        if not ok:
+            continue
+
+        if norm:
+            seen_norm.add(norm)
+        out.append(local_u)
+    return out
+
+
+def _normalize_color_token(raw: str | None) -> str:
+    txt = str(raw or "").strip()
+    if not txt:
+        return ""
+    txt = _COLOR_PREFIX_RE.sub("", txt).strip()
+    txt = re.sub(r"\s+", " ", txt).strip(" -:;,.\t\r\n")
+    if not txt:
+        return ""
+    canonical = normalize_color_to_whitelist(txt, unknown_fallback="")
+    if canonical:
+        return canonical
+    # keep supplier-provided unknown value instead of forcing gray
+    return txt.lower()
 
 
 def _looks_like_direct_image_url(url: str | None) -> bool:
@@ -1890,47 +2024,14 @@ def import_products_from_sources(
                     image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
                     image_url = image_urls[0]
 
-                # Last-resort quality step: if supplier didn't provide any image,
-                # search by title and download a few images to local storage.
-                if not image_urls:
-                    try:
-                        searched = search_image_urls_by_title(title, limit=3)
-                    except Exception:
-                        searched = []
-                    for remote_u in searched:
-                        try:
-                            local_u = media_store.save_remote_image_to_local(remote_u, folder="products/photos", filename_hint=title, referer=src_url)
-                        except Exception:
-                            continue
-                        if local_u and local_u not in image_urls:
-                            image_urls.append(local_u)
-                    if image_urls:
-                        image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
-                        image_url = image_urls[0]
-
-                # auto-enrich item gallery with similar photos from known supplier pool
-                if image_url and known_image_urls:
-                    try:
-                        sim_items = find_similar_images(image_url, known_image_urls, max_hamming_distance=5, limit=8)
-                        for sim in sim_items:
-                            sim_url = str(sim.get("image_url") or "").strip()
-                            if not sim_url:
-                                continue
-                            matched_meta = known_item_by_image_url.get(sim_url) or {}
-                            if _title_key(str(matched_meta.get("title") or "")) != _title_key(title):
-                                continue
-                            final_sim_url = _prefer_local_image_url(sim_url, title_hint=title, source_page_url=src_url)
-                            if not final_sim_url or final_sim_url in image_urls:
-                                continue
-                            image_urls.append(final_sim_url)
-                            if len(image_urls) >= 8:
-                                break
-                    except Exception:
-                        pass
-
                 if image_urls:
                     image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
-                    image_url = image_urls[0]
+                    image_urls = _filter_supplier_gallery_images(
+                        image_urls,
+                        source_url=src_url,
+                        supplier_name=getattr(src, "supplier_name", None),
+                    )
+                    image_url = image_urls[0] if image_urls else None
 
                 if not p:
                     # unique slug fallback
@@ -1955,7 +2056,7 @@ def import_products_from_sources(
                     db.add(p)
                     db.flush()
                     if image_urls:
-                        for idx, img_u in enumerate(image_urls[:8]):
+                        for idx, img_u in enumerate(image_urls[:MAX_PRODUCT_IMAGES_PER_ITEM]):
                             db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
                     created_products += 1
                 else:
@@ -2006,13 +2107,13 @@ def import_products_from_sources(
                             for row in existing_rows:
                                 db.delete(row)
                             db.flush()
-                            for idx, img_u in enumerate(image_urls[:8]):
+                            for idx, img_u in enumerate(image_urls[:MAX_PRODUCT_IMAGES_PER_ITEM]):
                                 db.add(models.ProductImage(product_id=p.id, url=img_u, sort=idx))
                             changed = True
                         else:
                             known_urls = set(existing_urls)
                             next_sort = len(existing_urls)
-                            for img_u in image_urls[:8]:
+                            for img_u in image_urls[:MAX_PRODUCT_IMAGES_PER_ITEM]:
                                 if img_u in known_urls:
                                     continue
                                 db.add(models.ProductImage(product_id=p.id, url=img_u, sort=next_sort))
@@ -2081,7 +2182,7 @@ def import_products_from_sources(
                             )
                             if len(ai_colors) >= 1:
                                 color_tokens = ai_colors
-                color_tokens = [_canonical_color_key(x) for x in color_tokens if _canonical_color_key(x)]
+                color_tokens = [_normalize_color_token(x) for x in color_tokens if _normalize_color_token(x)]
                 if len(color_tokens) == 0:
                     color_tokens = [""]
                 elif is_shop_vkus:
@@ -2091,11 +2192,11 @@ def import_products_from_sources(
                     photo_cnt = len([u for u in (image_urls or []) if str(u or "").strip()])
                     color_tokens = [c for c in color_tokens if c and c != "multi"]
                     if 4 <= photo_cnt <= 6:
-                        color_tokens = [color_tokens[0]] if color_tokens else ["gray"]
+                        color_tokens = [color_tokens[0]] if color_tokens else ["unknown"]
                     elif photo_cnt > 6:
-                        color_tokens = color_tokens[:2] if color_tokens else ["gray"]
+                        color_tokens = color_tokens[:2] if color_tokens else ["unknown"]
                     else:
-                        color_tokens = [color_tokens[0]] if color_tokens else ["gray"]
+                        color_tokens = [color_tokens[0]] if color_tokens else ["unknown"]
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:

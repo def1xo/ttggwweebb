@@ -331,13 +331,15 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
     return result
 
 
-def normalize_color_to_whitelist(name: Optional[str]) -> str:
-    raw = (str(name or "").strip().lower() or "gray").replace(" ", "_")
+def normalize_color_to_whitelist(name: Optional[str], unknown_fallback: str = "gray") -> str:
+    raw = (str(name or "").strip().lower() or str(unknown_fallback or "")).replace(" ", "_")
     raw = re.sub(r"_single$", "", raw)
     # forbid composite color values like "gray/purple"
-    raw = re.split(r"[/|]+", raw, maxsplit=1)[0].strip() or "gray"
+    raw = re.split(r"[/|]+", raw, maxsplit=1)[0].strip() or str(unknown_fallback or "")
     raw = _COLOR_ALIASES.get(raw, raw)
-    return raw if raw in CANONICAL_COLORS else "gray"
+    if raw in CANONICAL_COLORS:
+        return raw
+    return str(unknown_fallback or "")
 
 
 def canonical_color_to_display_name(name: Optional[str]) -> str:

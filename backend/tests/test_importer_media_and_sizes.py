@@ -179,3 +179,37 @@ def test_shop_vkus_sets_supplier_name_and_uses_supplier_specific_extractor(tmp_d
     assert calls and calls[0].startswith("https://shop-vkus.example/item/xyz")
     urls = [x.url for x in (prod.images or [])]
     assert urls == ["https://cdn.example.com/shopvkus-1.jpg", "https://cdn.example.com/shopvkus-2.jpg"]
+
+
+def test_smoke_import_one_product_three_colors_and_many_photos(tmp_db, monkeypatch):
+    db = tmp_db
+
+    raw_images = [f"https://cdn.example.com/img-{i}.jpg" for i in range(1, 21)]
+
+    # keep importer lightweight in test: no network/localization side effects
+    monkeypatch.setattr(importer, "_localize_image_urls", lambda urls, title_hint=None: list(urls))
+    monkeypatch.setattr(importer, "detect_product_color", lambda imgs: {
+        "color": "green",
+        "confidence": 0.9,
+        "debug": {"votes": {"green": len(imgs)}},
+        "per_image": [{"idx": i, "color": "green", "confidence": 0.9, "share": 1.0} for i, _ in enumerate(imgs)],
+    })
+
+    prod = parse_and_save_post(
+        db,
+        {
+            "message_id": 90001,
+            "text": "#sneakers\nModel X\nЦвет: Green, Lime, Зеленый\nРазмеры: 41, 42",
+            "image_urls": raw_images,
+        },
+    )
+    assert prod is not None
+
+    product_images = [x.url for x in (prod.images or [])]
+    assert len(product_images) == 20
+
+    variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == prod.id).all()
+    assert len(variants) >= 6
+    for v in variants:
+        # variant images must be subset of product images
+        assert set(v.images or []).issubset(set(product_images))

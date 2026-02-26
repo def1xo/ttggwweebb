@@ -78,10 +78,14 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
     color_keys: List[str] = []
     normalized_images_by_color: Dict[str, List[str]] = {}
     for orig_name in available:
-        ck = normalize_color_to_whitelist(orig_name)
+        ck = normalize_color_to_whitelist(orig_name, unknown_fallback="")
         if ck and ck not in color_keys:
             color_keys.append(ck)
         imgs = images_by_color.get(orig_name) or []
+        if not ck:
+            # Preserve unknown supplier colors under original key; do not force gray.
+            normalized_images_by_color[str(orig_name)] = list(imgs)
+            continue
         if ck not in normalized_images_by_color:
             normalized_images_by_color[ck] = []
         for u in imgs:
