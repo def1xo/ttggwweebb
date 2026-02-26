@@ -2262,15 +2262,6 @@ def import_products_from_sources(
                     title,
                 )
 
-                logger.info(
-                    "import color debug: source=%r inferred_title=%s inferred_image=%r final=%s title=%r",
-                    src_color,
-                    inferred_from_title,
-                    inferred_from_image,
-                    color_tokens,
-                    title,
-                )
-
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
                     numeric_sizes = [s for s in size_tokens if re.fullmatch(r"\d{2,3}(?:[.,]5)?", s)]
@@ -2446,6 +2437,17 @@ def import_products_from_sources(
                     )
                 if not size_tokens:
                     size_tokens = [""]
+                if not color_tokens:
+                    color_tokens = [""]
+
+                logger.info(
+                    "import variant matrix: size_tokens=%s color_tokens=%s image_urls_preview=%s image_url=%r title=%r",
+                    len(size_tokens),
+                    len(color_tokens),
+                    (image_urls or [])[:2],
+                    image_url,
+                    title,
+                )
 
                 combinations = max(1, len(size_tokens) * len(color_tokens))
                 has_stock_map = bool(stock_map)
@@ -2495,7 +2497,7 @@ def import_products_from_sources(
                             .one_or_none()
                         )
 
-                        variant_images = image_urls or ([image_url] if image_url else None)
+                        variant_images = image_urls or ([image_url] if image_url else [])
 
                         if variant is None:
                             variant = models.ProductVariant(
@@ -2521,6 +2523,15 @@ def import_products_from_sources(
                                 )
                                 if variant is None:
                                     raise
+                            if variant is not None:
+                                logger.info(
+                                    "import variant upsert: variant_id=%r size_id=%r color_id=%r images_count=%s title=%r",
+                                    getattr(variant, "id", None),
+                                    size.id if size else None,
+                                    color.id if color else None,
+                                    len(variant.images or []),
+                                    title,
+                                )
                         else:
                             variant_changed = False
                             if float(variant.price or 0) <= 0 and sale_price > 0:
@@ -2551,6 +2562,14 @@ def import_products_from_sources(
                             if variant_changed:
                                 updated_variants += 1
                             db.add(variant)
+                            logger.info(
+                                "import variant upsert: variant_id=%r size_id=%r color_id=%r images_count=%s title=%r",
+                                getattr(variant, "id", None),
+                                size.id if size else None,
+                                color.id if color else None,
+                                len(variant.images or []),
+                                title,
+                            )
 
                 if has_stock_map:
                     allowed_sizes = {str(k).replace(",", ".").strip() for k in stock_map.keys() if str(k).strip()}
