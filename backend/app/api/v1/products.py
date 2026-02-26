@@ -155,6 +155,7 @@ def list_products(
                     "stock": v.stock_quantity,
                     "size": (v.size.name if getattr(v, "size", None) and v.size else None),
                     "color": (v.color.name if getattr(v, "color", None) and v.color else None),
+                    "color_key": normalize_color_to_whitelist((v.color.name if getattr(v, "color", None) and v.color else None)),
                     "images": (v.images or None),
                 }
             )
@@ -257,6 +258,7 @@ def get_product(product_id: int = Path(...), db: Session = Depends(get_db)):
                 "stock": v.stock_quantity,
                 "size": (v.size.name if getattr(v, "size", None) and v.size else None),
                 "color": (v.color.name if getattr(v, "color", None) and v.color else None),
+                "color_key": normalize_color_to_whitelist((v.color.name if getattr(v, "color", None) and v.color else None)),
                 "images": v.images,
             }
             for v in p.variants

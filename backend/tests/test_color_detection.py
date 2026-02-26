@@ -130,3 +130,7 @@ def test_detect_product_color_for_7_images_still_forces_single(monkeypatch):
     out = cd.detect_product_color(["1", "2", "3", "4", "5", "6", "7"])
     assert out["color"] in {"black", "white", "purple", "gray", "beige", "yellow"}
     assert out["color"] not in {"multi", "black-white"}
+
+
+def test_dark_neutral_prefers_black_over_gray():
+    assert cd.canonical_color_from_lab_hsv(l=41, a=0, b=1, h=0.0, s=0.04, v=0.34) == "black"

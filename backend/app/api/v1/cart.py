@@ -28,6 +28,7 @@ class CartItemOut(BaseModel):
     image: Optional[str] = None
     size: Optional[str] = None
     color: Optional[str] = None
+    color_variants_count: Optional[int] = None
     in_stock: bool = True
 
 
@@ -191,6 +192,20 @@ def _calc_cart(db: Session, user: models.User) -> CartOut:
 
     out_items: List[CartItemOut] = []
     subtotal = Decimal("0.00")
+    product_color_counts: dict[int, int] = {}
+    for ci in items:
+        try:
+            pid0 = int(getattr(getattr(ci, "variant", None), "product_id", 0) or 0)
+            if pid0 > 0 and pid0 not in product_color_counts:
+                q = (
+                    db.query(func.count(func.distinct(models.ProductVariant.color_id)))
+                    .filter(models.ProductVariant.product_id == pid0)
+                    .scalar()
+                )
+                product_color_counts[pid0] = int(q or 0)
+        except Exception:
+            pass
+
     for ci in items:
         v = ci.variant
         p = v.product if v else None
@@ -204,10 +219,13 @@ def _calc_cart(db: Session, user: models.User) -> CartOut:
         # try to get a primary image
         image = None
         try:
-            imgs = getattr(p, "images", None)
-            if isinstance(imgs, list) and imgs:
+            imgs = list(getattr(p, "images", None) or [])
+            if imgs:
                 first = imgs[0]
-                image = first.get("url") if isinstance(first, dict) else str(first)
+                if isinstance(first, dict):
+                    image = first.get("url")
+                else:
+                    image = getattr(first, "url", None) or str(first)
         except Exception:
             image = None
 
@@ -232,6 +250,7 @@ def _calc_cart(db: Session, user: models.User) -> CartOut:
                 image=image,
                 size=size,
                 color=color,
+                color_variants_count=product_color_counts.get(int(getattr(p, "id", 0) or 0)),
                 in_stock=in_stock,
             )
         )

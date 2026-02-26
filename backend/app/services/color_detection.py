@@ -218,7 +218,7 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
     if sat_very_low:
         if l >= 90:
             return "white"
-        if l <= 30:
+        if l <= 42:
             return "black"
         if warm and l >= 62 and b >= 10:
             return "beige"
@@ -232,7 +232,7 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
             return "beige"
         if warm and l < 58:
             return "brown"
-        if l < 45:
+        if l < 52:
             return "black"
 
     # hysteresis buffer: yellow hue with low sat goes beige

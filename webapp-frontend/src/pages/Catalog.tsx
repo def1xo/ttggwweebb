@@ -12,7 +12,7 @@ type Category = {
 };
 
 export default function Catalog() {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const [query, setQuery] = useState(searchParams.get("q") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchParams.get("q") || "");
   const [categories, setCategories] = useState<Category[]>([]);
@@ -25,18 +25,15 @@ export default function Catalog() {
   }, [query]);
 
   useEffect(() => {
-    const params = new URLSearchParams(searchParams);
-    if (query.trim()) params.set("q", query.trim());
-    else params.delete("q");
-    if (params.toString() !== searchParams.toString()) setSearchParams(params, { replace: true });
-  }, [query, searchParams, setSearchParams]);
-
-  useEffect(() => {
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        const catsRes = await api.getCategories(debouncedQuery ? { q: debouncedQuery } : {});
+        const [catsRes, prodRes] = await Promise.all([
+          api.getCategories(debouncedQuery ? { q: debouncedQuery } : {}),
+          api.getProducts({ q: debouncedQuery || undefined, page: 1, limit: 24 }),
+        ]);
+
         const catsRaw: any = (catsRes as any)?.data ?? catsRes;
         const catItems = Array.isArray(catsRaw)
           ? catsRaw
