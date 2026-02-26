@@ -34,6 +34,10 @@ _COLOR_ALIASES: Dict[str, str] = {
     "black_single": "black",
     "gray_single": "gray",
     "grey_single": "gray",
+    "графит": "gray",
+    "молочный": "white",
+    "молоко": "white",
+    "айвори": "white",
 }
 
 _CANONICAL_TO_RU: Dict[str, str] = {
@@ -48,6 +52,54 @@ CANONICAL_COLORS: tuple[str, ...] = (
     "yellow", "orange", "red", "burgundy", "pink", "purple", "lavender", "khaki", "cream", "silver",
     "gold", "multi",
 )
+
+_COLOR_PRIORITY: tuple[str, ...] = (
+    "black", "white", "gray", "beige", "brown", "blue", "navy", "sky_blue", "green", "olive", "lime",
+    "yellow", "orange", "red", "burgundy", "pink", "purple", "lavender", "khaki", "cream", "silver", "gold", "multi",
+)
+
+_ALLOWED_COLOR_COMBOS: set[tuple[str, str]] = {
+    ("black", "white"),
+    ("black", "gray"),
+    ("white", "gray"),
+    ("red", "black"),
+    ("blue", "black"),
+    ("green", "black"),
+    ("blue", "white"),
+    ("red", "white"),
+}
+
+
+def normalize_color_key(raw: Optional[str]) -> str:
+    txt = str(raw or "").strip().lower()
+    if not txt:
+        return ""
+    txt = txt.replace("ё", "е")
+    txt = re.sub(r"[()\[\]{}]", " ", txt)
+    txt = re.sub(r"\s+", " ", txt).strip().replace(" ", "_")
+    txt = re.sub(r"_single$", "", txt)
+    txt = _COLOR_ALIASES.get(txt, txt)
+    return txt if txt in CANONICAL_COLORS else ""
+
+
+def normalize_combo_color_key(keys: Sequence[str]) -> str:
+    normalized = []
+    for k in (keys or []):
+        nk = normalize_color_key(k)
+        if nk and nk not in normalized:
+            normalized.append(nk)
+    if not normalized:
+        return ""
+
+    order = {c: i for i, c in enumerate(_COLOR_PRIORITY)}
+    normalized.sort(key=lambda x: order.get(x, 999))
+    if len(normalized) == 1:
+        return normalized[0]
+
+    pair = tuple(normalized[:2])
+    if pair not in _ALLOWED_COLOR_COMBOS:
+        return ""
+    return f"{pair[0]}-{pair[1]}"
 
 
 @dataclass
@@ -332,16 +384,23 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
 
 
 def normalize_color_to_whitelist(name: Optional[str]) -> str:
-    raw = (str(name or "").strip().lower() or "gray").replace(" ", "_")
-    raw = re.sub(r"_single$", "", raw)
-    # forbid composite color values like "gray/purple"
-    raw = re.split(r"[/|]+", raw, maxsplit=1)[0].strip() or "gray"
-    raw = _COLOR_ALIASES.get(raw, raw)
-    return raw if raw in CANONICAL_COLORS else "gray"
+    raw = str(name or "").strip().lower()
+    if not raw:
+        return ""
+    if re.search(r"[-/|,;]", raw):
+        parts = [x for x in re.split(r"[-/|,;]+", raw) if str(x).strip()]
+        return normalize_combo_color_key(parts)
+    return normalize_color_key(raw)
 
 
 def canonical_color_to_display_name(name: Optional[str]) -> str:
     canonical = normalize_color_to_whitelist(name)
+    if not canonical:
+        return ""
+    if "-" in canonical:
+        parts = [p for p in canonical.split("-") if p]
+        labels = [_CANONICAL_TO_RU.get(p, p.replace("_", " ")) for p in parts]
+        return "-".join([l.capitalize() if i == 0 else l for i, l in enumerate(labels)])
     if canonical in _CANONICAL_TO_RU:
         return _CANONICAL_TO_RU[canonical]
     return canonical.replace("_", " ")
