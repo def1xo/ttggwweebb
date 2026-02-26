@@ -354,6 +354,16 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
                 alt_conf = sum(v.confidence for v in votes if v.color == c1) / max(1, by_color[c1])
                 if alt_conf < 0.55:
                     c1 = c2
+
+        total_score = max(0.001, sum(score.values()))
+        black_s = float(score.get("black", 0.0))
+        white_s = float(score.get("white", 0.0))
+        purple_s = float(score.get("purple", 0.0)) + float(score.get("pink", 0.0))
+
+        if black_s >= 0.30 * total_score and white_s >= 0.24 * total_score and (black_s + white_s) >= 0.62 * total_score:
+            c1 = "black-white"
+        elif c1 == "gray" and purple_s >= 0.24 * total_score:
+            c1 = "purple"
         result = {
             "color": c1,
             "confidence": round(min(0.99, s1 / max(0.001, sum(score.values())) + 0.15), 3),
@@ -365,13 +375,33 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
 
     top = sorted(score.items(), key=lambda x: x[1], reverse=True)
     color = top[0][0]
-    conf = top[0][1] / max(0.001, sum(score.values()))
+    total_score = max(0.001, sum(score.values()))
+    conf = top[0][1] / total_score
+
+    # Anti-false-gray: avoid collapsing black/white/purple mixes into neutral gray.
+    if color == "gray":
+        black_s = float(score.get("black", 0.0))
+        white_s = float(score.get("white", 0.0))
+        purple_s = float(score.get("purple", 0.0)) + float(score.get("pink", 0.0))
+
+        if black_s >= 0.28 * total_score and white_s >= 0.22 * total_score and (black_s + white_s) >= 0.60 * total_score:
+            color = "black-white"
+            conf = max(conf, min(0.98, (black_s + white_s) / total_score))
+        elif purple_s >= 0.22 * total_score and purple_s >= float(score.get("gray", 0.0)) * 0.60:
+            color = "purple"
+            conf = max(conf, min(0.95, purple_s / total_score))
+        elif black_s >= 0.28 * total_score and black_s >= float(score.get("gray", 0.0)) * 0.65:
+            color = "black"
+            conf = max(conf, min(0.95, black_s / total_score))
+        elif white_s >= 0.28 * total_score and white_s >= float(score.get("gray", 0.0)) * 0.65:
+            color = "white"
+            conf = max(conf, min(0.95, white_s / total_score))
 
     if len(top) > 1:
         c2, s2 = top[1]
-        if color != c2 and conf <= 0.68 and (s2 / max(0.001, sum(score.values()))) >= 0.30 and min(top[0][1], s2) >= 1.0:
+        if color != c2 and conf <= 0.68 and (s2 / total_score) >= 0.30 and min(top[0][1], s2) >= 1.0:
             color = "multi"
-            conf = max(conf, s2 / max(0.001, sum(score.values())))
+            conf = max(conf, s2 / total_score)
 
     result = {
         "color": color,
