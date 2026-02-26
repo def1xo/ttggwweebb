@@ -1,6 +1,6 @@
 
 from typing import List, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 
@@ -10,9 +10,13 @@ from app.db import models
 router = APIRouter(tags=["categories"])
 
 @router.get("/categories")
-def list_categories(db: Session = Depends(get_db)):
+def list_categories(q: str | None = Query(None), db: Session = Depends(get_db)):
     try:
-        cats = db.query(models.Category).order_by(models.Category.id.asc()).all()
+        query = db.query(models.Category)
+        if q and q.strip():
+            search = f"%{q.strip()}%"
+            query = query.filter(or_(models.Category.name.ilike(search), models.Category.slug.ilike(search)))
+        cats = query.order_by(models.Category.id.asc()).all()
     except Exception:
         # Keep catalog shell renderable even when DB schema/connection is temporarily broken.
         return []

@@ -2,7 +2,7 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Body
 from fastapi import Path, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from decimal import Decimal
 
 from app.api.dependencies import get_db, get_current_admin_user
@@ -107,24 +107,33 @@ def list_products(
     category_id: Optional[int] = Query(None),
     q: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=1, le=500),
+    limit: int = Query(25, ge=1, le=50),
+    per_page: Optional[int] = Query(None, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
+    effective_limit = min(50, int(per_page or limit or 25))
     try:
         query = db.query(models.Product).filter(models.Product.visible == True)
         if category_id:
             query = query.filter(models.Product.category_id == category_id)
         if q:
-            query = query.filter(models.Product.title.ilike(f"%{q}%"))
+            search = f"%{q.strip()}%"
+            query = query.filter(
+                or_(
+                    models.Product.title.ilike(search),
+                    models.Product.slug.ilike(search),
+                    models.Product.variants.any(models.ProductVariant.sku.ilike(search)),
+                )
+            )
         total = query.count()
         items = (
             query.order_by(models.Product.created_at.desc())
-            .offset((page - 1) * per_page)
-            .limit(per_page)
+            .offset((page - 1) * effective_limit)
+            .limit(effective_limit)
             .all()
         )
     except Exception:
-        return {"items": [], "total": 0, "page": page, "per_page": per_page}
+        return {"items": [], "total": 0, "page": page, "limit": effective_limit, "pages": 0}
     result = []
     for p in items:
         color_payload = _build_color_payload(p)
@@ -192,7 +201,8 @@ def list_products(
                 "variants": variants,
             }
         )
-    return {"items": result, "total": total, "page": page, "per_page": per_page}
+    pages = (total + effective_limit - 1) // effective_limit if total > 0 else 0
+    return {"items": result, "total": total, "page": page, "limit": effective_limit, "pages": pages}
 
 
 @router.get("/{product_id}")
