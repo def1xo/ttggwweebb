@@ -119,6 +119,16 @@ function imagesForColor(p: any, color: string | null): string[] {
     }
   }
 
+  if (selected && Array.isArray(p?.variants)) {
+    const fromVariants = p.variants
+      .filter((v: any) => normalizeVariantColorKey(v) === selected)
+      .flatMap((v: any) => [v?.images, v?.image_urls])
+      .flatMap((item: unknown) => splitImageCandidates(item))
+      .map((item) => normalizeMediaUrl(item))
+      .filter((item): item is string => Boolean(item));
+    if (fromVariants.length) return uniq(fromVariants);
+  }
+
   const general = splitImageCandidates(p?.general_images)
     .map((item) => normalizeMediaUrl(item))
     .filter((item): item is string => Boolean(item));
