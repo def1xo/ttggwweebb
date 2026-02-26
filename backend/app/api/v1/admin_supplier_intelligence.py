@@ -2183,14 +2183,6 @@ def import_products_from_sources(
                     )
                     db.add(p)
                     db.flush()
-                    inserted_images = _sync_product_images(db, p.id, image_urls)
-                    logger.info(
-                        "import product_images: product_id=%s inserted=%s title=%r preview=%s",
-                        p.id,
-                        inserted_images,
-                        title,
-                        image_urls[:2],
-                    )
                     created_products += 1
                 else:
                     changed = False
@@ -2230,18 +2222,17 @@ def import_products_from_sources(
                     if next_media_meta != prev_media_meta:
                         p.import_media_meta = next_media_meta
                         changed = True
-                    inserted_images = _sync_product_images(db, p.id, image_urls)
-                    logger.info(
-                        "import product_images: product_id=%s inserted=%s title=%r preview=%s",
-                        p.id,
-                        inserted_images,
-                        title,
-                        image_urls[:2],
-                    )
                     changed = True
                     if changed:
                         db.add(p)
                         updated_products += 1
+
+                product = p
+                image_urls = _extract_image_urls(it if isinstance(it, dict) else {})
+                if not image_urls:
+                    logger.info("import raw image fields: image_urls=%r images=%r image=%r photo=%r photos=%r", it.get("image_urls"), it.get("images"), it.get("image"), it.get("photo"), it.get("photos"))
+                inserted = _sync_product_images(db, product.id, image_urls)
+                logger.info("import product_images: product_id=%s inserted=%s title=%r preview=%s", product.id, inserted, title, image_urls[:2])
 
                 try:
                     sig = image_print_signature_from_url(image_url) if image_url else None
