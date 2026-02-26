@@ -70,3 +70,32 @@ def test_detect_product_colors_from_photos_returns_canonical(monkeypatch):
     out = cd.detect_product_colors_from_photos(["x"])
     assert out["color"] == "gray"
     assert out["display_color"] == "серый"
+
+
+def test_detect_product_color_avoids_false_gray_for_black_white_mix(monkeypatch):
+    class R:
+        def __init__(self, color, conf=0.6):
+            self.color = color
+            self.confidence = conf
+            self.cluster_share = 0.6
+            self.sat = 0.18
+            self.light = 62
+            self.lab_a = 1
+            self.lab_b = 1
+            self.debug = {}
+
+    seq = [
+        R("gray", 0.62),
+        R("black", 0.61),
+        R("white", 0.59),
+        R("black", 0.57),
+        R("white", 0.55),
+    ]
+
+    def fake_detect(_src):
+        return seq.pop(0)
+
+    monkeypatch.setattr(cd, "detect_color_from_image_source", fake_detect)
+    out = cd.detect_product_color(["1", "2", "3", "4", "5"])
+    assert out["color"] == "black-white"
+    assert out["color"] != "gray"

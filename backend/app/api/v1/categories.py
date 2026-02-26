@@ -15,7 +15,19 @@ def list_categories(q: str | None = Query(None), db: Session = Depends(get_db)):
         query = db.query(models.Category)
         if q and q.strip():
             search = f"%{q.strip()}%"
-            query = query.filter(or_(models.Category.name.ilike(search), models.Category.slug.ilike(search)))
+            query = (
+                query
+                .outerjoin(models.Product, models.Product.category_id == models.Category.id)
+                .filter(
+                    or_(
+                        models.Category.name.ilike(search),
+                        models.Category.slug.ilike(search),
+                        models.Product.title.ilike(search),
+                        models.Product.slug.ilike(search),
+                    )
+                )
+                .distinct()
+            )
         cats = query.order_by(models.Category.id.asc()).all()
     except Exception:
         # Keep catalog shell renderable even when DB schema/connection is temporarily broken.

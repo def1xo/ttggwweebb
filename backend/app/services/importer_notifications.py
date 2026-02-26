@@ -48,6 +48,9 @@ URL_RE = re.compile(r'https?://[^\s<>"\']+', flags=re.IGNORECASE)
 IMPORT_FALLBACK_STOCK_QTY = 9_999
 RRC_DISCOUNT_RUB = Decimal("300")
 LOCALIZE_IMPORTED_IMAGES = str(os.getenv("LOCALIZE_IMPORTED_IMAGES", "1")).strip().lower() not in {"0", "false", "no", "off"}
+MIN_IMAGE_SIDE_PX = 600
+MIN_IMAGE_FILE_SIZE_BYTES = 40 * 1024
+MAX_IMAGE_ASPECT_RATIO = 5.0
 
 
 def _send_telegram_message(chat_id: str, text: str) -> Optional[Dict[str, Any]]:
@@ -428,6 +431,47 @@ def _expand_gallery_url_to_images(url: str) -> List[str]:
     return []
 
 
+def _image_passes_quality_gate(url: str) -> bool:
+    u = str(url or "").strip()
+    if not u:
+        return False
+
+    if u.lower().startswith(("http://", "https://")):
+        try:
+            head = requests.head(u, timeout=6, allow_redirects=True, headers={"User-Agent": "TGImporter/1.0"})
+            clen = int(head.headers.get("Content-Length") or 0)
+            if clen and clen < MIN_IMAGE_FILE_SIZE_BYTES:
+                return False
+        except Exception:
+            pass
+
+    try:
+        from PIL import Image
+        from io import BytesIO
+
+        if u.lower().startswith(("http://", "https://")):
+            resp = requests.get(u, timeout=10, stream=True, headers={"User-Agent": "TGImporter/1.0"})
+            resp.raise_for_status()
+            data = resp.content
+            if data and len(data) < MIN_IMAGE_FILE_SIZE_BYTES:
+                return False
+            img = Image.open(BytesIO(data))
+        else:
+            local_path = u.lstrip("/") if u.startswith("/") else u
+            img = Image.open(local_path)
+
+        w, h = img.size
+        if min(w, h) < MIN_IMAGE_SIDE_PX:
+            return False
+        ratio = max(w, h) / max(1, min(w, h))
+        if ratio > MAX_IMAGE_ASPECT_RATIO:
+            return False
+    except Exception:
+        return True
+
+    return True
+
+
 def _normalize_image_urls(payload: Dict[str, Any]) -> List[str]:
     urls: List[str] = []
     urls.extend(_split_image_candidates(payload.get("image_urls")))
@@ -464,9 +508,15 @@ def _normalize_image_urls(payload: Dict[str, Any]) -> List[str]:
             thumbs.append(u)
         else:
             out.append(u)
-    if not out:
-        out = thumbs
-    return out
+    quality = [u for u in out if _image_passes_quality_gate(u)]
+    if quality:
+        return quality
+    thumbs_quality = [u for u in thumbs if _image_passes_quality_gate(u)]
+    if thumbs_quality:
+        return thumbs_quality
+    if out:
+        return out
+    return thumbs
 
 def _localize_image_urls(urls: List[str], title_hint: Optional[str] = None) -> List[str]:
     out: List[str] = []

@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, urlparse
 
 import requests
 
-from app.services.color_detection import detect_product_color
+from app.services.color_detection import detect_product_color, normalize_color_to_whitelist
 
 
 def _safe_timeout(timeout_sec: int | float) -> tuple[float, float]:
@@ -1354,8 +1354,13 @@ def image_print_signature_from_url(url: str, timeout_sec: int = 20) -> str | Non
 def dominant_color_name_from_url(url: str, timeout_sec: int = 20) -> str | None:
     try:
         result = detect_product_color([url])
-        color = result.get("color") if isinstance(result, dict) else None
-        return str(color) if color else None
+        if not isinstance(result, dict):
+            return None
+        confidence = float(result.get("confidence") or 0.0)
+        if confidence < 0.55:
+            return None
+        color = normalize_color_to_whitelist(result.get("color"))
+        return color or None
     except Exception:
         return None
 
