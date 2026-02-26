@@ -1548,6 +1548,46 @@ def import_products_from_sources(
     def _is_placeholder_title(raw_title: str | None) -> bool:
         return _title_key(raw_title).startswith("позиция из tg #")
 
+    def _infer_color_from_title(title: str) -> list[str]:
+        txt = str(title or "").strip().lower()
+        if not txt:
+            return []
+
+        color_patterns: list[tuple[str, str]] = [
+            ("черный", r"ч[её]рн(?:ый|ая|ое|ые)?|black"),
+            ("белый", r"бел(?:ый|ая|ое|ые)?|white"),
+            ("серый", r"сер(?:ый|ая|ое|ые)?|grey|gray"),
+            ("красный", r"красн(?:ый|ая|ое|ые)?|red"),
+            ("синий", r"син(?:ий|яя|ее|ие)?|blue"),
+            ("голубой", r"голуб(?:ой|ая|ое|ые)?|sky\s*blue|light\s*blue"),
+            ("зеленый", r"зел[её]н(?:ый|ая|ое|ые)?|green"),
+            ("бежевый", r"беж(?:ев(?:ый|ая|ое|ые)?)?|beige|sand"),
+            ("коричневый", r"коричнев(?:ый|ая|ое|ые)?|brown"),
+            ("розовый", r"розов(?:ый|ая|ое|ые)?|pink"),
+            ("фиолетовый", r"фиолетов(?:ый|ая|ое|ые)?|purple|violet"),
+            ("желтый", r"ж[её]лт(?:ый|ая|ое|ые)?|yellow"),
+            ("оранжевый", r"оранжев(?:ый|ая|ое|ые)?|orange"),
+        ]
+
+        hits: list[tuple[int, str]] = []
+        for canonical, pattern in color_patterns:
+            m = re.search(rf"(?<!\w)(?:{pattern})(?!\w)", txt, flags=re.IGNORECASE)
+            if not m:
+                continue
+            if canonical in [name for _, name in hits]:
+                continue
+            hits.append((int(m.start()), canonical))
+
+        hits.sort(key=lambda x: x[0])
+        out: list[str] = []
+        for _, token in hits:
+            normalized = _normalize_color_token(token)
+            if normalized and normalized not in out:
+                out.append(normalized)
+            if len(out) >= 2:
+                break
+        return out
+
 
     def _find_existing_supplier_product(supplier_key: str, supplier_name: str | None, title_key: str) -> models.Product | None:
         cache_key = (supplier_key, title_key)
@@ -2164,7 +2204,21 @@ def import_products_from_sources(
                 # - for shop_vkus, allow fallback color inference from item text/gallery only when 2+ strong colors are detected.
                 is_shop_vkus = _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None)
                 src_color = it.get("color")
+                inferred_from_title: list[str] = []
+                inferred_from_image = ""
                 color_tokens = _split_color_tokens(src_color)
+                if not color_tokens:
+                    inferred_from_title = _infer_color_from_title(title)
+                    if inferred_from_title:
+                        color_tokens = inferred_from_title[:2]
+                    elif image_urls:
+                        try:
+                            image_color = dominant_color_name_from_url(image_urls[0])
+                        except Exception:
+                            image_color = ""
+                        inferred_from_image = _normalize_color_token(image_color)
+                        if inferred_from_image:
+                            color_tokens = [inferred_from_image]
                 if is_shop_vkus:
                     if color_tokens:
                         color_tokens = color_tokens[:2]
@@ -2197,6 +2251,15 @@ def import_products_from_sources(
                         color_tokens = color_tokens[:2] if color_tokens else ["unknown"]
                     else:
                         color_tokens = [color_tokens[0]] if color_tokens else ["unknown"]
+
+                logger.info(
+                    "import color debug: source=%r inferred_title=%s inferred_image=%r final=%s title=%r",
+                    src_color,
+                    inferred_from_title,
+                    inferred_from_image,
+                    color_tokens,
+                    title,
+                )
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
