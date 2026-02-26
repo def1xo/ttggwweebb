@@ -2001,6 +2001,18 @@ def import_products_from_sources(
                     # keep unresolved placeholders out of catalog; they are only media donors
                     continue
 
+                image_urls = _extract_image_urls(it if isinstance(it, dict) else {})
+                if not image_urls:
+                    logger.info(
+                        "import raw image fields: image_urls=%r images=%r image=%r photo=%r photos=%r",
+                        it.get("image_urls"),
+                        it.get("images"),
+                        it.get("image"),
+                        it.get("photo"),
+                        it.get("photos"),
+                    )
+                image_url = image_urls[0] if image_urls else ""
+
                 base_title_key = _title_key(title)
                 title_for_group = _group_title(title)
                 min_dropship = title_min_dropship.get(base_title_key)
@@ -2045,17 +2057,6 @@ def import_products_from_sources(
                 if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title):
                     ds_price = max(float(ds_price or 0), 1800.0)
                 sale_price = pick_sale_price(title, ds_price, min_dropship_price=min_dropship, rrc_price=(it.get("rrc_price") if isinstance(it, dict) else None))
-                image_urls = _extract_image_urls(it if isinstance(it, dict) else {})
-                if not image_urls:
-                    logger.info(
-                        "import raw image fields: image_urls=%r images=%r image=%r photo=%r photos=%r",
-                        it.get("image_urls"),
-                        it.get("images"),
-                        it.get("image"),
-                        it.get("photo"),
-                        it.get("photos"),
-                    )
-                image_url = image_urls[0] if image_urls else ""
                 photo_cnt = len(image_urls)
                 logger.info(
                     "import normalized images: image_urls_preview=%s image_url=%r photo_cnt=%s",
@@ -2228,9 +2229,6 @@ def import_products_from_sources(
                         updated_products += 1
 
                 product = p
-                image_urls = _extract_image_urls(it if isinstance(it, dict) else {})
-                if not image_urls:
-                    logger.info("import raw image fields: image_urls=%r images=%r image=%r photo=%r photos=%r", it.get("image_urls"), it.get("images"), it.get("image"), it.get("photo"), it.get("photos"))
                 inserted = _sync_product_images(db, product.id, image_urls)
                 logger.info("import product_images: product_id=%s inserted=%s title=%r preview=%s", product.id, inserted, title, image_urls[:2])
 
