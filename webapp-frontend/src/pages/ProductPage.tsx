@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
+import Skeleton from "../components/Skeleton";
 import { addCartItem, getProduct, getRelatedProducts, trackAnalyticsEvent } from "../services/api";
 import ColorSwatch from "../components/ColorSwatch";
 import { useToast } from "../contexts/ToastContext";
@@ -78,6 +79,8 @@ export default function ProductPage() {
   const { isFavorite, toggle } = useFavorites();
 
   const [product, setProduct] = useState<any>(null);
+  const [loadingProduct, setLoadingProduct] = useState<boolean>(true);
+  const [heroLoaded, setHeroLoaded] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
   const [selectedColor, setSelectedColor] = useState<string | null>(null);
@@ -90,12 +93,15 @@ export default function ProductPage() {
 
   useEffect(() => {
     (async () => {
+      setLoadingProduct(true);
       try {
         const p: any = await getProduct(String(id || ""));
         setProduct(p);
         if (p?.selected_color) setSelectedColor(String(p.selected_color));
       } catch {
         setProduct(null);
+      } finally {
+        setLoadingProduct(false);
       }
     })();
   }, [id]);
@@ -134,6 +140,7 @@ export default function ProductPage() {
 
   useEffect(() => {
     setActiveIndex(0);
+    setHeroLoaded(false);
   }, [product?.id]);
 
   useEffect(() => {
@@ -385,6 +392,19 @@ export default function ProductPage() {
     }
   };
 
+  if (loadingProduct) {
+    return (
+      <div className="container" style={{ paddingTop: 12 }}>
+        <div className="card catalog-block-fade" style={{ padding: 14 }}>
+          <Skeleton height={36} width="40%" style={{ marginBottom: 10 }} />
+          <Skeleton height={320} style={{ borderRadius: 14, marginBottom: 12 }} />
+          <Skeleton height={22} width="30%" style={{ marginBottom: 8 }} />
+          <Skeleton height={16} width="90%" />
+        </div>
+      </div>
+    );
+  }
+
   if (!product) {
     return (
       <div className="container" style={{ paddingTop: 12 }}>
@@ -427,7 +447,8 @@ export default function ProductPage() {
           onTouchStart={onTouchStart}
           onTouchEnd={onTouchEnd}
         >
-          <img key={`${activeImage}_${slideDir}`} className={`product-detail-hero product-detail-hero--${slideDir} image-fade-in`} src={activeImage} alt={product.title} style={{ cursor: "zoom-in" }} loading="eager" onClick={() => setIsImageViewerOpen(true)} />
+          {!heroLoaded ? <Skeleton height={320} style={{ borderRadius: 14, marginBottom: 8 }} /> : null}
+          <img key={`${activeImage}_${slideDir}`} className={`product-detail-hero product-detail-hero--${slideDir} ${heroLoaded ? "image-fade-in" : ""}`} src={activeImage} alt={product.title} style={{ cursor: "zoom-in", display: heroLoaded ? "block" : "none" }} loading="eager" onLoad={() => setHeroLoaded(true)} onClick={() => setIsImageViewerOpen(true)} />
 
           {images.length > 1 ? (
             <div className="thumb-grid" style={{ marginTop: 10 }}>

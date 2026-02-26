@@ -6,9 +6,7 @@ import StickySearch from "../components/StickySearch";
 import Skeleton from "../components/Skeleton";
 
 type SortMode = "popular" | "price_asc" | "price_desc" | "title_asc";
-
 type ProductAny = any;
-
 type Option = { value: string; label: string };
 
 function pickPrice(p: ProductAny): number {
@@ -16,33 +14,9 @@ function pickPrice(p: ProductAny): number {
   return Number.isFinite(v) ? v : 0;
 }
 
-function extractValues(products: ProductAny[]): string[] {
-  const set = new Set<string>();
-  for (const p of products) {
-    const variants = Array.isArray(p?.variants) ? p.variants : [];
-    for (const v of variants) {
-      const raw = v?.size?.name ?? v?.size;
-      const value = String(raw ?? "").trim();
-      if (value) set.add(value);
-    }
-  }
-  return Array.from(set).sort((a, b) => a.localeCompare(b, "ru"));
-}
-
-function CustomSelect({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: Option[];
-  onChange: (v: string) => void;
-}) {
+function CustomSelect({ label, value, options, onChange }: { label: string; value: string; options: Option[]; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
-
   useEffect(() => {
     const onPointerDown = (e: MouseEvent) => {
       if (!rootRef.current) return;
@@ -51,41 +25,15 @@ function CustomSelect({
     document.addEventListener("mousedown", onPointerDown);
     return () => document.removeEventListener("mousedown", onPointerDown);
   }, []);
-
   const selected = options.find((o) => o.value === value) || options[0];
-
   return (
     <div className="custom-select" ref={rootRef}>
-      <button
-        type="button"
-        className="custom-select-trigger"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        <span className="small-muted">{label}</span>
-        <span>{selected?.label || "—"}</span>
+      <button type="button" className="custom-select-trigger" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className="small-muted">{label}</span><span>{selected?.label || "—"}</span>
       </button>
-      {open ? (
-        <div className="custom-select-menu" role="listbox" aria-label={label}>
-          {options.map((opt) => {
-            const active = opt.value === value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                className="custom-select-option"
-                data-active={active ? "true" : "false"}
-                onClick={() => {
-                  onChange(opt.value);
-                  setOpen(false);
-                }}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
+      {open ? <div className="custom-select-menu" role="listbox" aria-label={label}>{options.map((opt) => (
+        <button key={opt.value} type="button" className="custom-select-option" data-active={opt.value === value ? "true" : "false"} onClick={() => { onChange(opt.value); setOpen(false); }}>{opt.label}</button>
+      ))}</div> : null}
     </div>
   );
 }
@@ -100,315 +48,124 @@ export default function CategoryView() {
   const [loadingProducts, setLoadingProducts] = useState<boolean>(false);
   const [query, setQuery] = useState(() => searchParams.get("q") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(() => searchParams.get("q") || "");
-  const [page, setPage] = useState<number>(() => {
-    const p = Number(searchParams.get("page") || 1);
-    return Number.isFinite(p) && p > 0 ? Math.floor(p) : 1;
-  });
+  const [page, setPage] = useState<number>(() => Math.max(1, Number(searchParams.get("page") || 1) || 1));
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(0);
   const [sortMode, setSortMode] = useState<SortMode>("popular");
-  const [sizeFilter, setSizeFilter] = useState("all");
-  const [priceMin, setPriceMin] = useState<string>("");
-  const [priceMax, setPriceMax] = useState<string>("");
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const perPage = 25;
+  const pageCache = useRef(new Map<string, { items: ProductAny[]; total: number; pages: number }>());
 
   useEffect(() => {
-    (async () => {
-      const cacheKey = `category-products:${id}`;
-      setLoadingProducts(true);
-      try {
-        const cachedRaw = sessionStorage.getItem(cacheKey);
-        if (cachedRaw) {
-          const cached = JSON.parse(cachedRaw);
-          if (Array.isArray(cached?.products)) {
-            setProducts(cached.products);
-          }
-          if (cached?.category) {
-            setCategory(cached.category);
-          }
-        }
-      } catch {
-        // ignore cache read errors
-      }
-      try {
-        const cat = await api.getCategories();
-        const catRaw = (cat as any)?.data ?? cat;
-        const catList = Array.isArray(catRaw) ? catRaw : (Array.isArray((catRaw as any)?.items) ? (catRaw as any).items : []);
-        const parsedId = Number(id);
-        const catData = Number.isFinite(parsedId) && parsedId > 0
-          ? catList.find((c: any) => Number(c?.id) === parsedId)
-          : catList.find((c: any) => String(c?.slug || "") === String(id || ""));
-        if (catData) setCategory(catData);
-
-        const categoryId = Number.isFinite(parsedId) && parsedId > 0
-          ? parsedId
-          : Number((catData as any)?.id);
-
-        const categoryFilter = Number.isFinite(categoryId) && categoryId > 0
-          ? { category_id: categoryId }
-          : {};
-
-        const perPage = 500;
-        let page = 1;
-        const merged: ProductAny[] = [];
-        const seenIds = new Set<number>();
-        while (page <= 50) {
-          const prods = await api.getProducts({ ...categoryFilter, page, per_page: perPage });
-          const data = (prods as any)?.data ?? prods;
-          const items = Array.isArray(data) ? data : data?.items || [];
-          if (!Array.isArray(items) || items.length === 0) break;
-          for (const item of items) {
-            const pid = Number((item as any)?.id);
-            if (!Number.isFinite(pid) || pid <= 0 || seenIds.has(pid)) continue;
-            seenIds.add(pid);
-            merged.push(item);
-          }
-
-          const total = Number((data as any)?.total || 0);
-          if (total > 0 && seenIds.size >= total) break;
-          if (items.length < perPage) break;
-          page += 1;
-        }
-        setProducts(merged);
-        try {
-          sessionStorage.setItem(cacheKey, JSON.stringify({
-            category: catData || null,
-            products: merged,
-            updated_at: Date.now(),
-          }));
-        } catch {
-          // ignore cache write errors
-        }
-      } catch {
-        // noop
-      } finally {
-        setLoadingProducts(false);
-      }
-    })();
-  }, [id]);
-
-  useEffect(() => {
-    const t = window.setTimeout(() => {
-      setDebouncedQuery(query);
-      setPage(1);
-    }, 300);
+    const t = window.setTimeout(() => setDebouncedQuery(query), 250);
     return () => window.clearTimeout(t);
   }, [query]);
 
+  useEffect(() => { setPage(1); }, [debouncedQuery, id]);
+
   useEffect(() => {
     const params = new URLSearchParams(searchParams);
-    if (query.trim()) params.set("q", query.trim());
-    else params.delete("q");
-    if (page > 1) params.set("page", String(page));
-    else params.delete("page");
-    const next = params.toString();
-    const cur = searchParams.toString();
-    if (next !== cur) setSearchParams(params, { replace: true });
+    query.trim() ? params.set("q", query.trim()) : params.delete("q");
+    page > 1 ? params.set("page", String(page)) : params.delete("page");
+    if (params.toString() !== searchParams.toString()) setSearchParams(params, { replace: true });
   }, [query, page]);
 
   useEffect(() => {
     const key = `scroll:${location.pathname}?${location.search}`;
-    const raw = sessionStorage.getItem(key);
-    const y = Number(raw || 0);
-    if (Number.isFinite(y) && y > 0) {
-      window.setTimeout(() => window.scrollTo(0, y), 0);
-    }
-    const onScroll = () => {
-      sessionStorage.setItem(key, String(window.scrollY || 0));
-    };
+    const onScroll = () => sessionStorage.setItem(key, String(window.scrollY || 0));
     window.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      onScroll();
-      window.removeEventListener("scroll", onScroll);
-    };
+    return () => window.removeEventListener("scroll", onScroll);
   }, [location.pathname, location.search]);
 
-  const sizeOptions = useMemo(() => extractValues(products), [products]);
+  useEffect(() => {
+    (async () => {
+      setLoadingProducts(true);
+      const cat = await api.getCategories();
+      const catRaw = (cat as any)?.data ?? cat;
+      const catList = Array.isArray(catRaw) ? catRaw : (Array.isArray((catRaw as any)?.items) ? (catRaw as any).items : []);
+      const parsedId = Number(id);
+      const catData = Number.isFinite(parsedId) && parsedId > 0 ? catList.find((c: any) => Number(c?.id) === parsedId) : catList.find((c: any) => String(c?.slug || "") === String(id || ""));
+      if (catData) setCategory(catData);
+      const categoryId = Number.isFinite(parsedId) && parsedId > 0 ? parsedId : Number((catData as any)?.id);
+      const cacheKey = `${categoryId}|${debouncedQuery}|${page}|${perPage}`;
+      const cached = pageCache.current.get(cacheKey);
+      if (cached) {
+        setProducts(cached.items); setTotal(cached.total); setPages(cached.pages); setLoadingProducts(false); return;
+      }
+      const res = await api.getProducts({ category_id: categoryId, q: debouncedQuery || undefined, page, limit: perPage });
+      const data = (res as any)?.data ?? res;
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const totalN = Number(data?.total || 0);
+      const pagesN = Number(data?.pages || Math.ceil(totalN / perPage) || 0);
+      setProducts(items); setTotal(totalN); setPages(pagesN);
+      pageCache.current.set(cacheKey, { items, total: totalN, pages: pagesN });
 
-  const filtered = useMemo(() => {
-    const q = debouncedQuery.trim().toLowerCase();
+      // prefetch next page for smooth UX
+      if (page < pagesN) {
+        const nextKey = `${categoryId}|${debouncedQuery}|${page + 1}|${perPage}`;
+        if (!pageCache.current.has(nextKey)) {
+          api.getProducts({ category_id: categoryId, q: debouncedQuery || undefined, page: page + 1, limit: perPage }).then((r: any) => {
+            const d = r?.data ?? r;
+            pageCache.current.set(nextKey, { items: Array.isArray(d?.items) ? d.items : [], total: Number(d?.total || totalN), pages: Number(d?.pages || pagesN) });
+          }).catch(() => {});
+        }
+      }
+      setLoadingProducts(false);
+    })().catch(() => { setProducts([]); setTotal(0); setPages(0); setLoadingProducts(false); });
+  }, [id, debouncedQuery, page]);
 
-    let out = products.filter((p) => {
-      const title = String((p as any).title || (p as any).name || "").toLowerCase();
-      const sku = String((p as any).sku || (p as any).article || (p as any).vendor_code || "").toLowerCase();
-      const titleOk = !q || title.includes(q) || sku.includes(q);
-
-      const variants = Array.isArray(p?.variants) ? p.variants : [];
-      const sizeOk = sizeFilter === "all" || variants.some((v: any) => String(v?.size?.name ?? v?.size ?? "").trim() === sizeFilter);
-
-      const price = pickPrice(p);
-      const minVal = Number(priceMin);
-      const maxVal = Number(priceMax);
-      const minOk = !priceMin.trim() || (!Number.isNaN(minVal) && price >= minVal);
-      const maxOk = !priceMax.trim() || (!Number.isNaN(maxVal) && price <= maxVal);
-
-      return titleOk && sizeOk && minOk && maxOk;
-    });
-
-    out = out.slice().sort((a, b) => {
+  const sortedProducts = useMemo(() => {
+    const out = [...products];
+    out.sort((a, b) => {
       if (sortMode === "price_asc") return pickPrice(a) - pickPrice(b);
       if (sortMode === "price_desc") return pickPrice(b) - pickPrice(a);
-      if (sortMode === "title_asc") {
-        const ta = String(a?.title || a?.name || "");
-        const tb = String(b?.title || b?.name || "");
-        return ta.localeCompare(tb, "ru");
-      }
+      if (sortMode === "title_asc") return String(a?.title || a?.name || "").localeCompare(String(b?.title || b?.name || ""), "ru");
       return 0;
     });
-
     return out;
-  }, [products, debouncedQuery, sizeFilter, priceMin, priceMax, sortMode]);
+  }, [products, sortMode]);
 
-  const perPage = 24;
-  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
-  const safePage = Math.min(Math.max(1, page), totalPages);
-  const paged = useMemo(() => {
-    const start = (safePage - 1) * perPage;
-    return filtered.slice(start, start + perPage);
-  }, [filtered, safePage]);
-
-  useEffect(() => {
-    if (safePage !== page) setPage(safePage);
-  }, [safePage, page]);
-
-  const hint = debouncedQuery
-    ? `Найдено в категории: ${filtered.length} / ${products.length}`
-    : products.length
-    ? `Товаров: ${products.length}`
-    : "";
-
-  const hasCustomFilters = sortMode !== "popular" || sizeFilter !== "all" || !!priceMin.trim() || !!priceMax.trim();
+  const visiblePages = useMemo(() => {
+    if (pages <= 1) return [1];
+    const start = Math.max(1, page - 2);
+    const end = Math.min(pages, page + 2);
+    const arr: number[] = [];
+    for (let p = start; p <= end; p += 1) arr.push(p);
+    return arr;
+  }, [page, pages]);
 
   return (
     <div className="container" style={{ paddingTop: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <button className="btn ghost" onClick={() => nav(-1)} aria-label="Назад">
-          ← Назад
-        </button>
-        <h1 className="h1" style={{ marginBottom: 0 }}>
-          {category ? category.name : "Категория"}
-        </h1>
+        <button className="btn ghost" onClick={() => nav(-1)} aria-label="Назад">← Назад</button>
+        <h1 className="h1" style={{ marginBottom: 0 }}>{category ? category.name : "Категория"}</h1>
       </div>
 
-      <div className="catalog-search-top">
-        <StickySearch value={query} onChange={setQuery} placeholder="Поиск по товарам…" hint={hint} fixedTop />
+      <div className="catalog-search-top"><StickySearch value={query} onChange={setQuery} placeholder="Поиск по товарам…" hint={`Товаров: ${total}`} fixedTop /></div>
+      <div style={{ marginBottom: 12 }}>
+        <CustomSelect label="Сортировка" value={sortMode} onChange={(v) => setSortMode(v as SortMode)} options={[
+          { value: "popular", label: "По умолчанию" }, { value: "price_asc", label: "Цена: по возрастанию" }, { value: "price_desc", label: "Цена: по убыванию" }, { value: "title_asc", label: "Название: А-Я" },
+        ]} />
       </div>
 
-      <div style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-        <button className="btn btn-secondary" type="button" onClick={() => setFiltersOpen((v) => !v)}>
-          {filtersOpen ? "Скрыть фильтр" : "Фильтр"}
-        </button>
-        <div className="small-muted">{filtered.length} товаров</div>
-      </div>
-
-      {filtersOpen ? (
-        <div className="catalog-filter-panel" style={{ marginBottom: 12 }}>
-          <div className="catalog-filter-panel__title">Фильтры и сортировка</div>
-          <div className="catalog-tools">
-            <CustomSelect
-              label="Сортировка"
-              value={sortMode}
-              onChange={(v) => setSortMode(v as SortMode)}
-              options={[
-                { value: "popular", label: "По умолчанию" },
-                { value: "price_asc", label: "Цена: по возрастанию" },
-                { value: "price_desc", label: "Цена: по убыванию" },
-                { value: "title_asc", label: "Название: А-Я" },
-              ]}
-            />
-
-            <CustomSelect
-              label="Размер"
-              value={sizeFilter}
-              onChange={setSizeFilter}
-              options={[{ value: "all", label: "Все" }, ...sizeOptions.map((size) => ({ value: size, label: size }))]}
-            />
-
-            <div className="card" style={{ padding: 10 }}>
-              <div className="small-muted" style={{ marginBottom: 8 }}>Цена</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                <input
-                  className="input"
-                  inputMode="numeric"
-                  placeholder="От"
-                  value={priceMin}
-                  onChange={(e) => setPriceMin(e.target.value.replace(/[^0-9]/g, ""))}
-                />
-                <input
-                  className="input"
-                  inputMode="numeric"
-                  placeholder="До"
-                  value={priceMax}
-                  onChange={(e) => setPriceMax(e.target.value.replace(/[^0-9]/g, ""))}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {hasCustomFilters ? (
-        <div style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-          <div className="small-muted">Фильтры применены</div>
-          <button
-            className="btn ghost"
-            onClick={() => {
-              setSortMode("popular");
-              setSizeFilter("all");
-              setPriceMin("");
-              setPriceMax("");
-            }}
-          >
-            Сбросить всё
-          </button>
-        </div>
-      ) : null}
-
-      {loadingProducts && products.length === 0 ? (
-        <div className="grid-products">
-          {Array.from({ length: 6 }).map((_, idx) => (
-            <div key={idx} className="card" style={{ padding: 12 }}>
-              <Skeleton height={220} style={{ borderRadius: 14, marginBottom: 10 }} />
-              <Skeleton height={16} width="70%" style={{ marginBottom: 8 }} />
-              <Skeleton height={14} width="45%" />
-            </div>
-          ))}
-        </div>
+      {loadingProducts ? (
+        <div className="grid-products">{Array.from({ length: 8 }).map((_, idx) => <div key={idx} className="card" style={{ padding: 12 }}><Skeleton height={220} style={{ borderRadius: 14, marginBottom: 10 }} /><Skeleton height={16} width="70%" style={{ marginBottom: 8 }} /><Skeleton height={14} width="45%" /></div>)}</div>
       ) : (
-        <div className="grid-products">
-          {paged.map((p) => (
-            <ProductCard key={(p as any).id} product={p} />
-          ))}
-        </div>
+        <div className="grid-products catalog-grid-animated">{sortedProducts.map((p) => <ProductCard key={(p as any).id} product={p} />)}</div>
       )}
 
-      {filtered.length > perPage ? (
-        <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
-          <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.max(1, v - 1))} disabled={safePage <= 1}>← Назад</button>
-          <div className="small-muted">Страница {safePage} / {totalPages}</div>
-          <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.min(totalPages, v + 1))} disabled={safePage >= totalPages}>Далее →</button>
-        </div>
-      ) : null}
-
-      {products.length > 0 && filtered.length === 0 ? (
-        <div className="card" style={{ marginTop: 12, padding: 16 }}>
-          <div style={{ fontWeight: 800, marginBottom: 6 }}>Ничего не найдено</div>
-          <div className="muted">Попробуй снять часть фильтров или очисти поиск.</div>
-          <div style={{ marginTop: 10 }}>
-            <button
-              className="btn ghost"
-              type="button"
-              onClick={() => {
-                setQuery("");
-                setDebouncedQuery("");
-                setPage(1);
-                setSortMode("popular");
-                setSizeFilter("all");
-                setPriceMin("");
-                setPriceMax("");
-              }}
-            >
-              Сбросить поиск
-            </button>
-          </div>
+      {pages > 1 ? (
+        <div style={{ marginTop: 14, display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "center", alignItems: "center" }}>
+          <button className="btn ghost" type="button" onClick={() => { setPage((v) => Math.max(1, v - 1)); window.scrollTo({ top: 0, behavior: "smooth" }); }} disabled={page <= 1}>← Назад</button>
+          {visiblePages[0] > 1 ? <button className="btn ghost" onMouseEnter={() => {}} onClick={() => { setPage(1); window.scrollTo({ top: 0, behavior: "smooth" }); }}>1</button> : null}
+          {visiblePages[0] > 2 ? <span className="small-muted">…</span> : null}
+          {visiblePages.map((p) => <button key={p} className="btn ghost" style={{ borderColor: p === page ? "var(--ring)" : undefined }} onMouseEnter={() => {
+            const parsedId = Number(id); const categoryId = Number.isFinite(parsedId) && parsedId > 0 ? parsedId : Number(category?.id || 0);
+            const nextKey = `${categoryId}|${debouncedQuery}|${p}|${perPage}`;
+            if (!pageCache.current.has(nextKey)) api.getProducts({ category_id: categoryId, q: debouncedQuery || undefined, page: p, limit: perPage }).then((r: any) => { const d = r?.data ?? r; pageCache.current.set(nextKey, { items: Array.isArray(d?.items) ? d.items : [], total: Number(d?.total || 0), pages: Number(d?.pages || 0) }); }).catch(() => {});
+          }} onClick={() => { setPage(p); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{p}</button>)}
+          {visiblePages[visiblePages.length - 1] < pages - 1 ? <span className="small-muted">…</span> : null}
+          {visiblePages[visiblePages.length - 1] < pages ? <button className="btn ghost" onClick={() => { setPage(pages); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{pages}</button> : null}
+          <button className="btn ghost" type="button" onClick={() => { setPage((v) => Math.min(pages, v + 1)); window.scrollTo({ top: 0, behavior: "smooth" }); }} disabled={page >= pages}>Далее →</button>
         </div>
       ) : null}
     </div>
