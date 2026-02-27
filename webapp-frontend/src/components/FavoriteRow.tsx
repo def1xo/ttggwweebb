@@ -4,6 +4,12 @@ import Collapsible from "./Collapsible";
 import { useFavorites } from "../contexts/FavoritesContext";
 import { hapticImpact, hapticSelection } from "../utils/tg";
 
+function sanitizeProductTitle(raw: unknown): string {
+  const t = String(raw || "").trim();
+  if (!t) return "Товар";
+  return t.replace(/\s*#\d+\s*$/g, "").trim() || "Товар";
+}
+
 type Props = {
   product: any;
   index?: number;
@@ -54,7 +60,7 @@ export default function FavoriteRow({ product, index = 0, compact = false, onRem
   const [removing, setRemoving] = useState(false);
 
   const pid = Number(product?.id);
-  const title = String(product?.title || product?.name || "Товар");
+  const title = sanitizeProductTitle(product?.title || product?.name || "Товар");
   const image = pickImage(product);
 
   const meta = useMemo(() => {

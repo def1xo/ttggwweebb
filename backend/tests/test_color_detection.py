@@ -45,6 +45,8 @@ def test_detect_product_color_for_5_images_forces_single(monkeypatch):
     out = cd.detect_product_color(["1", "2", "3", "4", "5"], supplier_profile="shop_vkus")
     assert out["color"] == "beige"
     assert out["debug"]["forced_single_for_5"] is True
+    assert out["debug"]["palette_rule"] == "4_7_to_1"
+    assert out["debug"]["palette_rule"] == "4_7_to_1"
 
 
 def test_black_product_on_blue_background_is_not_blue(monkeypatch):
@@ -205,3 +207,30 @@ def test_detect_product_color_photo_count_rules_not_global(monkeypatch):
     out = cd.detect_product_color([str(i) for i in range(10)], supplier_profile="other_supplier")
     assert out["debug"]["palette_rule"] == "default"
     assert out["color"] not in {"black-white", "white-black"}
+
+
+def test_detect_product_color_for_4_images_forces_single(monkeypatch):
+    class R:
+        def __init__(self, color, conf=0.6, sat=0.2):
+            self.color = color
+            self.confidence = conf
+            self.cluster_share = 0.6
+            self.sat = sat
+            self.light = 70
+            self.lab_a = 1
+            self.lab_b = 8
+            self.debug = {}
+
+    seq = [R("gray",0.55), R("black",0.62), R("gray",0.56), R("black",0.61)]
+    monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
+    out = cd.detect_product_color(["1", "2", "3", "4"], supplier_profile="shop_vkus")
+    assert out["color"] in {"black", "gray"}
+    assert out["debug"]["palette_rule"] == "4_7_to_1"
+
+
+def test_light_low_saturation_blue_prefers_sky_blue():
+    assert cd.canonical_color_from_lab_hsv(l=68, a=-4, b=-8, h=0.58, s=0.11, v=0.62) == "sky_blue"
+
+
+def test_dark_neutral_boundary_prefers_black_not_gray():
+    assert cd.canonical_color_from_lab_hsv(l=45, a=0, b=1, h=0.0, s=0.05, v=0.40) == "black"

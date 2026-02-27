@@ -19,6 +19,12 @@ function normalizeVariantColorKey(v: any): string {
   return normalizeColorValue(v?.color_key || v?.color?.key || v?.color?.slug || v?.color?.name || v?.color);
 }
 
+function sanitizeProductTitle(raw: unknown): string {
+  const t = String(raw || "").trim();
+  if (!t) return "Товар";
+  return t.replace(/\s*#\d+\s*$/g, "").trim() || "Товар";
+}
+
 function isReasonableSize(v: string): boolean {
   const t = String(v || "").trim();
   if (!t) return false;
@@ -127,6 +133,15 @@ function imagesForColor(p: any, color: string | null): string[] {
       .map((item) => normalizeMediaUrl(item))
       .filter((item): item is string => Boolean(item));
     if (fromVariants.length) return uniq(fromVariants);
+  }
+
+  if (selected) {
+    // Strict mode for a chosen color: do not mix in images from other colors.
+    const selectedOnly = splitImageCandidates(p?.selected_color_images)
+      .map((item) => normalizeMediaUrl(item))
+      .filter((item): item is string => Boolean(item));
+    if (selectedOnly.length) return uniq(selectedOnly);
+    return [];
   }
 
   const general = splitImageCandidates(p?.general_images)
@@ -366,7 +381,7 @@ export default function ProductPage() {
     return vPrice || base;
   }, [product, selectedVariant]);
 
-  const activeImage = images[activeIndex] || normalizeMediaUrl(product?.default_image) || "/logo_black.png";
+  const activeImage = images[activeIndex] || normalizeMediaUrl(product?.default_image) || normalizeMediaUrl((Array.isArray(product?.selected_color_images) ? product.selected_color_images[0] : null)) || "/logo_black.png";
 
   const goToNextImage = () => {
     if (images.length <= 1) return;
@@ -508,7 +523,7 @@ export default function ProductPage() {
             ←
           </button>
           <div style={{ fontWeight: 900, textAlign: "center", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {product.title}
+            {sanitizeProductTitle(product.title || product.name)}
           </div>
           <button
             type="button"
@@ -692,7 +707,7 @@ export default function ProductPage() {
           <img
             key={`viewer_${activeImage}_${slideDir}`}
             src={activeImage}
-            alt={product.title}
+            alt={sanitizeProductTitle(product.title || product.name)}
             onClick={(e) => e.stopPropagation()}
             className={`image-viewer__img image-viewer__img--${slideDir}`}
             style={{ maxWidth: "100%", maxHeight: "90vh", objectFit: "contain", borderRadius: 12 }}
@@ -732,7 +747,7 @@ export default function ProductPage() {
           <div className="related-row">
             {related.map((p) => {
               const pid = Number(p?.id);
-              const pTitle = String(p?.title || p?.name || "Товар");
+              const pTitle = sanitizeProductTitle(p?.title || p?.name || "Товар");
               const pPrice = Number(p?.price ?? p?.base_price ?? 0);
               const img = pickImage(p);
               const pInStock = Boolean(

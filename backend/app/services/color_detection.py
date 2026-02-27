@@ -221,8 +221,10 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
     if sat_very_low:
         if l >= 90:
             return "white"
-        if l <= 42:
+        if l <= 46:
             return "black"
+        if 0.52 <= h < 0.66 and l >= 62 and v >= 0.56:
+            return "sky_blue"
         if warm and l >= 62 and b >= 10:
             return "beige"
         if warm and l < 62:
@@ -231,11 +233,13 @@ def canonical_color_from_lab_hsv(l: float, a: float, b: float, h: float, s: floa
         return "gray"
 
     if sat_low:
+        if 0.52 <= h < 0.66 and l >= 60 and v >= 0.54:
+            return "sky_blue"
         if warm and 58 <= l <= 88 and 8 <= b <= 26:
             return "beige"
         if warm and l < 58:
             return "brown"
-        if l < 52:
+        if l < 56 and v < 0.50:
             return "black"
 
     # hysteresis buffer: yellow hue with low sat goes beige
@@ -377,8 +381,8 @@ def detect_product_color(image_sources: Sequence[str], supplier_profile: Optiona
     total_score = max(0.001, sum(score.values()))
     conf = top[0][1] / total_score
 
-    # 5..7 photos: force ONE main sneaker color (shop_vkus profile only).
-    if supplier_profile == "shop_vkus" and 5 <= len(valid) <= 7:
+    # 4..7 photos: force ONE main sneaker color (shop_vkus profile only).
+    if supplier_profile == "shop_vkus" and 4 <= len(valid) <= 7:
         c1, s1 = top[0]
         c2, s2 = top[1] if len(top) > 1 else (None, 0.0)
         if c2:
@@ -410,7 +414,7 @@ def detect_product_color(image_sources: Sequence[str], supplier_profile: Optiona
             "debug": {
                 "votes": dict(by_color),
                 "scores": {k: round(v, 3) for k, v in score.items()},
-                "palette_rule": "5_7_to_1",
+                "palette_rule": "4_7_to_1",
                 "forced_single_for_5": True,
             },
             "per_image": per_image,

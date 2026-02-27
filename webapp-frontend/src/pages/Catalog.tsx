@@ -28,22 +28,21 @@ export default function Catalog() {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
-    const t = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    const t = window.setTimeout(() => setDebouncedQuery(query.trim()), 260);
     return () => window.clearTimeout(t);
   }, [query]);
 
   useEffect(() => {
+    const reqId = ++requestIdRef.current;
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        const [catsRes, prodRes] = await Promise.all([
-          api.getCategories(debouncedQuery ? { q: debouncedQuery } : {}),
-          api.getProducts({ q: debouncedQuery || undefined, page: 1, limit: 24 }),
-        ]);
-
+        const catsRes = await api.getCategories(debouncedQuery ? { q: debouncedQuery } : {});
+        if (reqId !== requestIdRef.current) return;
         const catsRaw: any = (catsRes as any)?.data ?? catsRes;
         const catItems = Array.isArray(catsRaw)
           ? catsRaw
@@ -59,10 +58,12 @@ export default function Catalog() {
         setCategories(catItems);
         setProducts(prodItems);
       } catch {
+        if (reqId !== requestIdRef.current) return;
         setCategories([]);
         setProducts([]);
         setError("Не удалось загрузить каталог");
       } finally {
+        if (reqId !== requestIdRef.current) return;
         setLoading(false);
         if (query && document.activeElement !== searchInputRef.current && searchInputRef.current) {
           searchInputRef.current.focus({ preventScroll: true });
@@ -81,10 +82,8 @@ export default function Catalog() {
         <StickySearch
           value={query}
           inputRef={searchInputRef}
-          onChange={(v) => {
-            setQuery(v);
-          }}
-          placeholder="Поиск категорий (можно по названию товара)…"
+          onChange={setQuery}
+          placeholder="Поиск по каталогам/товарам…"
           hint={query ? `Категорий: ${categories.length}` : ""}
         />
 
