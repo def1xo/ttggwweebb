@@ -96,10 +96,13 @@ def normalize_combo_color_key(keys: Sequence[str]) -> str:
     if len(normalized) == 1:
         return normalized[0]
 
-    pair = tuple(normalized[:2])
-    if pair not in _ALLOWED_COLOR_COMBOS:
-        return ""
-    return f"{pair[0]}-{pair[1]}"
+    if len(normalized) == 2:
+        pair = tuple(normalized[:2])
+        if pair in _ALLOWED_COLOR_COMBOS:
+            return f"{pair[0]}-{pair[1]}"
+        return "-".join(normalized[:2])
+
+    return "-".join(normalized[:3])
 
 
 @dataclass
@@ -320,7 +323,36 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
     )
 
 
-def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
+def _weighted_color_score(v: ImageColorResult) -> float:
+    # Prefer the dominant sneaker body color over tiny accent details.
+    share_boost = 0.65 + max(0.0, min(0.35, float(v.cluster_share)))
+    sat_penalty = 1.0
+    if v.sat > 0.62 and v.cluster_share < 0.50:
+        sat_penalty = 0.88
+    return max(0.05, float(v.confidence)) * share_boost * sat_penalty
+
+
+def _compose_palette_color(top: List[tuple[str, float]], total_score: float, target_count: int) -> str:
+    usable = [(c, s) for c, s in top if c not in {"none", "multi"}]
+    if not usable:
+        return "none"
+
+    chosen: List[str] = []
+    for c, s in usable:
+        share = s / max(0.001, total_score)
+        if share < 0.12 and chosen:
+            continue
+        if c not in chosen:
+            chosen.append(c)
+        if len(chosen) >= target_count:
+            break
+
+    if not chosen:
+        chosen = [usable[0][0]]
+    return normalize_combo_color_key(chosen)
+
+
+def detect_product_color(image_sources: Sequence[str], supplier_profile: Optional[str] = None) -> Dict[str, Any]:
     valid = [str(x).strip() for x in (image_sources or []) if str(x or "").strip()]
     votes: List[ImageColorResult] = []
     for src in valid:
@@ -335,14 +367,18 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
     by_color: Dict[str, int] = defaultdict(int)
     per_image: List[Dict[str, Any]] = []
     for idx, v in enumerate(votes):
-        w = max(0.05, float(v.confidence))
+        w = _weighted_color_score(v)
         score[v.color] += w
         by_color[v.color] += 1
         per_image.append({"idx": idx, "color": v.color, "confidence": round(v.confidence, 3), "share": round(v.cluster_share, 3)})
 
-    # 5..7 photos rule: force a single non-composite color via weighted majority + tie-breaks
-    if 5 <= len(valid) <= 7:
-        top = sorted(score.items(), key=lambda x: x[1], reverse=True)
+    top = sorted(score.items(), key=lambda x: x[1], reverse=True)
+    color = top[0][0]
+    total_score = max(0.001, sum(score.values()))
+    conf = top[0][1] / total_score
+
+    # 5..7 photos: force ONE main sneaker color (shop_vkus profile only).
+    if supplier_profile == "shop_vkus" and 5 <= len(valid) <= 7:
         c1, s1 = top[0]
         c2, s2 = top[1] if len(top) > 1 else (None, 0.0)
         if c2:
@@ -355,13 +391,11 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
                 if alt_conf < 0.55:
                     c1 = c2
 
-        total_score = max(0.001, sum(score.values()))
         black_s = float(score.get("black", 0.0))
         white_s = float(score.get("white", 0.0))
         purple_s = float(score.get("purple", 0.0)) + float(score.get("pink", 0.0))
 
         if black_s >= 0.30 * total_score and white_s >= 0.24 * total_score and (black_s + white_s) >= 0.62 * total_score:
-            # explicit business rule: photo sets of 5-7 must map to ONE color only.
             c1 = "black" if black_s >= white_s else "white"
         elif c1 == "gray" and purple_s >= 0.24 * total_score:
             c1 = "purple"
@@ -369,19 +403,54 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
             c1 = "black"
         elif c1 == "gray" and white_s >= 0.26 * total_score:
             c1 = "white"
+
         result = {
             "color": c1,
-            "confidence": round(min(0.99, s1 / max(0.001, sum(score.values())) + 0.15), 3),
-            "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "forced_single_for_5": True},
+            "confidence": round(min(0.99, s1 / total_score + 0.15), 3),
+            "debug": {
+                "votes": dict(by_color),
+                "scores": {k: round(v, 3) for k, v in score.items()},
+                "palette_rule": "5_7_to_1",
+                "forced_single_for_5": True,
+            },
             "per_image": per_image,
         }
-        logger.info("detect_product_color: photos=%s color=%s confidence=%.3f top2=%s", len(valid), result["color"], result["confidence"], sorted(score.items(), key=lambda x: x[1], reverse=True)[:2])
+        logger.info("detect_product_color: photos=%s color=%s confidence=%.3f top2=%s", len(valid), result["color"], result["confidence"], top[:2])
         return result
 
-    top = sorted(score.items(), key=lambda x: x[1], reverse=True)
-    color = top[0][0]
-    total_score = max(0.001, sum(score.values()))
-    conf = top[0][1] / total_score
+    # 10..14 photos: force TWO colors. 15..21 photos: force THREE colors (shop_vkus profile only).
+    if supplier_profile == "shop_vkus" and 10 <= len(valid) <= 14:
+        palette = _compose_palette_color(top, total_score, target_count=2)
+        result = {
+            "color": palette,
+            "confidence": round(min(0.99, (top[0][1] + (top[1][1] if len(top) > 1 else 0.0)) / total_score), 3),
+            "debug": {
+                "votes": dict(by_color),
+                "scores": {k: round(v, 3) for k, v in score.items()},
+                "palette_rule": "10_14_to_2",
+                "forced_single_for_5": False,
+            },
+            "per_image": per_image,
+        }
+        logger.info("detect_product_color: photos=%s color=%s confidence=%.3f top3=%s", len(valid), result["color"], result["confidence"], top[:3])
+        return result
+
+    if supplier_profile == "shop_vkus" and 15 <= len(valid) <= 21:
+        palette = _compose_palette_color(top, total_score, target_count=3)
+        top3_score = sum(v for _, v in top[:3])
+        result = {
+            "color": palette,
+            "confidence": round(min(0.99, top3_score / total_score), 3),
+            "debug": {
+                "votes": dict(by_color),
+                "scores": {k: round(v, 3) for k, v in score.items()},
+                "palette_rule": "15_21_to_3",
+                "forced_single_for_5": False,
+            },
+            "per_image": per_image,
+        }
+        logger.info("detect_product_color: photos=%s color=%s confidence=%.3f top4=%s", len(valid), result["color"], result["confidence"], top[:4])
+        return result
 
     # Anti-false-gray: avoid collapsing black/white/purple mixes into neutral gray.
     if color == "gray":
@@ -411,10 +480,15 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
     result = {
         "color": color,
         "confidence": round(min(0.99, conf), 3),
-        "debug": {"votes": dict(by_color), "scores": {k: round(v, 3) for k, v in score.items()}, "forced_single_for_5": False},
+        "debug": {
+            "votes": dict(by_color),
+            "scores": {k: round(v, 3) for k, v in score.items()},
+            "palette_rule": "default",
+            "forced_single_for_5": False,
+        },
         "per_image": per_image,
     }
-    logger.info("detect_product_color: photos=%s color=%s confidence=%.3f top2=%s", len(valid), result["color"], result["confidence"], sorted(score.items(), key=lambda x: x[1], reverse=True)[:2])
+    logger.info("detect_product_color: photos=%s color=%s confidence=%.3f top2=%s", len(valid), result["color"], result["confidence"], top[:2])
     return result
 
 
@@ -441,7 +515,7 @@ def canonical_color_to_display_name(name: Optional[str]) -> str:
     return canonical.replace("_", " ")
 
 
-def detect_product_colors_from_photos(image_sources: Sequence[str]) -> Dict[str, Any]:
-    detected = detect_product_color(image_sources)
+def detect_product_colors_from_photos(image_sources: Sequence[str], supplier_profile: Optional[str] = None) -> Dict[str, Any]:
+    detected = detect_product_color(image_sources, supplier_profile=supplier_profile)
     canonical = normalize_color_to_whitelist(detected.get("color"))
     return {**detected, "color": canonical, "display_color": canonical_color_to_display_name(canonical)}
