@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import api from "../services/api";
 import Skeleton from "../components/Skeleton";
@@ -18,6 +18,8 @@ export default function Catalog() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const requestIdRef = useRef(0);
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
@@ -25,15 +27,13 @@ export default function Catalog() {
   }, [query]);
 
   useEffect(() => {
+    const reqId = ++requestIdRef.current;
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        const [catsRes, prodRes] = await Promise.all([
-          api.getCategories(debouncedQuery ? { q: debouncedQuery } : {}),
-          api.getProducts({ q: debouncedQuery || undefined, page: 1, limit: 24 }),
-        ]);
-
+        const catsRes = await api.getCategories(debouncedQuery ? { q: debouncedQuery } : {});
+        if (reqId !== requestIdRef.current) return;
         const catsRaw: any = (catsRes as any)?.data ?? catsRes;
         const catItems = Array.isArray(catsRaw)
           ? catsRaw
@@ -42,13 +42,18 @@ export default function Catalog() {
           : [];
         setCategories(catItems);
       } catch {
+        if (reqId !== requestIdRef.current) return;
         setCategories([]);
         setError("Не удалось загрузить каталог");
       } finally {
+        if (reqId !== requestIdRef.current) return;
         setLoading(false);
+        if (query && document.activeElement !== searchInputRef.current && searchInputRef.current) {
+          searchInputRef.current.focus({ preventScroll: true });
+        }
       }
     })();
-  }, [debouncedQuery]);
+  }, [debouncedQuery, query]);
 
   const topCategories = useMemo(() => categories.slice(0, 50), [categories]);
 
@@ -58,6 +63,7 @@ export default function Catalog() {
         <div className="panel-title">Каталог</div>
         <StickySearch
           value={query}
+          inputRef={searchInputRef}
           onChange={setQuery}
           placeholder="Поиск категорий (можно по названию товара)…"
           hint={query ? `Категорий: ${categories.length}` : ""}

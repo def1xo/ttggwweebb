@@ -1,6 +1,7 @@
 import React from "react";
 
 type Props = {
+  inputRef?: React.RefObject<HTMLInputElement>;
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
@@ -8,7 +9,7 @@ type Props = {
   fixedTop?: boolean;
 };
 
-const StickySearch: React.FC<Props> = ({ value, onChange, placeholder = "Поиск…", hint, fixedTop = false }) => {
+const StickySearch: React.FC<Props> = ({ value, onChange, placeholder = "Поиск…", hint, fixedTop = false, inputRef }) => {
   return (
     <div className={`sticky-search${fixedTop ? " sticky-search--fixed-top" : ""}`} role="search" aria-label="Поиск">
       <div className="searchbar">
@@ -33,6 +34,7 @@ const StickySearch: React.FC<Props> = ({ value, onChange, placeholder = "Пои�
         </svg>
 
         <input
+          ref={inputRef}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
