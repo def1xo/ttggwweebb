@@ -24,16 +24,13 @@ export default function Catalog() {
     return () => window.clearTimeout(t);
   }, [query]);
 
+
   useEffect(() => {
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        const [catsRes, prodRes] = await Promise.all([
-          api.getCategories(debouncedQuery ? { q: debouncedQuery } : {}),
-          api.getProducts({ q: debouncedQuery || undefined, page: 1, limit: 24 }),
-        ]);
-
+        const catsRes = await api.getCategories(debouncedQuery ? { q: debouncedQuery } : {});
         const catsRaw: any = (catsRes as any)?.data ?? catsRes;
         const catItems = Array.isArray(catsRaw)
           ? catsRaw
