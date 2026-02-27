@@ -35,6 +35,12 @@ function sortSizes(values: string[]) {
   });
 }
 
+function sanitizeProductTitle(raw: unknown): string {
+  const t = String(raw || "").trim();
+  if (!t) return "Товар";
+  return t.replace(/\s*#\d+\s*$/g, "").trim() || "Товар";
+}
+
 function normalizeMediaUrl(raw: unknown): string | null {
   if (!raw) return null;
   const url = String(raw).trim();
@@ -53,7 +59,7 @@ const FALLBACK_IMAGE = "/logo_black.png";
 export default function ProductCard({ product }: Props) {
   const { isFavorite, toggle } = useFavorites();
 
-  const title = (product?.title || product?.name || "Товар") as string;
+  const title = sanitizeProductTitle(product?.title || product?.name || "Товар");
   const imgs = (product?.images || product?.image_urls || product?.imageUrls || []) as any[];
   const rawImage =
     (Array.isArray(imgs) && imgs.length ? (imgs[0]?.url || imgs[0]) : null) ||
