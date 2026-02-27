@@ -352,7 +352,7 @@ def _compose_palette_color(top: List[tuple[str, float]], total_score: float, tar
     return normalize_combo_color_key(chosen)
 
 
-def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
+def detect_product_color(image_sources: Sequence[str], supplier_profile: Optional[str] = None) -> Dict[str, Any]:
     valid = [str(x).strip() for x in (image_sources or []) if str(x or "").strip()]
     votes: List[ImageColorResult] = []
     for src in valid:
@@ -377,8 +377,8 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
     total_score = max(0.001, sum(score.values()))
     conf = top[0][1] / total_score
 
-    # 5..7 photos: force ONE main sneaker color.
-    if 5 <= len(valid) <= 7:
+    # 5..7 photos: force ONE main sneaker color (shop_vkus profile only).
+    if supplier_profile == "shop_vkus" and 5 <= len(valid) <= 7:
         c1, s1 = top[0]
         c2, s2 = top[1] if len(top) > 1 else (None, 0.0)
         if c2:
@@ -418,8 +418,8 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
         logger.info("detect_product_color: photos=%s color=%s confidence=%.3f top2=%s", len(valid), result["color"], result["confidence"], top[:2])
         return result
 
-    # 10..14 photos: force TWO colors. 15..21 photos: force THREE colors.
-    if 10 <= len(valid) <= 14:
+    # 10..14 photos: force TWO colors. 15..21 photos: force THREE colors (shop_vkus profile only).
+    if supplier_profile == "shop_vkus" and 10 <= len(valid) <= 14:
         palette = _compose_palette_color(top, total_score, target_count=2)
         result = {
             "color": palette,
@@ -435,7 +435,7 @@ def detect_product_color(image_sources: Sequence[str]) -> Dict[str, Any]:
         logger.info("detect_product_color: photos=%s color=%s confidence=%.3f top3=%s", len(valid), result["color"], result["confidence"], top[:3])
         return result
 
-    if 15 <= len(valid) <= 21:
+    if supplier_profile == "shop_vkus" and 15 <= len(valid) <= 21:
         palette = _compose_palette_color(top, total_score, target_count=3)
         top3_score = sum(v for _, v in top[:3])
         result = {
@@ -515,7 +515,7 @@ def canonical_color_to_display_name(name: Optional[str]) -> str:
     return canonical.replace("_", " ")
 
 
-def detect_product_colors_from_photos(image_sources: Sequence[str]) -> Dict[str, Any]:
-    detected = detect_product_color(image_sources)
+def detect_product_colors_from_photos(image_sources: Sequence[str], supplier_profile: Optional[str] = None) -> Dict[str, Any]:
+    detected = detect_product_color(image_sources, supplier_profile=supplier_profile)
     canonical = normalize_color_to_whitelist(detected.get("color"))
     return {**detected, "color": canonical, "display_color": canonical_color_to_display_name(canonical)}

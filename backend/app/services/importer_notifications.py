@@ -605,7 +605,6 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
         payload_with_text_links["image_urls"] = merged
     images = _normalize_image_urls(payload_with_text_links)
     images = _localize_image_urls(images, title_hint=(payload.get("title") or ""))
-    color_detection = detect_product_color(images) if images else {"color": None, "confidence": 0.0, "debug": {"reason": "no_images"}, "per_image": []}
     title = None
     for line in (text.splitlines() if text else []):
         ln = line.strip()
@@ -626,12 +625,16 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
     size_stock_map = _extract_size_stock_map(text)
     if size_stock_map and not sizes:
         sizes = sorted(size_stock_map.keys(), key=lambda x: float(x) if str(x).replace(".", "", 1).isdigit() else str(x))
-    colors = _extract_colors(text)
-    if not colors and color_detection.get("color"):
-        colors = [str(color_detection.get("color"))]
     hashtags = _extract_hashtags(text)
     stock_quantity = _extract_stock_quantity(text, payload)
     supplier_name = _detect_supplier_from_payload(payload_with_text_links, text=text)
+    color_detection = detect_product_color(
+        images,
+        supplier_profile="shop_vkus" if str(supplier_name or "").strip().lower() == "shop_vkus" else None,
+    ) if images else {"color": None, "confidence": 0.0, "debug": {"reason": "no_images"}, "per_image": []}
+    colors = _extract_colors(text)
+    if not colors and color_detection.get("color"):
+        colors = [str(color_detection.get("color"))]
     effective_stock_quantity = max(0, int(stock_quantity)) if stock_quantity is not None else IMPORT_FALLBACK_STOCK_QTY
     visible = False if (is_draft or len(hashtags) == 0) else True
     category = None
