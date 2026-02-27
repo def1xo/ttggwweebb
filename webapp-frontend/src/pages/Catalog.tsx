@@ -35,6 +35,7 @@ export default function Catalog() {
     return () => window.clearTimeout(t);
   }, [query]);
 
+
   useEffect(() => {
     const params = new URLSearchParams(searchParams);
     if (query.trim()) params.set("q", query.trim());
