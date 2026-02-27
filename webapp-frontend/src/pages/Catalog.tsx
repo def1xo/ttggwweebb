@@ -4,6 +4,14 @@ import api from "../services/api";
 import Skeleton from "../components/Skeleton";
 import StickySearch from "../components/StickySearch";
 
+type Product = {
+  id: number;
+  title?: string;
+  name?: string;
+  base_price?: number;
+  price?: number;
+};
+
 type Category = {
   id: number;
   name: string;
@@ -16,6 +24,7 @@ export default function Catalog() {
   const [query, setQuery] = useState(searchParams.get("q") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchParams.get("q") || "");
   const [categories, setCategories] = useState<Category[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -40,10 +49,18 @@ export default function Catalog() {
           : Array.isArray(catsRaw?.items)
           ? catsRaw.items
           : [];
+        const prodsRaw: any = (prodRes as any)?.data ?? prodRes;
+        const prodItems = Array.isArray(prodsRaw)
+          ? prodsRaw
+          : Array.isArray(prodsRaw?.items)
+          ? prodsRaw.items
+          : [];
         setCategories(catItems);
+        setProducts(prodItems);
       } catch {
         if (reqId !== requestIdRef.current) return;
         setCategories([]);
+        setProducts([]);
         setError("Не удалось загрузить каталог");
       } finally {
         if (reqId !== requestIdRef.current) return;
@@ -56,6 +73,7 @@ export default function Catalog() {
   }, [debouncedQuery, query]);
 
   const topCategories = useMemo(() => categories.slice(0, 50), [categories]);
+  const topProducts = useMemo(() => products.slice(0, 20), [products]);
 
   return (
     <div className="container" style={{ paddingTop: 12 }}>
@@ -70,6 +88,27 @@ export default function Catalog() {
         />
 
         {error ? <div className="small-muted" style={{ marginTop: 12 }}>{error}</div> : null}
+
+        <div style={{ marginTop: 12, marginBottom: 8, fontWeight: 700 }}>Товары</div>
+        {loading && topProducts.length === 0 ? (
+          <div className="small-muted">Ищем товары…</div>
+        ) : (
+          <div className="fade-in-list" style={{ display: "grid", gap: 8 }}>
+            {topProducts.map((p) => (
+              <Link
+                key={p.id}
+                to={`/product/${p.id}`}
+                className="card"
+                style={{ textDecoration: "none", color: "inherit", padding: 10 }}
+              >
+                <div style={{ fontWeight: 700 }}>{p.title || p.name || "Товар"}</div>
+                <div className="small-muted">
+                  {Number(p.price ?? p.base_price ?? 0) > 0 ? `${Number(p.price ?? p.base_price).toLocaleString("ru-RU")} ₽` : "Открыть товар"}
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
 
         <div style={{ marginTop: 12, marginBottom: 8, fontWeight: 700 }}>Категории</div>
         {loading ? (
@@ -98,7 +137,7 @@ export default function Catalog() {
           </div>
         )}
 
-        {!loading && !error && topCategories.length === 0 ? (
+        {!loading && !error && topCategories.length === 0 && topProducts.length === 0 ? (
           <div className="card" style={{ marginTop: 12, padding: 16 }}>
             <div style={{ fontWeight: 800, marginBottom: 6 }}>Ничего не найдено</div>
           </div>
