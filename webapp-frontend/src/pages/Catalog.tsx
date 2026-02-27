@@ -20,7 +20,7 @@ type Category = {
 };
 
 export default function Catalog() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState(searchParams.get("q") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchParams.get("q") || "");
   const [categories, setCategories] = useState<Category[]>([]);
@@ -36,13 +36,18 @@ export default function Catalog() {
   }, [query]);
 
   useEffect(() => {
-    const reqId = ++requestIdRef.current;
+    const params = new URLSearchParams(searchParams);
+    if (query.trim()) params.set("q", query.trim());
+    else params.delete("q");
+    if (params.toString() !== searchParams.toString()) setSearchParams(params, { replace: true });
+  }, [query, searchParams, setSearchParams]);
+
+  useEffect(() => {
     (async () => {
       setLoading(true);
       setError(null);
       try {
         const catsRes = await api.getCategories(debouncedQuery ? { q: debouncedQuery } : {});
-        if (reqId !== requestIdRef.current) return;
         const catsRaw: any = (catsRes as any)?.data ?? catsRes;
         const catItems = Array.isArray(catsRaw)
           ? catsRaw
