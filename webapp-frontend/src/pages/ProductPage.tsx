@@ -136,12 +136,37 @@ function imagesForColor(p: any, color: string | null): string[] {
   }
 
   if (selected) {
-    // Strict mode for a chosen color: do not mix in images from other colors.
     const selectedOnly = splitImageCandidates(p?.selected_color_images)
       .map((item) => normalizeMediaUrl(item))
       .filter((item): item is string => Boolean(item));
-    if (selectedOnly.length) return uniq(selectedOnly);
-    return [];
+    const colorsCount = Array.isArray(p?.colors)
+      ? p.colors.length
+      : Array.isArray(p?.available_colors)
+      ? p.available_colors.length
+      : 0;
+
+    const fullGallery = [
+      ...splitImageCandidates(p?.general_images),
+      ...splitImageCandidates(p?.images),
+      ...splitImageCandidates(p?.image_urls),
+      ...splitImageCandidates(p?.gallery),
+      ...splitImageCandidates(p?.photos),
+      ...(Array.isArray(p?.variants) ? p.variants.flatMap((v: any) => [v?.images, v?.image_urls]) : []),
+    ]
+      .flatMap((item: any) => splitImageCandidates(item))
+      .map((item) => normalizeMediaUrl(item))
+      .filter((item): item is string => Boolean(item));
+    const uniqFull = uniq(fullGallery);
+
+    if (colorsCount <= 1) {
+      return uniqFull.length ? uniqFull : uniq(selectedOnly);
+    }
+
+    if (selectedOnly.length >= 4) return uniq(selectedOnly);
+    if (!selectedOnly.length) return uniqFull;
+
+    const merged = uniq([...selectedOnly, ...uniqFull]);
+    return merged.length >= 4 ? merged : merged;
   }
 
   const general = splitImageCandidates(p?.general_images)
@@ -172,16 +197,9 @@ function pickImage(p: any): string | null {
   return all[0] || normalizeMediaUrl(p?.image) || null;
 }
 
-const FALLBACK_IMAGE = "/logo_black.png";
-
 function onImageFallback(ev: React.SyntheticEvent<HTMLImageElement>) {
   const img = ev.currentTarget;
-  if (img.dataset.fallbackApplied === "1") {
-    img.style.visibility = "hidden";
-    return;
-  }
-  img.dataset.fallbackApplied = "1";
-  img.src = FALLBACK_IMAGE;
+  img.style.display = "none";
 }
 
 export default function ProductPage() {
@@ -393,7 +411,7 @@ export default function ProductPage() {
     return vPrice || base;
   }, [product, selectedVariant]);
 
-  const activeImage = images[activeIndex] || normalizeMediaUrl(product?.default_image) || normalizeMediaUrl((Array.isArray(product?.selected_color_images) ? product.selected_color_images[0] : null)) || "/logo_black.png";
+  const activeImage = images[activeIndex] || normalizeMediaUrl(product?.default_image) || normalizeMediaUrl((Array.isArray(product?.selected_color_images) ? product.selected_color_images[0] : null)) || null;
 
   const goToNextImage = () => {
     if (images.length <= 1) return;
@@ -553,7 +571,11 @@ export default function ProductPage() {
           onTouchStart={onTouchStart}
           onTouchEnd={onTouchEnd}
         >
-          <img key={`${activeImage}_${slideDir}`} className={`product-detail-hero product-detail-hero--${slideDir}`} src={activeImage} alt={product.title} style={{ cursor: "zoom-in" }} onClick={() => setIsImageViewerOpen(true)} onError={onImageFallback} />
+          {activeImage ? (
+            <img key={`${activeImage}_${slideDir}`} className={`product-detail-hero product-detail-hero--${slideDir}`} src={activeImage} alt={product.title} style={{ cursor: "zoom-in" }} onClick={() => setIsImageViewerOpen(true)} onError={onImageFallback} />
+          ) : (
+            <div className="product-detail-hero" style={{ borderRadius: 14, minHeight: 320, background: "linear-gradient(135deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03))", border: "1px solid var(--border)" }} />
+          )}
 
           {images.length > 1 ? (
             <div className="thumb-grid" style={{ marginTop: 10 }}>
@@ -717,15 +739,19 @@ export default function ProductPage() {
             </button>
           ) : null}
 
-          <img
-            key={`viewer_${activeImage}_${slideDir}`}
-            src={activeImage}
-            alt={sanitizeProductTitle(product.title || product.name)}
-            onClick={(e) => e.stopPropagation()}
-            className={`image-viewer__img image-viewer__img--${slideDir}`}
-            onError={onImageFallback}
-            style={{ maxWidth: "100%", maxHeight: "90vh", objectFit: "contain", borderRadius: 12 }}
-          />
+          {activeImage ? (
+            <img
+              key={`viewer_${activeImage}_${slideDir}`}
+              src={activeImage}
+              alt={sanitizeProductTitle(product.title || product.name)}
+              onClick={(e) => e.stopPropagation()}
+              className={`image-viewer__img image-viewer__img--${slideDir}`}
+              onError={onImageFallback}
+              style={{ maxWidth: "100%", maxHeight: "90vh", objectFit: "contain", borderRadius: 12 }}
+            />
+          ) : (
+            <div style={{ width: "80vw", height: "60vh", borderRadius: 12, background: "linear-gradient(135deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03))", border: "1px solid rgba(255,255,255,0.2)" }} />
+          )}
 
           {images.length > 1 ? (
             <button
