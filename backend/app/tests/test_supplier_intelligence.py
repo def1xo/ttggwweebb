@@ -1256,4 +1256,4 @@ def test_single_color_assignment_disables_color_selector(monkeypatch):
 
     assert assignment["color_tokens"] == [""]
     assert assignment["detected_color"] == "black"
-    assert assignment["variant_images_by_color"][""] == ["img1", "img2"]
+    assert assignment["variant_images_by_color"][""] == ["img1", "img2", "img3"]
