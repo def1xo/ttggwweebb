@@ -163,17 +163,29 @@ def _get_or_create_color(db: Session, name: str) -> models.Color:
 @router.get("/products")
 def list_products(
     q: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
     db: Session = Depends(get_db),
     admin: models.User = Depends(get_current_admin_user),
 ):
     query = db.query(models.Product)
     if q:
         query = query.filter(models.Product.title.ilike(f"%{q}%"))
-    items = query.order_by(models.Product.created_at.desc()).all()
+    total = int(query.count() or 0)
+    pages = max(1, (total + int(limit) - 1) // int(limit))
+    safe_page = min(max(1, int(page)), pages)
+    items = (
+        query
+        .order_by(models.Product.created_at.desc())
+        .offset((safe_page - 1) * int(limit))
+        .limit(int(limit))
+        .all()
+    )
     out = []
     for p in items:
         sizes = []
         colors = []
+        gallery_urls: set[str] = set()
         variant_ids = [int(v.id) for v in (p.variants or []) if getattr(v, "id", None)]
         latest_cost_by_variant: dict[int, float] = {}
         if variant_ids:
@@ -191,8 +203,20 @@ def list_products(
         try:
             sizes = sorted({(v.size.name if getattr(v, "size", None) else None) for v in (p.variants or []) if (getattr(v, "size", None) and v.size.name)})
             colors = sorted({(v.color.name if getattr(v, "color", None) else None) for v in (p.variants or []) if (getattr(v, "color", None) and v.color.name)})
+            for img in (getattr(p, "images", []) or []):
+                u = str(getattr(img, "url", "") or "").strip()
+                if u:
+                    gallery_urls.add(u)
+            for v in (p.variants or []):
+                for u in (getattr(v, "images", None) or []):
+                    uu = str(u or "").strip()
+                    if uu:
+                        gallery_urls.add(uu)
         except Exception:
             sizes, colors = [], []
+        detected_color = str(getattr(p, "detected_color", "") or "").strip()
+        if not colors and detected_color:
+            colors = [detected_color]
         out.append({
             "id": p.id,
             "title": p.title,
@@ -207,13 +231,21 @@ def list_products(
             "import_source_url": getattr(p, "import_source_url", None),
             "import_source_kind": getattr(p, "import_source_kind", None),
             "import_supplier_name": getattr(p, "import_supplier_name", None),
-            "image_count": len(getattr(p, "images", []) or []),
+            "image_count": len(gallery_urls),
             "sizes": sizes,
             "colors": colors,
+            "detected_color": detected_color or None,
             "variants": [{"id": v.id, "price": float(v.price or p.base_price or 0), "stock_quantity": int(v.stock_quantity or 0)} for v in (p.variants or [])],
             "cost_price": (round(sum(latest_cost_by_variant.values()) / len(latest_cost_by_variant), 2) if latest_cost_by_variant else None),
         })
-    return {"products": out}
+    return {
+        "items": out,
+        "products": out,
+        "total": total,
+        "page": safe_page,
+        "limit": int(limit),
+        "pages": pages,
+    }
 
 
 @router.post("/products")
