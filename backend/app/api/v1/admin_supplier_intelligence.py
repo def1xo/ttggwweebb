@@ -704,12 +704,10 @@ def _prefer_local_image_url(url: str | None, *, title_hint: str | None = None, s
         if local_candidate:
             return local_candidate
     except Exception:
-        # keep remote URL only when it already looks like a direct image link;
-        # otherwise we may save broken t.me/page links into product gallery.
-        if _looks_like_direct_image_url(normalized_u):
-            return normalized_u
+        # Do not keep remote URL in gallery when localization fails,
+        # otherwise broken/low-quality sources leak into UI.
         return None
-    return normalized_u
+    return None
 
 
 def _env_int(name: str, default: int) -> int:

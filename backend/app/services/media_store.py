@@ -8,6 +8,15 @@ from typing import Optional, Set, Tuple
 from urllib.parse import urlparse
 
 import requests
+from PIL import Image
+import io
+
+try:
+    import cv2  # type: ignore
+    import numpy as np
+except Exception:  # pragma: no cover
+    cv2 = None
+    np = None
 
 from fastapi import UploadFile
 
@@ -21,6 +30,35 @@ ALLOWED_EXTS_PDF: Set[str] = {".pdf"}
 ALLOWED_MIMES_PDF: Set[str] = {"application/pdf"}
 
 MAX_UPLOAD_BYTES = int(os.getenv('MAX_UPLOAD_BYTES') or os.getenv('MAX_UPLOAD_SIZE') or (8 * 1024 * 1024))
+SUPPLIER_IMPORT_MIN_IMAGE_SIDE = int(os.getenv("SUPPLIER_IMPORT_MIN_IMAGE_SIDE", "420"))
+SUPPLIER_IMPORT_MIN_IMAGE_BYTES = int(os.getenv("SUPPLIER_IMPORT_MIN_IMAGE_BYTES", "12000"))
+SUPPLIER_IMPORT_MIN_SHARPNESS = float(os.getenv("SUPPLIER_IMPORT_MIN_SHARPNESS", "25"))
+
+
+def _validate_remote_image_quality(data: bytes) -> None:
+    if len(data or b"") < SUPPLIER_IMPORT_MIN_IMAGE_BYTES:
+        raise ValueError("remote image too small")
+
+    try:
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception as exc:
+        raise ValueError(f"invalid image payload: {exc}")
+
+    w, h = img.size
+    if min(int(w), int(h)) < SUPPLIER_IMPORT_MIN_IMAGE_SIDE:
+        raise ValueError("remote image dimensions too small")
+
+    if cv2 is not None and np is not None:
+        try:
+            gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
+            sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            if sharpness < SUPPLIER_IMPORT_MIN_SHARPNESS:
+                raise ValueError("remote image too blurry")
+        except ValueError:
+            raise
+        except Exception:
+            # If opencv pipeline fails for a valid image, don't block import.
+            pass
 
 
 def _ensure_folder(folder: str) -> Path:
@@ -161,6 +199,8 @@ def save_remote_image_to_local(
         raise ValueError("empty image payload")
     if len(data) > MAX_UPLOAD_BYTES:
         raise ValueError("remote image too large")
+
+    _validate_remote_image_quality(data)
 
     dest_folder = _ensure_folder(folder)
 
