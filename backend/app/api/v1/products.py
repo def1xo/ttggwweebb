@@ -31,11 +31,26 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
     Live color detection only happens during import.
     """
     variants = list(getattr(p, "variants", []) or [])
-    base_images = [im.url for im in sorted((p.images or []), key=lambda x: ((x.sort or 0), x.id))]
+    base_images = [im.url for im in sorted((p.images or []), key=lambda x: ((x.sort or 0), x.id)) if getattr(im, "url", None)]
 
     import_media_meta = getattr(p, "import_media_meta", None) or {}
     stored_images_by_key = import_media_meta.get("images_by_color_key") if isinstance(import_media_meta, dict) else None
     general_images = list(import_media_meta.get("general_images") or []) if isinstance(import_media_meta, dict) else []
+
+    def _append_unique(dst: list[str], seen: set[str], values: list[Any]) -> None:
+        for val in values or []:
+            u = str(val or "").strip()
+            if not u or u in seen:
+                continue
+            seen.add(u)
+            dst.append(u)
+
+    base_gallery: list[str] = []
+    base_seen: set[str] = set()
+    _append_unique(base_gallery, base_seen, base_images)
+    _append_unique(base_gallery, base_seen, general_images)
+    for v in variants:
+        _append_unique(base_gallery, base_seen, list(getattr(v, "images", None) or []))
 
     color_groups: Dict[str, Dict[str, Any]] = {}
     for v in variants:
@@ -45,9 +60,7 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
             continue
         grp = color_groups.setdefault(color_key, {"color": color_key, "variant_ids": [], "images": []})
         grp["variant_ids"].append(v.id)
-        for u in (v.images or []):
-            if u and u not in grp["images"]:
-                grp["images"].append(u)
+        _append_unique(grp["images"], set(grp["images"]), list(v.images or []))
 
     if isinstance(stored_images_by_key, dict):
         for k, imgs in stored_images_by_key.items():
@@ -55,26 +68,32 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
             if not key:
                 continue
             grp = color_groups.setdefault(key, {"color": key, "variant_ids": [], "images": []})
-            for u in (imgs or []):
-                if u and u not in grp["images"]:
-                    grp["images"].append(u)
+            _append_unique(grp["images"], set(grp["images"]), list(imgs or []))
 
     for grp in color_groups.values():
         if not grp["images"] and general_images:
             grp["images"] = list(general_images)
 
     available = list(color_groups.keys())
-    selected = normalize_color_to_whitelist(getattr(p, "detected_color", None)) if getattr(p, "detected_color", None) else ""
-    if selected not in available:
-        selected = available[0] if available else None
+    detected_color_key = normalize_color_to_whitelist(getattr(p, "detected_color", None)) if getattr(p, "detected_color", None) else ""
+    is_single_color = len(available) <= 1 and (bool(available) or bool(detected_color_key) or not any(getattr(v, "color_id", None) for v in variants))
+
+    selected = detected_color_key
+    if available:
+        if selected not in available:
+            selected = available[0]
+    elif is_single_color and selected:
+        available = [selected]
 
     selected_images = color_groups.get(selected, {}).get("images") if selected else []
+    if is_single_color:
+        selected_images = list(base_gallery)
     if not selected_images:
         selected_images = list(general_images)
     if not selected_images and available:
         selected_images = list(color_groups.get(available[0], {}).get("images") or [])
     if not selected_images:
-        selected_images = list(base_images)
+        selected_images = list(base_gallery or base_images)
 
     images_by_color = {k: list(v.get("images") or []) for k, v in color_groups.items()}
     color_key_to_display = {k: canonical_color_to_display_name(k) for k in available}

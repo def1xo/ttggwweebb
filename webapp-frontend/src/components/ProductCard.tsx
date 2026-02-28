@@ -114,7 +114,7 @@ export default function ProductCard({ product }: Props) {
     <Link to={`/product/${product?.id}`} className="card" style={{ textDecoration: "none", color: "inherit" }}>
       <div className="product-card">
         <div className="product-thumb">
-          <img src={cardImage} alt={title} onError={() => setCardImage(FALLBACK_IMAGE)} style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 12 }} />
+          <img src={cardImage} alt={title} loading="lazy" decoding="async" onError={() => setCardImage(FALLBACK_IMAGE)} style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 12 }} />
           {meta.isNew ? <div className="badge">NEW</div> : null}
           <button
             type="button"

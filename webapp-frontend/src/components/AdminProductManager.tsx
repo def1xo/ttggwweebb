@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import apiDefault from "../services/api";
 import ProductModal from "./ProductModal";
@@ -36,6 +36,7 @@ export default function AdminProductManager() {
   const [total, setTotal] = useState(0);
   const [pages, setPages] = useState(1);
   const perPage = 25;
+  const debouncedInitializedRef = useRef(false);
 
   useEffect(() => {
     load(debouncedQuery, page);
@@ -48,22 +49,38 @@ export default function AdminProductManager() {
 
   useEffect(() => {
     const t = window.setTimeout(() => {
-      setDebouncedQuery(query);
-      setPage(1);
+      setDebouncedQuery(query.trim());
     }, 300);
     return () => window.clearTimeout(t);
   }, [query]);
 
   useEffect(() => {
+    if (!debouncedInitializedRef.current) {
+      debouncedInitializedRef.current = true;
+      return;
+    }
+    setPage(1);
+  }, [debouncedQuery]);
+
+  useEffect(() => {
+    const nextQ = searchParams.get("q") || "";
+    const nextPageRaw = Number(searchParams.get("page") || 1);
+    const nextPage = Number.isFinite(nextPageRaw) && nextPageRaw > 0 ? Math.floor(nextPageRaw) : 1;
+    if (nextQ !== query) setQuery(nextQ);
+    if (nextQ !== debouncedQuery) setDebouncedQuery(nextQ);
+    if (nextPage !== page) setPage(nextPage);
+  }, [searchParams]);
+
+  useEffect(() => {
     const params = new URLSearchParams(searchParams);
-    if (query.trim()) params.set("q", query.trim());
+    if (debouncedQuery) params.set("q", debouncedQuery);
     else params.delete("q");
     if (page > 1) params.set("page", String(page));
     else params.delete("page");
     const next = params.toString();
     const cur = searchParams.toString();
     if (next !== cur) setSearchParams(params, { replace: true });
-  }, [query, page]);
+  }, [debouncedQuery, page, searchParams, setSearchParams]);
 
   useEffect(() => {
     const key = `scroll:${location.pathname}?${location.search}`;
@@ -167,9 +184,6 @@ export default function AdminProductManager() {
     }
   }
 
-  useEffect(() => {
-    if (page > pages) setPage(pages);
-  }, [page, pages]);
 
   return (
     <div>
@@ -236,9 +250,9 @@ export default function AdminProductManager() {
 
         {!loading && pages > 1 ? (
           <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
-            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.max(1, v - 1))} disabled={page <= 1}>← Назад</button>
+            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.max(1, v - 1))} disabled={loading || page <= 1}>← Назад</button>
             <div className="small-muted">Страница {page} / {pages}</div>
-            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.min(pages, v + 1))} disabled={page >= pages}>Далее →</button>
+            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.min(pages, v + 1))} disabled={loading || page >= pages}>Далее →</button>
           </div>
         ) : null}
       </div>
