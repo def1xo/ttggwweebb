@@ -2205,7 +2205,8 @@ def import_products_from_sources(
                 color_tokens = [str(x).strip() for x in (color_assignment.get("color_tokens") or []) if str(x).strip()]
                 if not color_tokens:
                     fallback_key = str(color_assignment.get("detected_color") or "").strip()
-                    if normalize_color_to_whitelist(fallback_key) == "multi":
+                    fallback_key = normalize_color_to_whitelist(fallback_key)
+                    if fallback_key == "multi":
                         fallback_key = ""
                     color_tokens = [fallback_key] if fallback_key else [""]
                 variant_images_by_color = dict(color_assignment.get("variant_images_by_color") or {})
