@@ -183,7 +183,7 @@ def test_detect_product_color_for_15_images_forces_three_colors(monkeypatch):
 
     monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
     out = cd.detect_product_color([str(i) for i in range(15)], supplier_profile="shop_vkus")
-    assert out["color"] in {"black-white", "black", "white", "red"}
+    assert out["color"] == "black-white"
     assert out["debug"]["palette_rule"] == "15_21_to_3"
 
 
@@ -207,7 +207,7 @@ def test_detect_product_color_photo_count_rules_not_global(monkeypatch):
     monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
     out = cd.detect_product_color([str(i) for i in range(10)], supplier_profile="other_supplier")
     assert out["debug"]["palette_rule"] == "default"
-    assert out["color"] in {"black", "white", "black-white"}
+    assert out["color"] == "black-white"
 
 
 def test_detect_product_color_for_4_images_forces_single(monkeypatch):

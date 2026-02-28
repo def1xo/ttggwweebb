@@ -481,7 +481,7 @@ def detect_product_color(image_sources: Sequence[str], supplier_profile: Optiona
             share2 = float(s2) / float(total_score)
             if share1 <= 0.72 and share2 >= 0.26 and (share1 + share2) >= 0.72:
                 combo = normalize_combo_color_key([c1, c2])
-                if "-" in combo:
+                if combo:
                     color = combo
                     conf = max(conf, min(0.98, share1 + share2))
 
