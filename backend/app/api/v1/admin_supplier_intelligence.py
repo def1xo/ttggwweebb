@@ -20,7 +20,11 @@ from app.db import models
 from app.services.importer_notifications import slugify
 from app.services import media_store
 from app.services.supplier_profiles import normalize_title_for_supplier
-from app.services.color_detection import normalize_color_to_whitelist, normalize_combo_color_key
+from app.services.color_detection import (
+    detect_product_colors_from_photos,
+    normalize_color_to_whitelist,
+    normalize_combo_color_key,
+)
 from app.services.color_ml import predict_color_for_image_url
 from app.services.supplier_importers import (
     ImporterContext,
@@ -66,6 +70,7 @@ MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT = 40
 MIN_IMAGE_SIDE_PX = 600
 MIN_IMAGE_FILE_SIZE_BYTES = 40 * 1024
 MAX_IMAGE_ASPECT_RATIO = 5.0
+MIN_PRODUCT_IMAGES_TARGET = 4
 
 FOOTWEAR_TITLE_RE = re.compile(
     r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574|1906|2002|dunk|forum|asics)\b"
@@ -113,18 +118,48 @@ def _infer_color_kind_from_title(raw_title: str | None) -> str:
     return "shoes" if FOOTWEAR_TITLE_RE.search(title) else "clothes"
 
 
-def _pick_color_detection_images(image_urls: list[str], limit: int = 4) -> list[str]:
-    ranked: list[str] = []
+def _pick_color_detection_images(image_urls: list[str], limit: int = 6) -> list[str]:
+    """Pick a diverse set of best gallery images for color detection.
+
+    We intentionally avoid relying on a single leading frame (e.g. outsole-only photo).
+    """
+    uniq: list[str] = []
     seen: set[str] = set()
     for u in sorted((image_urls or []), key=lambda x: _score_gallery_image(x), reverse=True):
         uu = str(u or "").strip()
         if not uu or uu in seen:
             continue
         seen.add(uu)
-        ranked.append(uu)
-        if len(ranked) >= max(1, int(limit)):
-            break
-    return ranked
+        uniq.append(uu)
+
+    if not uniq:
+        return []
+
+    target = max(1, int(limit))
+    if len(uniq) <= target:
+        return uniq
+
+    # diversify: sample across top candidates instead of taking only head frames
+    pool = uniq[: max(target * 2, target)]
+    out: list[str] = []
+    if pool:
+        out.append(pool[0])
+    if target > 1:
+        step = max(1, len(pool) // target)
+        idx = step
+        while len(out) < target and idx < len(pool):
+            cand = pool[idx]
+            if cand not in out:
+                out.append(cand)
+            idx += step
+    if len(out) < target:
+        for u in pool:
+            if u in out:
+                continue
+            out.append(u)
+            if len(out) >= target:
+                break
+    return out[:target]
 
 
 def _build_color_assignment(
@@ -154,7 +189,8 @@ def _build_color_assignment(
             },
         }
 
-    detection_images = _pick_color_detection_images(image_urls or [], limit=4)
+    detection_limit = max(4, min(8, len(image_urls or [])))
+    detection_images = _pick_color_detection_images(image_urls or [], limit=detection_limit)
     prob_sums: dict[str, float] = {}
     total_signal = 0.0
     for url in detection_images:
@@ -179,6 +215,38 @@ def _build_color_assignment(
             if ck and ck != "multi" and conf > 0:
                 prob_sums[ck] = prob_sums.get(ck, 0.0) + conf
                 total_signal += conf
+
+    if not prob_sums:
+        # 1) CV aggregate fallback across multiple images (works when ML model is absent in docker)
+        cv_detected = detect_product_colors_from_photos(detection_images, supplier_profile=supplier_key or None)
+        cv_key = normalize_color_to_whitelist((cv_detected or {}).get("color"))
+        cv_conf = float((cv_detected or {}).get("confidence") or 0.0)
+        if cv_key and cv_key != "multi":
+            prob_sums[cv_key] = max(cv_conf, 0.35)
+            total_signal += max(cv_conf, 0.35)
+
+    if not prob_sums:
+        # 2) Last-resort per-image dominant color heuristic
+        for url in detection_images:
+            try:
+                raw_dom = dominant_color_name_from_url(url)
+            except Exception:
+                raw_dom = None
+            dk = normalize_color_to_whitelist(raw_dom)
+            if not dk or dk == "multi":
+                continue
+            prob_sums[dk] = prob_sums.get(dk, 0.0) + 0.25
+            total_signal += 0.25
+
+    if not prob_sums:
+        # 3) Text fallback (title/description/notes) for cases where image ML/CV is unavailable in runtime
+        text_candidates = _extract_shop_vkus_color_tokens(item if isinstance(item, dict) else {}, image_urls=[])
+        for token in text_candidates:
+            tk = _canonical_color_key(token)
+            if not tk or tk == "multi":
+                continue
+            prob_sums[tk] = prob_sums.get(tk, 0.0) + 0.2
+            total_signal += 0.2
 
     ranked = sorted(prob_sums.items(), key=lambda kv: kv[1], reverse=True)
     primary = ranked[0][0] if ranked else ""
@@ -206,6 +274,9 @@ def _build_color_assignment(
             "source": "image_aggregate",
             "top_images": detection_images,
             "prob_sums": prob_sums,
+            "images_total": len(image_urls or []),
+            "images_used": len(detection_images),
+            "target_min_images": MIN_PRODUCT_IMAGES_TARGET,
             "final_colors": [detected_key],
         },
     }
@@ -538,7 +609,11 @@ def _is_likely_product_image(url: str) -> bool:
         return False
 
     local_path: str | None = None
-    if low.startswith("/"):
+    if low.startswith("/uploads/"):
+        local_path = str(url).lstrip("/")
+    elif low.startswith("/") and os.path.exists(str(url)):
+        local_path = str(url)
+    elif low.startswith("/"):
         local_path = str(url).lstrip("/")
     elif low.startswith("uploads/"):
         local_path = str(url)
@@ -562,6 +637,19 @@ def _is_likely_product_image(url: str) -> bool:
                     entropy = 0.0
                 if entropy < 2.9 and std < 14.0:
                     return False
+
+                # Reject synthetic emoji/text tiles often present in telegram dumps.
+                # These frames are usually low-color, center-dominant graphics.
+                tiny = img.convert("RGB").resize((96, 96))
+                quant = tiny.quantize(colors=24)
+                q_colors = quant.getcolors(maxcolors=128) or []
+                unique_q = len(q_colors)
+                if unique_q <= 8 and entropy < 4.2:
+                    return False
+                if q_colors:
+                    top_share = max(c for c, _ in q_colors) / float(96 * 96)
+                    if top_share >= 0.58 and std < 26.0:
+                        return False
         except Exception:
             pass
 
@@ -585,7 +673,11 @@ def _score_gallery_image(url: str | None) -> float:
 
     # Local-file quality heuristics (if localized and Pillow is available)
     local_path: str | None = None
-    if low.startswith("/"):
+    if low.startswith("/uploads/"):
+        local_path = u.lstrip("/")
+    elif low.startswith("/") and os.path.exists(u):
+        local_path = u
+    elif low.startswith("/"):
         local_path = u.lstrip("/")
     elif low.startswith("uploads/"):
         local_path = u
@@ -688,9 +780,7 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
         # shop_vkus feeds often prepend two service frames in longer galleries.
         pre = list(uniq)
         source = raw_norm or uniq
-        if len(source) >= 7:
-            pre = uniq[2:]
-        elif len(source) > 2:
+        if len(source) > 2:
             first_two = source[:2]
             rest = source[2:]
             has_supplier_marker = any(
@@ -702,19 +792,34 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
             second_is_suspicious = bool((not _is_likely_product_image(first_two[1])) or (_score_gallery_image(first_two[1]) < 0)) if len(first_two) >= 2 else False
 
             should_drop_pair = False
-            if len(source) >= 6 and (has_supplier_marker or leading_pair_suspicious or duplicated_cover):
+            if len(source) >= 7 and (has_supplier_marker or (leading_pair_suspicious and duplicated_cover)):
                 should_drop_pair = True
-            elif len(source) == 5 and (has_supplier_marker or leading_pair_suspicious or (duplicated_cover and second_is_suspicious)):
+            elif len(source) >= 5 and (has_supplier_marker and leading_pair_suspicious):
+                should_drop_pair = True
+            elif len(source) == 5 and duplicated_cover and second_is_suspicious:
                 should_drop_pair = True
 
             if should_drop_pair:
                 pre = uniq[2:]
 
         filtered = [u for u in pre if _is_likely_product_image(u)]
-        work = filtered if filtered else pre
+        if len(filtered) >= MIN_PRODUCT_IMAGES_TARGET:
+            work = filtered
+        elif filtered:
+            # Keep likely product images first, but retain extra frames to avoid over-pruning.
+            tails = [u for u in pre if u not in filtered]
+            need = max(0, MIN_PRODUCT_IMAGES_TARGET - len(filtered))
+            work = filtered + tails[:need]
+        else:
+            work = pre
+        if len(work) < MIN_PRODUCT_IMAGES_TARGET <= len(pre):
+            # Do not collapse gallery to 1-2 photos due aggressive frame filtering.
+            work = pre
 
-        work = _filter_gallery_main_signature_cluster(work)
-        return work
+        clustered = _filter_gallery_main_signature_cluster(work)
+        if len(clustered) < MIN_PRODUCT_IMAGES_TARGET <= len(work):
+            return work
+        return clustered
 
     ranked = sorted(uniq, key=lambda x: _score_gallery_image(x), reverse=True)
     return ranked
@@ -1991,6 +2096,30 @@ def import_products_from_sources(
                     image_urls = _rerank_gallery_images(hybrid_image_urls, supplier_key=supplier_key)
                     image_url = image_urls[0]
 
+                # Auto-enrich sparse galleries from known same-title images.
+                # Keeps catalog cards from ending up with 1 photo when source split is noisy.
+                if image_url and known_image_urls and len(image_urls) < MIN_PRODUCT_IMAGES_TARGET:
+                    try:
+                        sim_items = find_similar_images(image_url, known_image_urls, max_hamming_distance=6, limit=20)
+                    except Exception:
+                        sim_items = []
+                    for sim in sim_items:
+                        sim_url = str(sim.get("image_url") or "").strip()
+                        if not sim_url:
+                            continue
+                        matched_meta = known_item_by_image_url.get(sim_url) or {}
+                        if _title_key(str(matched_meta.get("title") or "")) != _title_key(title):
+                            continue
+                        final_sim_url = _prefer_local_image_url(sim_url, title_hint=title, source_page_url=src_url)
+                        if not final_sim_url or final_sim_url in image_urls:
+                            continue
+                        image_urls.append(final_sim_url)
+                        if len(image_urls) >= MIN_PRODUCT_IMAGES_TARGET:
+                            break
+                    if image_urls:
+                        image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
+                        image_url = image_urls[0]
+
                 allow_external_image_search = _env_bool("IMPORT_ALLOW_EXTERNAL_IMAGE_SEARCH", False)
                 allow_cross_item_enrich = _env_bool("IMPORT_ALLOW_CROSS_ITEM_ENRICH", False)
 
@@ -2205,7 +2334,8 @@ def import_products_from_sources(
                 color_tokens = [str(x).strip() for x in (color_assignment.get("color_tokens") or []) if str(x).strip()]
                 if not color_tokens:
                     fallback_key = str(color_assignment.get("detected_color") or "").strip()
-                    if normalize_color_to_whitelist(fallback_key) == "multi":
+                    fallback_key = normalize_color_to_whitelist(fallback_key)
+                    if fallback_key == "multi":
                         fallback_key = ""
                     color_tokens = [fallback_key] if fallback_key else [""]
                 variant_images_by_color = dict(color_assignment.get("variant_images_by_color") or {})
