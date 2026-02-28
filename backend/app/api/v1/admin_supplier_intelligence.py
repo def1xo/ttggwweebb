@@ -70,6 +70,7 @@ MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT = 40
 MIN_IMAGE_SIDE_PX = 600
 MIN_IMAGE_FILE_SIZE_BYTES = 40 * 1024
 MAX_IMAGE_ASPECT_RATIO = 5.0
+MIN_PRODUCT_IMAGES_TARGET = 4
 
 FOOTWEAR_TITLE_RE = re.compile(
     r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574|1906|2002|dunk|forum|asics)\b"
@@ -275,6 +276,7 @@ def _build_color_assignment(
             "prob_sums": prob_sums,
             "images_total": len(image_urls or []),
             "images_used": len(detection_images),
+            "target_min_images": MIN_PRODUCT_IMAGES_TARGET,
             "final_colors": [detected_key],
         },
     }
@@ -781,9 +783,14 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
 
         filtered = [u for u in pre if _is_likely_product_image(u)]
         work = filtered if filtered else pre
+        if len(work) < MIN_PRODUCT_IMAGES_TARGET <= len(pre):
+            # Do not collapse gallery to 1-2 photos due aggressive frame filtering.
+            work = pre
 
-        work = _filter_gallery_main_signature_cluster(work)
-        return work
+        clustered = _filter_gallery_main_signature_cluster(work)
+        if len(clustered) < MIN_PRODUCT_IMAGES_TARGET <= len(work):
+            return work
+        return clustered
 
     ranked = sorted(uniq, key=lambda x: _score_gallery_image(x), reverse=True)
     return ranked
@@ -2059,6 +2066,30 @@ def import_products_from_sources(
                 if hybrid_image_urls:
                     image_urls = _rerank_gallery_images(hybrid_image_urls, supplier_key=supplier_key)
                     image_url = image_urls[0]
+
+                # Auto-enrich sparse galleries from known same-title images.
+                # Keeps catalog cards from ending up with 1 photo when source split is noisy.
+                if image_url and known_image_urls and len(image_urls) < MIN_PRODUCT_IMAGES_TARGET:
+                    try:
+                        sim_items = find_similar_images(image_url, known_image_urls, max_hamming_distance=6, limit=20)
+                    except Exception:
+                        sim_items = []
+                    for sim in sim_items:
+                        sim_url = str(sim.get("image_url") or "").strip()
+                        if not sim_url:
+                            continue
+                        matched_meta = known_item_by_image_url.get(sim_url) or {}
+                        if _title_key(str(matched_meta.get("title") or "")) != _title_key(title):
+                            continue
+                        final_sim_url = _prefer_local_image_url(sim_url, title_hint=title, source_page_url=src_url)
+                        if not final_sim_url or final_sim_url in image_urls:
+                            continue
+                        image_urls.append(final_sim_url)
+                        if len(image_urls) >= MIN_PRODUCT_IMAGES_TARGET:
+                            break
+                    if image_urls:
+                        image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
+                        image_url = image_urls[0]
 
                 allow_external_image_search = _env_bool("IMPORT_ALLOW_EXTERNAL_IMAGE_SEARCH", False)
                 allow_cross_item_enrich = _env_bool("IMPORT_ALLOW_CROSS_ITEM_ENRICH", False)

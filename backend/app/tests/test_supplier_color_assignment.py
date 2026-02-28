@@ -155,3 +155,28 @@ def test_build_color_assignment_falls_back_to_text_when_image_signals_absent(mon
 
     assert assignment["detected_color"] == "black-white"
     assert assignment["color_tokens"] == ["black-white"]
+
+
+def test_rerank_shop_vkus_does_not_collapse_gallery_below_four(monkeypatch):
+    monkeypatch.setattr(asi, "_is_likely_product_image", lambda _u: False)
+    monkeypatch.setattr(asi, "_filter_gallery_main_signature_cluster", lambda urls: urls[:1])
+
+    urls = [f"https://cdn.example/{i}.jpg" for i in range(7)]
+    out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
+
+    assert len(out) >= 4
+
+
+def test_build_color_assignment_debug_contains_min_images_target(monkeypatch):
+    monkeypatch.setattr(asi, "predict_color_for_image_url", lambda url, kind: {"color": "black", "confidence": 0.8, "probs": {"black": 0.8}})
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda url: 100.0)
+
+    assignment = asi._build_color_assignment(
+        title="Nike Air Max",
+        supplier_key="any",
+        src_url="https://supplier.example/item",
+        item={"title": "Nike Air Max", "color": ""},
+        image_urls=["img1", "img2", "img3", "img4", "img5"],
+    )
+
+    assert assignment["detected_color_debug"]["target_min_images"] == 4
