@@ -44,6 +44,23 @@ def test_build_color_assignment_returns_combo_for_significant_two_tone(monkeypat
     assert assignment["color_tokens"] == ["black-white"]
 
 
+def test_build_color_assignment_with_empty_detection_keeps_color_empty(monkeypatch):
+    monkeypatch.setattr(asi, "predict_color_for_image_url", lambda url, kind: {"color": "multi", "confidence": 0.9, "probs": {"multi": 0.9}})
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda url: 100.0)
+
+    assignment = asi._build_color_assignment(
+        title="Nike Air Max",
+        supplier_key="any",
+        src_url="https://supplier.example/item",
+        item={"title": "Nike Air Max", "color": ""},
+        image_urls=["img1", "img2"],
+    )
+
+    assert assignment["detected_color"] == ""
+    assert assignment["color_tokens"] == []
+    assert assignment["detected_color"] != "multi"
+
+
 def test_two_colorways_create_distinct_non_null_color_variants(db_session):
     product = Product(title="Yeezy 350", slug="yeezy-350", base_price=Decimal("1000"), visible=True)
     db_session.add(product)

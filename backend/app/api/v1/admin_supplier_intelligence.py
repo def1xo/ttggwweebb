@@ -189,8 +189,20 @@ def _build_color_assignment(
     detected_key = primary or ""
     if primary and secondary and primary_score > 0 and secondary_score >= (primary_score * 0.35):
         combo = normalize_combo_color_key([primary, secondary])
-        if combo:
-            detected_key = combo
+        if combo and "-" in combo:
+            pair = tuple(combo.split("-", 1))
+            allowed_pairs = {
+                ("black", "white"),
+                ("black", "gray"),
+                ("white", "gray"),
+                ("red", "black"),
+                ("blue", "black"),
+                ("green", "black"),
+                ("blue", "white"),
+                ("red", "white"),
+            }
+            if pair in allowed_pairs:
+                detected_key = combo
 
     detected_conf = (primary_score / total_signal) if total_signal > 0 else 0.0
     detected_conf = max(0.0, min(1.0, detected_conf))
@@ -2205,7 +2217,8 @@ def import_products_from_sources(
                 color_tokens = [str(x).strip() for x in (color_assignment.get("color_tokens") or []) if str(x).strip()]
                 if not color_tokens:
                     fallback_key = str(color_assignment.get("detected_color") or "").strip()
-                    if normalize_color_to_whitelist(fallback_key) == "multi":
+                    fallback_key = normalize_color_to_whitelist(fallback_key)
+                    if fallback_key == "multi":
                         fallback_key = ""
                     color_tokens = [fallback_key] if fallback_key else [""]
                 variant_images_by_color = dict(color_assignment.get("variant_images_by_color") or {})

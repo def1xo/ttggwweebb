@@ -96,13 +96,11 @@ def normalize_combo_color_key(keys: Sequence[str]) -> str:
     if len(normalized) == 1:
         return normalized[0]
 
-    if len(normalized) == 2:
+    if len(normalized) >= 2:
         pair = tuple(normalized[:2])
         if pair in _ALLOWED_COLOR_COMBOS:
             return f"{pair[0]}-{pair[1]}"
-        return "-".join(normalized[:2])
-
-    return "-".join(normalized[:3])
+    return normalized[0]
 
 
 @dataclass
@@ -363,7 +361,17 @@ def _compose_palette_color(top: List[tuple[str, float]], total_score: float, tar
 
     if not chosen:
         chosen = [usable[0][0]]
-    return normalize_combo_color_key(chosen)
+
+    if target_count <= 1 or len(chosen) == 1:
+        return chosen[0]
+    if len(chosen) >= 2:
+        order = {c: i for i, c in enumerate(_COLOR_PRIORITY)}
+        pair = tuple(sorted(chosen[:2], key=lambda x: order.get(x, 999)))
+        if pair in _ALLOWED_COLOR_COMBOS:
+            return f"{pair[0]}-{pair[1]}"
+        # Only allowed pairs can become two-tone combos.
+        return chosen[0]
+    return chosen[0]
 
 
 def detect_product_color(image_sources: Sequence[str], supplier_profile: Optional[str] = None) -> Dict[str, Any]:
