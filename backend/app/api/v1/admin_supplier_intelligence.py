@@ -143,7 +143,19 @@ def _build_color_assignment(
 
     if len(final_colors) <= 1:
         single_color = final_colors[0] if final_colors else ""
-        color_images = list(images_by_color.get(single_color) or image_urls)
+        # Single-color product must keep full gallery (no color selector);
+        # don't shrink to only ML-confident subset, otherwise UI gets 2-3 photos.
+        color_images = list(image_urls or images_by_color.get(single_color) or [])
+        if color_images:
+            seen_imgs: set[str] = set()
+            deduped: list[str] = []
+            for u in color_images:
+                uu = str(u or "").strip()
+                if not uu or uu in seen_imgs:
+                    continue
+                seen_imgs.add(uu)
+                deduped.append(uu)
+            color_images = deduped
         confidences: list[float] = []
         for url in color_images:
             pred = predict_color_for_image_url(url, kind=kind)
