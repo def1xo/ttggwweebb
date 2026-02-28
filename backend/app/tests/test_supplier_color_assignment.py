@@ -98,3 +98,24 @@ def test_two_colorways_create_distinct_non_null_color_variants(db_session):
     assert len(variants) >= 2
     assert all(v.color_id is not None for v in variants)
     assert len({v.color_id for v in variants}) >= 2
+
+
+def test_build_color_assignment_allows_any_canonical_pair(monkeypatch):
+    predictions = {
+        "img1": {"color": "blue", "confidence": 0.9, "probs": {"blue": 0.9, "red": 0.45}},
+        "img2": {"color": "blue", "confidence": 0.8, "probs": {"blue": 0.8, "red": 0.35}},
+    }
+
+    monkeypatch.setattr(asi, "predict_color_for_image_url", lambda url, kind: predictions[url])
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda url: 100.0)
+
+    assignment = asi._build_color_assignment(
+        title="Nike Air Max",
+        supplier_key="any",
+        src_url="https://supplier.example/item",
+        item={"title": "Nike Air Max", "color": ""},
+        image_urls=["img1", "img2"],
+    )
+
+    assert assignment["detected_color"] == "blue-red"
+    assert assignment["color_tokens"] == ["blue-red"]

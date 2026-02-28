@@ -190,19 +190,7 @@ def _build_color_assignment(
     if primary and secondary and primary_score > 0 and secondary_score >= (primary_score * 0.35):
         combo = normalize_combo_color_key([primary, secondary])
         if combo and "-" in combo:
-            pair = tuple(combo.split("-", 1))
-            allowed_pairs = {
-                ("black", "white"),
-                ("black", "gray"),
-                ("white", "gray"),
-                ("red", "black"),
-                ("blue", "black"),
-                ("green", "black"),
-                ("blue", "white"),
-                ("red", "white"),
-            }
-            if pair in allowed_pairs:
-                detected_key = combo
+            detected_key = combo
 
     detected_conf = (primary_score / total_signal) if total_signal > 0 else 0.0
     detected_conf = max(0.0, min(1.0, detected_conf))
