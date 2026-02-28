@@ -18,6 +18,7 @@ def test_normalize_color_key_and_combo():
     assert normalize_color_key("графит") == "gray"
     assert normalize_combo_color_key(["white", "black"]) == "black-white"
     assert normalize_combo_color_key(["red", "black", "white"]) == "black-white"
+    assert normalize_combo_color_key(["red", "blue"]) == "blue-red"
 
 
 def test_color_payload_uses_canonical_keys_and_images_by_key():
