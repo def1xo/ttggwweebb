@@ -1,5 +1,4 @@
 from decimal import Decimal
-
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -180,3 +179,14 @@ def test_build_color_assignment_debug_contains_min_images_target(monkeypatch):
     )
 
     assert assignment["detected_color_debug"]["target_min_images"] == 4
+
+
+def test_rerank_shop_vkus_keeps_first_frames_when_not_suspicious(monkeypatch):
+    monkeypatch.setattr(asi, "_is_likely_product_image", lambda _u: True)
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda _u: 10.0)
+    monkeypatch.setattr(asi, "_filter_gallery_main_signature_cluster", lambda urls: urls)
+
+    urls = [f"https://cdn.example/{i}.jpg" for i in range(7)]
+    out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
+
+    assert out[:3] == urls[:3]

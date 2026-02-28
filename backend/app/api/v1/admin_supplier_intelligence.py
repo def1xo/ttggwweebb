@@ -609,7 +609,11 @@ def _is_likely_product_image(url: str) -> bool:
         return False
 
     local_path: str | None = None
-    if low.startswith("/"):
+    if low.startswith("/uploads/"):
+        local_path = str(url).lstrip("/")
+    elif low.startswith("/") and os.path.exists(str(url)):
+        local_path = str(url)
+    elif low.startswith("/"):
         local_path = str(url).lstrip("/")
     elif low.startswith("uploads/"):
         local_path = str(url)
@@ -633,6 +637,19 @@ def _is_likely_product_image(url: str) -> bool:
                     entropy = 0.0
                 if entropy < 2.9 and std < 14.0:
                     return False
+
+                # Reject synthetic emoji/text tiles often present in telegram dumps.
+                # These frames are usually low-color, center-dominant graphics.
+                tiny = img.convert("RGB").resize((96, 96))
+                quant = tiny.quantize(colors=24)
+                q_colors = quant.getcolors(maxcolors=128) or []
+                unique_q = len(q_colors)
+                if unique_q <= 8 and entropy < 4.2:
+                    return False
+                if q_colors:
+                    top_share = max(c for c, _ in q_colors) / float(96 * 96)
+                    if top_share >= 0.58 and std < 26.0:
+                        return False
         except Exception:
             pass
 
@@ -656,7 +673,11 @@ def _score_gallery_image(url: str | None) -> float:
 
     # Local-file quality heuristics (if localized and Pillow is available)
     local_path: str | None = None
-    if low.startswith("/"):
+    if low.startswith("/uploads/"):
+        local_path = u.lstrip("/")
+    elif low.startswith("/") and os.path.exists(u):
+        local_path = u
+    elif low.startswith("/"):
         local_path = u.lstrip("/")
     elif low.startswith("uploads/"):
         local_path = u
@@ -759,9 +780,7 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
         # shop_vkus feeds often prepend two service frames in longer galleries.
         pre = list(uniq)
         source = raw_norm or uniq
-        if len(source) >= 7:
-            pre = uniq[2:]
-        elif len(source) > 2:
+        if len(source) > 2:
             first_two = source[:2]
             rest = source[2:]
             has_supplier_marker = any(
@@ -773,16 +792,26 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
             second_is_suspicious = bool((not _is_likely_product_image(first_two[1])) or (_score_gallery_image(first_two[1]) < 0)) if len(first_two) >= 2 else False
 
             should_drop_pair = False
-            if len(source) >= 6 and (has_supplier_marker or leading_pair_suspicious or duplicated_cover):
+            if len(source) >= 7 and (has_supplier_marker or (leading_pair_suspicious and duplicated_cover)):
                 should_drop_pair = True
-            elif len(source) == 5 and (has_supplier_marker or leading_pair_suspicious or (duplicated_cover and second_is_suspicious)):
+            elif len(source) >= 5 and (has_supplier_marker and leading_pair_suspicious):
+                should_drop_pair = True
+            elif len(source) == 5 and duplicated_cover and second_is_suspicious:
                 should_drop_pair = True
 
             if should_drop_pair:
                 pre = uniq[2:]
 
         filtered = [u for u in pre if _is_likely_product_image(u)]
-        work = filtered if filtered else pre
+        if len(filtered) >= MIN_PRODUCT_IMAGES_TARGET:
+            work = filtered
+        elif filtered:
+            # Keep likely product images first, but retain extra frames to avoid over-pruning.
+            tails = [u for u in pre if u not in filtered]
+            need = max(0, MIN_PRODUCT_IMAGES_TARGET - len(filtered))
+            work = filtered + tails[:need]
+        else:
+            work = pre
         if len(work) < MIN_PRODUCT_IMAGES_TARGET <= len(pre):
             # Do not collapse gallery to 1-2 photos due aggressive frame filtering.
             work = pre
