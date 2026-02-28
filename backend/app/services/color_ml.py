@@ -26,6 +26,20 @@ _CLIP_STATE: dict[str, object | None] = {"model": None, "preprocess": None, "tok
 _CLIP_LOAD_ATTEMPTED = False
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(str(os.getenv(name, str(default))).strip())
+    except Exception:
+        return int(default)
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(str(os.getenv(name, str(default))).strip())
+    except Exception:
+        return float(default)
+
+
 def _resolve_model_path(kind: Literal["shoes", "clothes"]) -> Path:
     raw = os.getenv(MODEL_ENV_KEYS[kind], MODEL_DEFAULTS[kind])
     path = Path(str(raw).strip())
@@ -106,6 +120,7 @@ def _predict_with_ml(url: str, kind: Literal["shoes", "clothes"]) -> dict | None
             image_t = preprocess(img).unsqueeze(0).to(device)
             emb = model.encode_image(image_t)
             emb = emb / emb.norm(dim=-1, keepdim=True)
+
         clf = _MODELS[kind]
         if clf is None:
             return None
@@ -113,6 +128,7 @@ def _predict_with_ml(url: str, kind: Literal["shoes", "clothes"]) -> dict | None
         classes = [str(c) for c in getattr(clf, "classes_", [])]
         if not classes:
             return None
+
         probs = {normalize_color_to_whitelist(cls): float(prob) for cls, prob in zip(classes, probs_arr)}
         probs = {k: v for k, v in probs.items() if k}
         if not probs:
@@ -148,20 +164,102 @@ def predict_color_for_image_url(url: str, kind: Literal["shoes", "clothes"]) -> 
     return _predict_with_fallback(url, kind)
 
 
+def _is_localized_upload_url(url: str) -> bool:
+    u = str(url or "").strip().lower()
+    return u.startswith("/uploads/") or "/uploads/" in u
+
+
 def split_images_by_color(
     image_urls: list[str],
     kind: Literal["shoes", "clothes"],
-    min_conf: float = 0.55,
-    min_images_per_color: int = 2,
+    min_conf: float | None = None,
+    min_images_per_color: int | None = None,
+    expected_colors: list[str] | None = None,
 ) -> dict[str, list[str]]:
-    grouped: dict[str, list[str]] = defaultdict(list)
+    min_images = int(min_images_per_color or _env_int("COLOR_ML_MIN_IMAGES_PER_COLOR", 4))
+    strict_thr = float(min_conf if min_conf is not None else _env_float("COLOR_ML_MIN_CONF_STRICT", 0.55))
+    soft_thr = float(_env_float("COLOR_ML_MIN_CONF_SOFT", 0.35))
+    topk = int(_env_int("COLOR_ML_TOPK_PER_COLOR", 12))
+
+    rows: list[dict[str, object]] = []
     for url in [str(x).strip() for x in (image_urls or []) if str(x).strip()]:
         pred = predict_color_for_image_url(url, kind)
-        color = normalize_color_to_whitelist(pred.get("color"))
-        conf = float(pred.get("confidence") or 0.0)
-        if not color or color == "multi" or conf < float(min_conf):
-            continue
-        grouped[color].append(url)
+        probs = {
+            normalize_color_to_whitelist(k): float(v)
+            for k, v in dict(pred.get("probs") or {}).items()
+            if normalize_color_to_whitelist(k)
+        }
+        best_color = normalize_color_to_whitelist(pred.get("color"))
+        best_conf = float(pred.get("confidence") or 0.0)
+        if best_color and best_color not in probs:
+            probs[best_color] = best_conf
+        rows.append({"url": url, "probs": probs, "best_color": best_color})
 
-    filtered = {c: urls for c, urls in grouped.items() if len(urls) >= int(min_images_per_color)}
-    return dict(sorted(filtered.items(), key=lambda kv: len(kv[1]), reverse=True))
+    if not rows:
+        return {}
+
+    candidate_colors: set[str] = set()
+    exp_norm = [normalize_color_to_whitelist(c) for c in (expected_colors or []) if normalize_color_to_whitelist(c)]
+    if exp_norm:
+        candidate_colors.update(exp_norm)
+    else:
+        for r in rows:
+            for c in (r.get("probs") or {}).keys():
+                if c and c != "multi":
+                    candidate_colors.add(str(c))
+
+    out: dict[str, list[str]] = {}
+    for color in sorted(candidate_colors):
+        strict_hits: list[str] = []
+        soft_pool: list[tuple[str, float]] = []
+        top_pool: list[tuple[str, float]] = []
+
+        for r in rows:
+            url = str(r.get("url") or "").strip()
+            probs = dict(r.get("probs") or {})
+            p = float(probs.get(color, 0.0) or 0.0)
+            if p >= strict_thr:
+                strict_hits.append(url)
+            elif p >= soft_thr:
+                soft_pool.append((url, p))
+            top_pool.append((url, p))
+
+        selected: list[str] = []
+        seen: set[str] = set()
+
+        for u in strict_hits:
+            if u not in seen:
+                selected.append(u)
+                seen.add(u)
+
+        if len(selected) < min_images:
+            for u, _p in sorted(soft_pool, key=lambda x: x[1], reverse=True):
+                if u in seen:
+                    continue
+                selected.append(u)
+                seen.add(u)
+                if len(selected) >= min_images:
+                    break
+
+        if len(selected) < min_images:
+            for u, _p in sorted(top_pool, key=lambda x: x[1], reverse=True)[:max(1, topk)]:
+                if u in seen:
+                    continue
+                if not _is_localized_upload_url(u):
+                    continue
+                row = next((x for x in rows if str(x.get("url") or "") == u), None)
+                if not row:
+                    continue
+                if normalize_color_to_whitelist(row.get("best_color")) != color:
+                    continue
+                if float(dict(row.get("probs") or {}).get(color, 0.0) or 0.0) <= 0:
+                    continue
+                selected.append(u)
+                seen.add(u)
+                if len(selected) >= min_images:
+                    break
+
+        if len(selected) >= min_images:
+            out[color] = selected
+
+    return dict(sorted(out.items(), key=lambda kv: len(kv[1]), reverse=True))

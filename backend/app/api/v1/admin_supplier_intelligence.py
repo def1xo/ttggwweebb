@@ -123,39 +123,34 @@ def _build_color_assignment(
     image_urls: list[str],
 ) -> dict[str, object]:
     kind = _infer_color_kind_from_title(title)
-    images_by_color = split_images_by_color(image_urls, kind=kind)
-    images_by_color_counts = {k: len(v) for k, v in images_by_color.items()}
+    raw_color_tokens = _split_color_tokens(item.get("color"))
+    normalized_raw_colors = [_canonical_color_key(x) for x in raw_color_tokens if _canonical_color_key(x)]
 
     is_shop_vkus = _is_shop_vkus_item_context(supplier_key, src_url, item)
+    expected_for_split: list[str] = []
+    if is_shop_vkus and normalized_raw_colors:
+        # shop_vkus often sends one colorway per row; keep split focused to row color.
+        expected_for_split = list(normalized_raw_colors)
+
+    images_by_color = split_images_by_color(image_urls, kind=kind, expected_colors=expected_for_split or None)
+    images_by_color_counts = {k: len(v) for k, v in images_by_color.items()}
+
     final_colors: list[str] = []
     if is_shop_vkus:
-        inferred_colors = _extract_shop_vkus_color_tokens(item, image_urls=image_urls)
+        inferred_colors = normalized_raw_colors or _extract_shop_vkus_color_tokens(item, image_urls=image_urls)
         inferred_colors = [_canonical_color_key(x) for x in inferred_colors if _canonical_color_key(x)]
         final_colors = [c for c in inferred_colors if c in images_by_color]
         if not final_colors and images_by_color:
             final_colors = [next(iter(images_by_color.keys()))]
     else:
-        raw_colors = _split_color_tokens(item.get("color"))
-        normalized = [_canonical_color_key(x) for x in raw_colors if _canonical_color_key(x)]
+        normalized = normalized_raw_colors
         final_colors = [c for c in normalized if c in images_by_color]
         if not final_colors and images_by_color:
             final_colors = [next(iter(images_by_color.keys()))]
 
     if len(final_colors) <= 1:
         single_color = final_colors[0] if final_colors else ""
-        # Single-color product must keep full gallery (no color selector);
-        # don't shrink to only ML-confident subset, otherwise UI gets 2-3 photos.
-        color_images = list(image_urls or images_by_color.get(single_color) or [])
-        if color_images:
-            seen_imgs: set[str] = set()
-            deduped: list[str] = []
-            for u in color_images:
-                uu = str(u or "").strip()
-                if not uu or uu in seen_imgs:
-                    continue
-                seen_imgs.add(uu)
-                deduped.append(uu)
-            color_images = deduped
+        color_images = list(images_by_color.get(single_color) or [])
         confidences: list[float] = []
         for url in color_images:
             pred = predict_color_for_image_url(url, kind=kind)
