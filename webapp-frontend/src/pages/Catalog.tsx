@@ -69,10 +69,23 @@ export default function Catalog() {
           ? prodsRaw.items
           : [];
 
+        const hasServerPaginationMeta = Boolean(
+          prodsRaw && typeof prodsRaw === "object" && (
+            typeof prodsRaw?.total === "number"
+            || typeof prodsRaw?.pages === "number"
+            || typeof prodsRaw?.page === "number"
+          )
+        );
+
         setCategories(catItems);
-        setProducts(prodItems);
         const totalCount = Number(prodsRaw?.total || prodItems.length || 0);
         const pageCount = Math.max(1, Number(prodsRaw?.pages || Math.ceil(Math.max(1, totalCount) / 25)));
+        if (hasServerPaginationMeta) {
+          setProducts(prodItems);
+        } else {
+          const start = (Math.max(1, page) - 1) * 25;
+          setProducts(prodItems.slice(start, start + 25));
+        }
         setTotal(totalCount);
         setPages(pageCount);
       } catch {

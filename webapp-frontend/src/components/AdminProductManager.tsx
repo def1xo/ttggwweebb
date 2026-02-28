@@ -93,11 +93,30 @@ export default function AdminProductManager() {
       if (typeof apiDefault.getAdminProducts === "function") {
         const res = await apiDefault.getAdminProducts({ q: q.trim() || undefined, page: targetPage, limit: perPage });
         const arr = res?.items ?? res?.products ?? [];
-        setItems(Array.isArray(arr) ? arr : []);
-        setTotal(Number(res?.total || 0));
-        setPages(Math.max(1, Number(res?.pages || 1)));
-        if (Number(res?.page || targetPage) !== targetPage) {
-          setPage(Number(res?.page || 1));
+        const hasServerPaginationMeta = Boolean(
+          res && typeof res === "object" && (
+            typeof res?.total === "number"
+            || typeof res?.pages === "number"
+            || typeof res?.page === "number"
+          )
+        );
+        if (hasServerPaginationMeta) {
+          setItems(Array.isArray(arr) ? arr : []);
+          setTotal(Number(res?.total || 0));
+          setPages(Math.max(1, Number(res?.pages || 1)));
+          if (Number(res?.page || targetPage) !== targetPage) {
+            setPage(Number(res?.page || 1));
+          }
+        } else {
+          const allItems = Array.isArray(arr) ? arr : [];
+          const totalFallback = allItems.length;
+          const pagesFallback = Math.max(1, Math.ceil(totalFallback / perPage));
+          const safePage = Math.min(Math.max(1, targetPage), pagesFallback);
+          const start = (safePage - 1) * perPage;
+          setItems(allItems.slice(start, start + perPage));
+          setTotal(totalFallback);
+          setPages(pagesFallback);
+          if (safePage !== page) setPage(safePage);
         }
       } else {
         const params = new URLSearchParams();
