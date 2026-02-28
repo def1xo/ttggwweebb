@@ -257,7 +257,7 @@ def _build_color_assignment(
     detected_key = primary or ""
     if primary and secondary and primary_score > 0 and secondary_score >= (primary_score * 0.35):
         combo = normalize_combo_color_key([primary, secondary])
-        if combo:
+        if combo and "-" in combo:
             detected_key = combo
 
     detected_conf = (primary_score / total_signal) if total_signal > 0 else 0.0
