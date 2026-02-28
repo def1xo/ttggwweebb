@@ -165,8 +165,7 @@ function imagesForColor(p: any, color: string | null): string[] {
     if (selectedOnly.length >= 4) return uniq(selectedOnly);
     if (!selectedOnly.length) return uniqFull;
 
-    const merged = uniq([...selectedOnly, ...uniqFull]);
-    return merged.length >= 4 ? merged : merged;
+    return uniq([...selectedOnly, ...uniqFull]);
   }
 
   const general = splitImageCandidates(p?.general_images)

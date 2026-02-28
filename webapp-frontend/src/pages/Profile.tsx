@@ -114,6 +114,7 @@ export default function Profile() {
     setOrdersLoading(true);
     setOrdersErr(null);
     try {
+
       const endpoints = ["/api/orders/me", "/api/orders", "/api/my/orders", "/orders/me"];
       let last: any = null;
       const silentHeaders = { "X-Silent-Error": "1" };

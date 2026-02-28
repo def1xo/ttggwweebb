@@ -273,6 +273,7 @@ axiosInstance.interceptors.response.use(
         }
       }
 
+
       // Friendly UX: show a short toast for common network/auth errors.
       let friendlyMsg = "";
       if (status === 401) {
