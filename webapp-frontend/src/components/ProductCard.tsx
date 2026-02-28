@@ -96,10 +96,8 @@ export default function ProductCard({ product }: Props) {
     const created = product?.created_at ? new Date(product.created_at) : null;
     const isNew = created ? Date.now() - created.getTime() < 7 * 24 * 60 * 60 * 1000 : false;
     const inStock = Boolean(product?.has_stock ?? (variantList || []).some((v) => Number(v?.stock || 0) > 0));
-    const galleryCount = Number(product?.gallery_count || (Array.isArray(imgs) ? imgs.length : 0));
-
     const showColorMeta = colors.length > 1;
-    return { sizes, colors, sizeLabel, isNew, inStock, galleryCount, showColorMeta };
+    return { sizes, colors, sizeLabel, isNew, inStock, showColorMeta };
   }, [product, variantList, imgs]);
 
 
@@ -148,12 +146,11 @@ export default function ProductCard({ product }: Props) {
             {price.toLocaleString("ru-RU")} ₽
           </div>
 
-          {(meta.sizeLabel || meta.showColorMeta || meta.galleryCount > 1 || !meta.inStock) ? (
+          {(meta.sizeLabel || meta.showColorMeta || !meta.inStock) ? (
             <div className="mini-row">
               <div className="chips">
                 {meta.sizeLabel ? <span className="chip">{meta.sizeLabel}</span> : null}
                 {meta.showColorMeta ? <span className="chip">{meta.colors.length} цвет(а)</span> : null}
-                {meta.galleryCount > 1 ? <span className="chip">{meta.galleryCount} фото</span> : null}
                 {!meta.inStock ? <span className="chip">нет в наличии</span> : null}
               </div>
               <div style={{ display: "flex", gap: 6 }}>

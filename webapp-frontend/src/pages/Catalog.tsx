@@ -18,11 +18,20 @@ export default function Catalog() {
   const [debouncedQuery, setDebouncedQuery] = useState(searchParams.get("q") || "");
   const [categories, setCategories] = useState<Category[]>([]);
   const [products, setProducts] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(1);
+  const [page, setPage] = useState<number>(() => {
+    const p = Number(searchParams.get("page") || 1);
+    return Number.isFinite(p) && p > 0 ? Math.floor(p) : 1;
+  });
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const t = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    const t = window.setTimeout(() => {
+      setDebouncedQuery(query.trim());
+      setPage(1);
+    }, 300);
     return () => window.clearTimeout(t);
   }, [query]);
 
@@ -30,8 +39,10 @@ export default function Catalog() {
     const params = new URLSearchParams(searchParams);
     if (query.trim()) params.set("q", query.trim());
     else params.delete("q");
+    if (page > 1) params.set("page", String(page));
+    else params.delete("page");
     if (params.toString() !== searchParams.toString()) setSearchParams(params, { replace: true });
-  }, [query, searchParams, setSearchParams]);
+  }, [query, page, searchParams, setSearchParams]);
 
   useEffect(() => {
     (async () => {
@@ -40,7 +51,7 @@ export default function Catalog() {
       try {
         const [catsRes, prodRes] = await Promise.all([
           api.getCategories(debouncedQuery ? { q: debouncedQuery } : {}),
-          api.getProducts({ q: debouncedQuery || undefined, page: 1, limit: 25 }),
+          api.getProducts({ q: debouncedQuery || undefined, page, limit: 25 }),
         ]);
 
         const catsRaw: any = (catsRes as any)?.data ?? catsRes;
@@ -58,17 +69,44 @@ export default function Catalog() {
           ? prodsRaw.items
           : [];
 
+        const hasServerPaginationMeta = Boolean(
+          prodsRaw && typeof prodsRaw === "object" && (
+            typeof prodsRaw?.total === "number"
+            || typeof prodsRaw?.pages === "number"
+            || typeof prodsRaw?.page === "number"
+          )
+        );
+
         setCategories(catItems);
-        setProducts(prodItems);
+        const totalCount = Number(prodsRaw?.total || prodItems.length || 0);
+        const pageCount = Math.max(1, Number(prodsRaw?.pages || Math.ceil(Math.max(1, totalCount) / 25)));
+        if (hasServerPaginationMeta) {
+          setProducts(prodItems);
+        } else {
+          const start = (Math.max(1, page) - 1) * 25;
+          setProducts(prodItems.slice(start, start + 25));
+        }
+        setTotal(totalCount);
+        setPages(pageCount);
       } catch {
         setCategories([]);
         setProducts([]);
+        setTotal(0);
+        setPages(1);
         setError("Не удалось загрузить каталог");
       } finally {
         setLoading(false);
       }
     })();
-  }, [debouncedQuery]);
+  }, [debouncedQuery, page]);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [page]);
+
+  useEffect(() => {
+    if (page > pages) setPage(pages);
+  }, [page, pages]);
 
   const topCategories = useMemo(() => categories.slice(0, 10), [categories]);
 
@@ -80,7 +118,7 @@ export default function Catalog() {
           value={query}
           onChange={setQuery}
           placeholder="Поиск по категориям и товарам…"
-          hint={query ? `Категорий: ${categories.length}, товаров: ${products.length}` : ""}
+          hint={query ? `Категорий: ${categories.length}, товаров: ${total}` : ""}
         />
 
         {error ? <div className="small-muted" style={{ marginTop: 12 }}>{error}</div> : null}
@@ -133,6 +171,14 @@ export default function Catalog() {
         {!loading && !error && topCategories.length === 0 && products.length === 0 ? (
           <div className="card" style={{ marginTop: 12, padding: 16 }}>
             <div style={{ fontWeight: 800, marginBottom: 6 }}>Ничего не найдено</div>
+          </div>
+        ) : null}
+
+        {pages > 1 ? (
+          <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
+            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.max(1, v - 1))} disabled={page <= 1}>← Назад</button>
+            <div className="small-muted">Страница {page} / {pages}</div>
+            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.min(pages, v + 1))} disabled={page >= pages}>Далее →</button>
           </div>
         ) : null}
       </div>

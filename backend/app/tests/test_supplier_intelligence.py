@@ -1212,3 +1212,88 @@ def test_generate_youth_description_has_paragraphs_and_bullets():
     text = si.generate_youth_description("Nike Dunk Low", category_name="Обувь", color="black")
     assert "\n\n" in text
     assert text.count("• ") >= 3
+
+
+def test_split_images_by_color_filters_phantom_colors(monkeypatch):
+    import app.services.color_ml as cml
+
+    predictions = {
+        "u1": {"color": "black", "confidence": 0.91},
+        "u2": {"color": "black", "confidence": 0.86},
+        "u3": {"color": "white", "confidence": 0.78},
+        "u4": {"color": "white", "confidence": 0.74},
+        "u5": {"color": "orange", "confidence": 0.99},
+    }
+
+    monkeypatch.setattr(cml, "predict_color_for_image_url", lambda url, kind: predictions[url])
+
+    grouped = cml.split_images_by_color(["u1", "u2", "u3", "u4", "u5"], kind="shoes", min_conf=0.55, min_images_per_color=2)
+
+    assert grouped == {"black": ["u1", "u2"], "white": ["u3", "u4"]}
+
+
+def test_split_images_by_color_single_color_backfills_to_min4(monkeypatch):
+    import app.services.color_ml as cml
+
+    preds = {
+        "/uploads/a1.jpg": {"color": "black", "confidence": 0.91, "probs": {"black": 0.91}},
+        "/uploads/a2.jpg": {"color": "black", "confidence": 0.72, "probs": {"black": 0.72}},
+        "/uploads/a3.jpg": {"color": "black", "confidence": 0.48, "probs": {"black": 0.48}},
+        "/uploads/a4.jpg": {"color": "black", "confidence": 0.43, "probs": {"black": 0.43}},
+        "/uploads/a5.jpg": {"color": "black", "confidence": 0.31, "probs": {"black": 0.31}},
+        "/uploads/a6.jpg": {"color": "white", "confidence": 0.22, "probs": {"black": 0.22}},
+        "/uploads/a7.jpg": {"color": "white", "confidence": 0.19, "probs": {"black": 0.19}},
+        "/uploads/a8.jpg": {"color": "white", "confidence": 0.10, "probs": {"black": 0.10}},
+        "/uploads/a9.jpg": {"color": "white", "confidence": 0.08, "probs": {"black": 0.08}},
+        "/uploads/a10.jpg": {"color": "white", "confidence": 0.05, "probs": {"black": 0.05}},
+    }
+
+    monkeypatch.setattr(cml, "predict_color_for_image_url", lambda url, kind: preds[url])
+
+    grouped = cml.split_images_by_color(list(preds.keys()), kind="shoes", min_conf=0.55, min_images_per_color=4)
+    assert "black" in grouped
+    assert len(grouped["black"]) >= 4
+
+
+def test_split_images_by_color_drops_color_if_less_than_min4(monkeypatch):
+    import app.services.color_ml as cml
+
+    preds = {
+        "/uploads/b1.jpg": {"color": "orange", "confidence": 0.8, "probs": {"orange": 0.8}},
+        "/uploads/b2.jpg": {"color": "orange", "confidence": 0.6, "probs": {"orange": 0.6}},
+        "/uploads/b3.jpg": {"color": "orange", "confidence": 0.4, "probs": {"orange": 0.4}},
+        "/uploads/b4.jpg": {"color": "black", "confidence": 0.2, "probs": {"orange": 0.2}},
+        "/uploads/b5.jpg": {"color": "black", "confidence": 0.1, "probs": {"orange": 0.1}},
+    }
+
+    monkeypatch.setattr(cml, "predict_color_for_image_url", lambda url, kind: preds[url])
+
+    grouped = cml.split_images_by_color(list(preds.keys()), kind="shoes", min_conf=0.55, min_images_per_color=4)
+    assert "orange" not in grouped
+
+
+def test_single_color_assignment_disables_color_selector(monkeypatch):
+    import app.api.v1.admin_supplier_intelligence as asi
+
+    monkeypatch.setattr(
+        asi,
+        "split_images_by_color",
+        lambda image_urls, kind, min_conf=0.55, min_images_per_color=2, expected_colors=None: {"black": ["img1", "img2", "img3", "img4"]},
+    )
+    monkeypatch.setattr(
+        asi,
+        "predict_color_for_image_url",
+        lambda url, kind: {"color": "black", "confidence": 0.8, "probs": {"black": 0.8}, "debug": {}},
+    )
+
+    assignment = asi._build_color_assignment(
+        title="Nike Air Max 95",
+        supplier_key="shop_vkus",
+        src_url="https://t.me/s/shop_vkus",
+        item={"title": "Nike Air Max 95", "color": "черный"},
+        image_urls=["img1", "img2", "img3", "img4", "img5", "img6", "img7", "img8", "img9", "img10"],
+    )
+
+    assert assignment["color_tokens"] == [""]
+    assert assignment["detected_color"] == "black"
+    assert assignment["variant_images_by_color"][""] == ["img1", "img2", "img3", "img4"]

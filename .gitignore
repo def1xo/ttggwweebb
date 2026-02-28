@@ -1,2 +1,12 @@
 # JavaScript dependencies
 **/node_modules/
+
+data/vision*/
+data/vision_*/
+datasets/
+*.joblib
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.session

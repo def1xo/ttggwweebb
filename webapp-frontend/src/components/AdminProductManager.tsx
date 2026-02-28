@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import apiDefault from "../services/api";
 import ProductModal from "./ProductModal";
@@ -33,15 +33,18 @@ export default function AdminProductManager() {
     const p = Number(searchParams.get("page") || 1);
     return Number.isFinite(p) && p > 0 ? Math.floor(p) : 1;
   });
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(1);
+  const perPage = 25;
 
   useEffect(() => {
-    load(debouncedQuery);
-  }, [debouncedQuery]);
+    load(debouncedQuery, page);
+  }, [debouncedQuery, page]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => load(debouncedQuery), 30000);
+    const timer = window.setInterval(() => load(debouncedQuery, page), 30000);
     return () => window.clearInterval(timer);
-  }, [debouncedQuery]);
+  }, [debouncedQuery, page]);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -79,25 +82,64 @@ export default function AdminProductManager() {
     };
   }, [location.pathname, location.search]);
 
-  async function load(q = "") {
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [page]);
+
+  async function load(q = "", targetPage = 1) {
     setLoading(true);
     setErr(null);
     try {
       if (typeof apiDefault.getAdminProducts === "function") {
-        const res = await apiDefault.getAdminProducts({ q: q.trim() || undefined });
-        const arr = res?.products ?? res ?? [];
-        setItems(arr);
+        const res = await apiDefault.getAdminProducts({ q: q.trim() || undefined, page: targetPage, limit: perPage });
+        const arr = res?.items ?? res?.products ?? [];
+        const hasServerPaginationMeta = Boolean(
+          res && typeof res === "object" && (
+            typeof res?.total === "number"
+            || typeof res?.pages === "number"
+            || typeof res?.page === "number"
+          )
+        );
+        if (hasServerPaginationMeta) {
+          setItems(Array.isArray(arr) ? arr : []);
+          setTotal(Number(res?.total || 0));
+          setPages(Math.max(1, Number(res?.pages || 1)));
+          if (Number(res?.page || targetPage) !== targetPage) {
+            setPage(Number(res?.page || 1));
+          }
+        } else {
+          const allItems = Array.isArray(arr) ? arr : [];
+          const totalFallback = allItems.length;
+          const pagesFallback = Math.max(1, Math.ceil(totalFallback / perPage));
+          const safePage = Math.min(Math.max(1, targetPage), pagesFallback);
+          const start = (safePage - 1) * perPage;
+          setItems(allItems.slice(start, start + perPage));
+          setTotal(totalFallback);
+          setPages(pagesFallback);
+          if (safePage !== page) setPage(safePage);
+        }
       } else {
         const params = new URLSearchParams();
         if (q.trim()) params.set("q", q.trim());
+        params.set("page", String(targetPage));
+        params.set("limit", String(perPage));
         const r = await fetch(`/api/admin/products${params.toString() ? `?${params.toString()}` : ""}`, { credentials: "include" });
         if (r.ok) {
           const data = await r.json();
-          setItems(Array.isArray(data) ? data : data?.products ?? []);
-        } else setItems([]);
+          const arr = Array.isArray(data) ? data : data?.items ?? data?.products ?? [];
+          setItems(Array.isArray(arr) ? arr : []);
+          setTotal(Number(data?.total || 0));
+          setPages(Math.max(1, Number(data?.pages || 1)));
+        } else {
+          setItems([]);
+          setTotal(0);
+          setPages(1);
+        }
       }
     } catch (e: any) {
       setErr(e?.message || "Ошибка загрузки");
+      setTotal(0);
+      setPages(1);
     } finally {
       setLoading(false);
     }
@@ -107,7 +149,7 @@ export default function AdminProductManager() {
     // if axios response object — use data
     const payload = resData?.data ?? resData;
     setEditing(null);
-    await load(debouncedQuery);
+    await load(debouncedQuery, page);
   }
 
   async function remove(id?: number) {
@@ -119,34 +161,15 @@ export default function AdminProductManager() {
       } else {
         await fetch(`/api/admin/products/${id}`, { method: "DELETE", credentials: "include" });
       }
-      await load(debouncedQuery);
+      await load(debouncedQuery, page);
     } catch (e: any) {
       setErr(e?.message || "Ошибка удаления");
     }
   }
 
-  const filteredItems = useMemo(() => {
-    const q = debouncedQuery.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter((p) => {
-      const title = String((p as any).title || (p as any).name || "").toLowerCase();
-      const sku = String((p as any).sku || (p as any).article || (p as any).vendor_code || "").toLowerCase();
-      const pid = String((p as any).id || "");
-      return title.includes(q) || sku.includes(q) || pid.includes(q);
-    });
-  }, [items, debouncedQuery]);
-
-  const perPage = 25;
-  const totalPages = Math.max(1, Math.ceil(filteredItems.length / perPage));
-  const safePage = Math.min(Math.max(1, page), totalPages);
-  const pagedItems = useMemo(() => {
-    const start = (safePage - 1) * perPage;
-    return filteredItems.slice(start, start + perPage);
-  }, [filteredItems, safePage]);
-
   useEffect(() => {
-    if (safePage !== page) setPage(safePage);
-  }, [safePage, page]);
+    if (page > pages) setPage(pages);
+  }, [page, pages]);
 
   return (
     <div>
@@ -162,7 +185,7 @@ export default function AdminProductManager() {
           value={query}
           onChange={setQuery}
           placeholder="Поиск по товарам (название / SKU / ID)…"
-          hint={debouncedQuery ? `Найдено: ${filteredItems.length} / ${items.length}` : items.length ? `Товаров: ${items.length}` : ""}
+          hint={debouncedQuery ? `Найдено: ${total}` : total ? `Товаров: ${total}` : ""}
         />
       </div>
 
@@ -170,10 +193,9 @@ export default function AdminProductManager() {
         {err && <div style={{ color: "red" }}>{err}</div>}
         {loading && <div className="small-muted">Загрузка…</div>}
         {!loading && items.length === 0 && <div className="small-muted">Товары не найдены</div>}
-        {!loading && items.length > 0 && filteredItems.length === 0 && <div className="small-muted">Ничего не найдено</div>}
-        {!loading && pagedItems.length > 0 && (
+        {!loading && items.length > 0 && (
           <div style={{ display: "grid", gap: 8 }}>
-            {pagedItems.map((p) => (
+            {items.map((p) => (
               <div key={p.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div style={{ minWidth: 0 }}>
                   <div className="font-semibold" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -212,11 +234,11 @@ export default function AdminProductManager() {
           </div>
         )}
 
-        {!loading && filteredItems.length > perPage ? (
+        {!loading && pages > 1 ? (
           <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
-            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.max(1, v - 1))} disabled={safePage <= 1}>← Назад</button>
-            <div className="small-muted">Страница {safePage} / {totalPages}</div>
-            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.min(totalPages, v + 1))} disabled={safePage >= totalPages}>Далее →</button>
+            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.max(1, v - 1))} disabled={page <= 1}>← Назад</button>
+            <div className="small-muted">Страница {page} / {pages}</div>
+            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.min(pages, v + 1))} disabled={page >= pages}>Далее →</button>
           </div>
         ) : null}
       </div>
