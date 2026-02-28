@@ -304,6 +304,7 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
                 color = "black" if (v2 < 0.24 or l2 < 32) else "gray"
                 break
 
+    secondary_candidate: Optional[dict[str, Any]] = None
     if len(clusters) > 1:
         second = clusters[1]
         second_share = float(second["count"]) / float(total)
@@ -311,9 +312,15 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
         rr3, gg3, bb3 = min(pixels, key=lambda p: (_rgb_to_lab(p)[0] - l2) ** 2 + (_rgb_to_lab(p)[1] - a2) ** 2 + (_rgb_to_lab(p)[2] - b2) ** 2)
         h2, s2, v2 = colorsys.rgb_to_hsv(rr3 / 255.0, gg3 / 255.0, bb3 / 255.0)
         c2 = canonical_color_from_lab_hsv(l2, a2, b2, h2, s2, v2)
+        # NOTE: never return generic "multi" at per-image level; keep primary color,
+        # but record a secondary candidate for the aggregator/debug UI.
         if c2 != color and share <= 0.68 and second_share >= 0.32 and confidence >= 0.45:
-            color = "multi"
-            confidence = min(confidence, 0.78)
+            secondary_candidate = {
+                "color": c2,
+                "share": round(second_share, 3),
+                "sat": round(float(s2), 3),
+                "light": round(float(l2), 2),
+            }
 
     return ImageColorResult(
         color=color,
@@ -323,7 +330,10 @@ def detect_color_from_image_source(source: str, timeout_sec: int = 12) -> Option
         light=l,
         lab_a=a,
         lab_b=b,
-        debug={"clusters": [{"center": [round(x, 2) for x in c["center"]], "count": int(c["count"])} for c in clusters]},
+        debug={
+            "clusters": [{"center": [round(x, 2) for x in c["center"]], "count": int(c["count"])} for c in clusters],
+            **({"secondary": secondary_candidate} if secondary_candidate else {}),
+        },
     )
 
 
@@ -476,10 +486,18 @@ def detect_product_color(image_sources: Sequence[str], supplier_profile: Optiona
             conf = max(conf, min(0.95, white_s / total_score))
 
     if len(top) > 1:
+        c1, s1 = top[0]
         c2, s2 = top[1]
-        if color != c2 and conf <= 0.68 and (s2 / total_score) >= 0.30 and min(top[0][1], s2) >= 1.0:
-            color = "multi"
-            conf = max(conf, s2 / total_score)
+        # Avoid generic "multi" as a final label: either keep a dominant color,
+        # or use an allowed two-tone combo (e.g. black-white).
+        if c1 != c2 and c1 not in {"", "multi"} and c2 not in {"", "multi"}:
+            share1 = float(s1) / float(total_score)
+            share2 = float(s2) / float(total_score)
+            order = {c: i for i, c in enumerate(_COLOR_PRIORITY)}
+            pair = tuple(sorted([c1, c2], key=lambda x: order.get(x, 999)))
+            if pair in _ALLOWED_COLOR_COMBOS and share1 <= 0.72 and share2 >= 0.26 and (share1 + share2) >= 0.72:
+                color = f"{pair[0]}-{pair[1]}"
+                conf = max(conf, min(0.98, share1 + share2))
 
     result = {
         "color": color,

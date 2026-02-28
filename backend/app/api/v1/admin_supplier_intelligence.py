@@ -166,7 +166,7 @@ def _build_color_assignment(
         if isinstance(probs, dict) and probs:
             for raw_key, raw_val in probs.items():
                 ck = _canonical_color_key(str(raw_key or ""))
-                if not ck:
+                if not ck or ck == "multi":
                     continue
                 val = float(raw_val or 0.0)
                 if val <= 0:
@@ -176,7 +176,7 @@ def _build_color_assignment(
         else:
             ck = _canonical_color_key((pred or {}).get("color") if isinstance(pred, dict) else None)
             conf = float((pred or {}).get("confidence") or 0.0) if isinstance(pred, dict) else 0.0
-            if ck and conf > 0:
+            if ck and ck != "multi" and conf > 0:
                 prob_sums[ck] = prob_sums.get(ck, 0.0) + conf
                 total_signal += conf
 
@@ -186,7 +186,7 @@ def _build_color_assignment(
     primary_score = float(ranked[0][1]) if ranked else 0.0
     secondary_score = float(ranked[1][1]) if len(ranked) > 1 else 0.0
 
-    detected_key = primary or "multi"
+    detected_key = primary or ""
     if primary and secondary and primary_score > 0 and secondary_score >= (primary_score * 0.35):
         combo = normalize_combo_color_key([primary, secondary])
         if combo:
@@ -197,8 +197,8 @@ def _build_color_assignment(
 
     return {
         "kind": kind,
-        "color_tokens": [detected_key],
-        "variant_images_by_color": {detected_key: list(image_urls or [])},
+        "color_tokens": ([detected_key] if detected_key else []),
+        "variant_images_by_color": {(detected_key or ""): list(image_urls or [])},
         "detected_color": detected_key,
         "detected_color_confidence": detected_conf,
         "detected_color_debug": {
@@ -2204,15 +2204,17 @@ def import_products_from_sources(
                 )
                 color_tokens = [str(x).strip() for x in (color_assignment.get("color_tokens") or []) if str(x).strip()]
                 if not color_tokens:
-                    fallback_key = str(color_assignment.get("detected_color") or "").strip() or "multi"
-                    color_tokens = [fallback_key]
+                    fallback_key = str(color_assignment.get("detected_color") or "").strip()
+                    if normalize_color_to_whitelist(fallback_key) == "multi":
+                        fallback_key = ""
+                    color_tokens = [fallback_key] if fallback_key else [""]
                 variant_images_by_color = dict(color_assignment.get("variant_images_by_color") or {})
                 detected_color = str(color_assignment.get("detected_color") or "").strip()
                 detected_color_confidence = float(color_assignment.get("detected_color_confidence") or 0.0)
                 detected_color_debug = color_assignment.get("detected_color_debug") or {}
 
                 if len(color_tokens) <= 1:
-                    if detected_color:
+                    if detected_color and normalize_color_to_whitelist(detected_color) != "multi":
                         p.detected_color = detected_color
                         p.detected_color_confidence = Decimal(str(round(detected_color_confidence, 4)))
                     else:
@@ -2225,7 +2227,7 @@ def import_products_from_sources(
                     p.detected_color_debug = detected_color_debug
                 db.add(p)
 
-                if detected_color:
+                if detected_color and normalize_color_to_whitelist(detected_color) != "multi":
                     existing_variants_for_color_migration = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
                     has_colored_variants = any(vv.color_id is not None for vv in existing_variants_for_color_migration)
                     if existing_variants_for_color_migration and not has_colored_variants:

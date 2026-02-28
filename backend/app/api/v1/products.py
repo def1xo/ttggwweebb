@@ -76,6 +76,8 @@ def _build_color_payload(p: models.Product) -> Dict[str, Any]:
 
     available = list(color_groups.keys())
     detected_color_key = normalize_color_to_whitelist(getattr(p, "detected_color", None)) if getattr(p, "detected_color", None) else ""
+    if detected_color_key == "multi":
+        detected_color_key = ""
     is_single_color = len(available) <= 1 and (bool(available) or bool(detected_color_key) or not any(getattr(v, "color_id", None) for v in variants))
 
     selected = detected_color_key
