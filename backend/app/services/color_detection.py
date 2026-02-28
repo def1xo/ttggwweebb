@@ -58,17 +58,6 @@ _COLOR_PRIORITY: tuple[str, ...] = (
     "yellow", "orange", "red", "burgundy", "pink", "purple", "lavender", "khaki", "cream", "silver", "gold", "multi",
 )
 
-_ALLOWED_COLOR_COMBOS: set[tuple[str, str]] = {
-    ("black", "white"),
-    ("black", "gray"),
-    ("white", "gray"),
-    ("red", "black"),
-    ("blue", "black"),
-    ("green", "black"),
-    ("blue", "white"),
-    ("red", "white"),
-}
-
 
 def normalize_color_key(raw: Optional[str]) -> str:
     txt = str(raw or "").strip().lower()
@@ -83,11 +72,12 @@ def normalize_color_key(raw: Optional[str]) -> str:
 
 
 def normalize_combo_color_key(keys: Sequence[str]) -> str:
-    normalized = []
+    normalized: list[str] = []
     for k in (keys or []):
         nk = normalize_color_key(k)
-        if nk and nk not in normalized:
-            normalized.append(nk)
+        if not nk or nk == "multi" or nk in normalized:
+            continue
+        normalized.append(nk)
     if not normalized:
         return ""
 
@@ -95,14 +85,7 @@ def normalize_combo_color_key(keys: Sequence[str]) -> str:
     normalized.sort(key=lambda x: order.get(x, 999))
     if len(normalized) == 1:
         return normalized[0]
-
-    if len(normalized) == 2:
-        pair = tuple(normalized[:2])
-        if pair in _ALLOWED_COLOR_COMBOS:
-            return f"{pair[0]}-{pair[1]}"
-        return "-".join(normalized[:2])
-
-    return "-".join(normalized[:3])
+    return f"{normalized[0]}-{normalized[1]}"
 
 
 @dataclass
@@ -363,7 +346,10 @@ def _compose_palette_color(top: List[tuple[str, float]], total_score: float, tar
 
     if not chosen:
         chosen = [usable[0][0]]
-    return normalize_combo_color_key(chosen)
+
+    if target_count <= 1 or len(chosen) == 1:
+        return chosen[0]
+    return normalize_combo_color_key(chosen[:2])
 
 
 def detect_product_color(image_sources: Sequence[str], supplier_profile: Optional[str] = None) -> Dict[str, Any]:
@@ -493,11 +479,11 @@ def detect_product_color(image_sources: Sequence[str], supplier_profile: Optiona
         if c1 != c2 and c1 not in {"", "multi"} and c2 not in {"", "multi"}:
             share1 = float(s1) / float(total_score)
             share2 = float(s2) / float(total_score)
-            order = {c: i for i, c in enumerate(_COLOR_PRIORITY)}
-            pair = tuple(sorted([c1, c2], key=lambda x: order.get(x, 999)))
-            if pair in _ALLOWED_COLOR_COMBOS and share1 <= 0.72 and share2 >= 0.26 and (share1 + share2) >= 0.72:
-                color = f"{pair[0]}-{pair[1]}"
-                conf = max(conf, min(0.98, share1 + share2))
+            if share1 <= 0.72 and share2 >= 0.26 and (share1 + share2) >= 0.72:
+                combo = normalize_combo_color_key([c1, c2])
+                if "-" in combo:
+                    color = combo
+                    conf = max(conf, min(0.98, share1 + share2))
 
     result = {
         "color": color,
