@@ -20,7 +20,11 @@ from app.db import models
 from app.services.importer_notifications import slugify
 from app.services import media_store
 from app.services.supplier_profiles import normalize_title_for_supplier
-from app.services.color_detection import normalize_color_to_whitelist, normalize_combo_color_key
+from app.services.color_detection import (
+    detect_product_colors_from_photos,
+    normalize_color_to_whitelist,
+    normalize_combo_color_key,
+)
 from app.services.color_ml import predict_color_for_image_url
 from app.services.supplier_importers import (
     ImporterContext,
@@ -113,18 +117,48 @@ def _infer_color_kind_from_title(raw_title: str | None) -> str:
     return "shoes" if FOOTWEAR_TITLE_RE.search(title) else "clothes"
 
 
-def _pick_color_detection_images(image_urls: list[str], limit: int = 4) -> list[str]:
-    ranked: list[str] = []
+def _pick_color_detection_images(image_urls: list[str], limit: int = 6) -> list[str]:
+    """Pick a diverse set of best gallery images for color detection.
+
+    We intentionally avoid relying on a single leading frame (e.g. outsole-only photo).
+    """
+    uniq: list[str] = []
     seen: set[str] = set()
     for u in sorted((image_urls or []), key=lambda x: _score_gallery_image(x), reverse=True):
         uu = str(u or "").strip()
         if not uu or uu in seen:
             continue
         seen.add(uu)
-        ranked.append(uu)
-        if len(ranked) >= max(1, int(limit)):
-            break
-    return ranked
+        uniq.append(uu)
+
+    if not uniq:
+        return []
+
+    target = max(1, int(limit))
+    if len(uniq) <= target:
+        return uniq
+
+    # diversify: sample across top candidates instead of taking only head frames
+    pool = uniq[: max(target * 2, target)]
+    out: list[str] = []
+    if pool:
+        out.append(pool[0])
+    if target > 1:
+        step = max(1, len(pool) // target)
+        idx = step
+        while len(out) < target and idx < len(pool):
+            cand = pool[idx]
+            if cand not in out:
+                out.append(cand)
+            idx += step
+    if len(out) < target:
+        for u in pool:
+            if u in out:
+                continue
+            out.append(u)
+            if len(out) >= target:
+                break
+    return out[:target]
 
 
 def _build_color_assignment(
@@ -154,7 +188,8 @@ def _build_color_assignment(
             },
         }
 
-    detection_images = _pick_color_detection_images(image_urls or [], limit=4)
+    detection_limit = max(4, min(8, len(image_urls or [])))
+    detection_images = _pick_color_detection_images(image_urls or [], limit=detection_limit)
     prob_sums: dict[str, float] = {}
     total_signal = 0.0
     for url in detection_images:
@@ -179,6 +214,28 @@ def _build_color_assignment(
             if ck and ck != "multi" and conf > 0:
                 prob_sums[ck] = prob_sums.get(ck, 0.0) + conf
                 total_signal += conf
+
+    if not prob_sums:
+        # 1) CV aggregate fallback across multiple images (works when ML model is absent in docker)
+        cv_detected = detect_product_colors_from_photos(detection_images, supplier_profile=supplier_key or None)
+        cv_key = normalize_color_to_whitelist((cv_detected or {}).get("color"))
+        cv_conf = float((cv_detected or {}).get("confidence") or 0.0)
+        if cv_key and cv_key != "multi":
+            prob_sums[cv_key] = max(cv_conf, 0.35)
+            total_signal += max(cv_conf, 0.35)
+
+    if not prob_sums:
+        # 2) Last-resort per-image dominant color heuristic
+        for url in detection_images:
+            try:
+                raw_dom = dominant_color_name_from_url(url)
+            except Exception:
+                raw_dom = None
+            dk = normalize_color_to_whitelist(raw_dom)
+            if not dk or dk == "multi":
+                continue
+            prob_sums[dk] = prob_sums.get(dk, 0.0) + 0.25
+            total_signal += 0.25
 
     ranked = sorted(prob_sums.items(), key=lambda kv: kv[1], reverse=True)
     primary = ranked[0][0] if ranked else ""
@@ -206,6 +263,8 @@ def _build_color_assignment(
             "source": "image_aggregate",
             "top_images": detection_images,
             "prob_sums": prob_sums,
+            "images_total": len(image_urls or []),
+            "images_used": len(detection_images),
             "final_colors": [detected_key],
         },
     }
@@ -2205,7 +2264,8 @@ def import_products_from_sources(
                 color_tokens = [str(x).strip() for x in (color_assignment.get("color_tokens") or []) if str(x).strip()]
                 if not color_tokens:
                     fallback_key = str(color_assignment.get("detected_color") or "").strip()
-                    if normalize_color_to_whitelist(fallback_key) == "multi":
+                    fallback_key = normalize_color_to_whitelist(fallback_key)
+                    if fallback_key == "multi":
                         fallback_key = ""
                     color_tokens = [fallback_key] if fallback_key else [""]
                 variant_images_by_color = dict(color_assignment.get("variant_images_by_color") or {})

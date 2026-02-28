@@ -44,6 +44,23 @@ def test_build_color_assignment_returns_combo_for_significant_two_tone(monkeypat
     assert assignment["color_tokens"] == ["black-white"]
 
 
+def test_build_color_assignment_with_empty_detection_keeps_color_empty(monkeypatch):
+    monkeypatch.setattr(asi, "predict_color_for_image_url", lambda url, kind: {"color": "multi", "confidence": 0.9, "probs": {"multi": 0.9}})
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda url: 100.0)
+
+    assignment = asi._build_color_assignment(
+        title="Nike Air Max",
+        supplier_key="any",
+        src_url="https://supplier.example/item",
+        item={"title": "Nike Air Max", "color": ""},
+        image_urls=["img1", "img2"],
+    )
+
+    assert assignment["detected_color"] == ""
+    assert assignment["color_tokens"] == []
+    assert assignment["detected_color"] != "multi"
+
+
 def test_two_colorways_create_distinct_non_null_color_variants(db_session):
     product = Product(title="Yeezy 350", slug="yeezy-350", base_price=Decimal("1000"), visible=True)
     db_session.add(product)
@@ -81,3 +98,42 @@ def test_two_colorways_create_distinct_non_null_color_variants(db_session):
     assert len(variants) >= 2
     assert all(v.color_id is not None for v in variants)
     assert len({v.color_id for v in variants}) >= 2
+
+
+def test_build_color_assignment_allows_any_canonical_pair(monkeypatch):
+    predictions = {
+        "img1": {"color": "blue", "confidence": 0.9, "probs": {"blue": 0.9, "red": 0.45}},
+        "img2": {"color": "blue", "confidence": 0.8, "probs": {"blue": 0.8, "red": 0.35}},
+    }
+
+    monkeypatch.setattr(asi, "predict_color_for_image_url", lambda url, kind: predictions[url])
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda url: 100.0)
+
+    assignment = asi._build_color_assignment(
+        title="Nike Air Max",
+        supplier_key="any",
+        src_url="https://supplier.example/item",
+        item={"title": "Nike Air Max", "color": ""},
+        image_urls=["img1", "img2"],
+    )
+
+    assert assignment["detected_color"] == "blue-red"
+    assert assignment["color_tokens"] == ["blue-red"]
+
+
+def test_build_color_assignment_falls_back_to_cv_aggregate_when_ml_empty(monkeypatch):
+    monkeypatch.setattr(asi, "predict_color_for_image_url", lambda url, kind: {"color": "", "confidence": 0.0, "probs": {}})
+    monkeypatch.setattr(asi, "detect_product_colors_from_photos", lambda urls, supplier_profile=None: {"color": "gray", "confidence": 0.63})
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda url: 100.0)
+
+    assignment = asi._build_color_assignment(
+        title="Nite Jogger",
+        supplier_key="any",
+        src_url="https://supplier.example/item",
+        item={"title": "Nite Jogger", "color": ""},
+        image_urls=["img1", "img2", "img3", "img4", "img5"],
+    )
+
+    assert assignment["detected_color"] == "gray"
+    assert assignment["color_tokens"] == ["gray"]
+    assert assignment["detected_color_debug"]["images_used"] >= 4
