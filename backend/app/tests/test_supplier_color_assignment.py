@@ -181,12 +181,12 @@ def test_build_color_assignment_debug_contains_min_images_target(monkeypatch):
     assert assignment["detected_color_debug"]["target_min_images"] == 4
 
 
-def test_rerank_shop_vkus_keeps_first_frames_when_not_suspicious(monkeypatch):
+def test_rerank_shop_vkus_drops_first_two_and_keeps_up_to_seven(monkeypatch):
     monkeypatch.setattr(asi, "_is_likely_product_image", lambda _u: True)
     monkeypatch.setattr(asi, "_score_gallery_image", lambda _u: 10.0)
-    monkeypatch.setattr(asi, "_filter_gallery_main_signature_cluster", lambda urls: urls)
 
-    urls = [f"https://cdn.example/{i}.jpg" for i in range(7)]
+    urls = [f"https://cdn.example/{i}.jpg" for i in range(10)]
     out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
 
-    assert out[:3] == urls[:3]
+    assert all(u not in out for u in urls[:2])
+    assert len(out) == 7

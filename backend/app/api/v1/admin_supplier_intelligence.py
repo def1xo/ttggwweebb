@@ -777,49 +777,40 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
         return uniq
 
     if supplier_key == "shop_vkus":
-        # shop_vkus feeds often prepend two service frames in longer galleries.
-        pre = list(uniq)
-        source = raw_norm or uniq
-        if len(source) > 2:
-            first_two = source[:2]
-            rest = source[2:]
-            has_supplier_marker = any(
-                ("shop_vkus" in str(u or "").lower()) or ("shop-vkus" in str(u or "").lower())
-                for u in first_two
-            )
-            leading_pair_suspicious = any((not _is_likely_product_image(u)) or (_score_gallery_image(u) < 0) for u in first_two)
-            duplicated_cover = bool(first_two and first_two[0] in rest)
-            second_is_suspicious = bool((not _is_likely_product_image(first_two[1])) or (_score_gallery_image(first_two[1]) < 0)) if len(first_two) >= 2 else False
+        # Historical rule for this supplier feed:
+        # drop first two service/cover frames and keep 4..7 best product photos.
+        base = list(uniq[2:]) if len(uniq) > 2 else list(uniq)
+        if not base:
+            return uniq[:1]
 
-            should_drop_pair = False
-            if len(source) >= 7 and (has_supplier_marker or (leading_pair_suspicious and duplicated_cover)):
-                should_drop_pair = True
-            elif len(source) >= 5 and (has_supplier_marker and leading_pair_suspicious):
-                should_drop_pair = True
-            elif len(source) == 5 and duplicated_cover and second_is_suspicious:
-                should_drop_pair = True
+        scored: list[tuple[str, float, bool]] = []
+        for u in base:
+            sc = _score_gallery_image(u)
+            lk = _is_likely_product_image(u)
+            scored.append((u, sc, lk))
 
-            if should_drop_pair:
-                pre = uniq[2:]
+        likely = [row for row in scored if row[2]]
+        source_rows = likely if len(likely) >= MIN_PRODUCT_IMAGES_TARGET else scored
+        ranked_rows = sorted(source_rows, key=lambda x: x[1], reverse=True)
 
-        filtered = [u for u in pre if _is_likely_product_image(u)]
-        if len(filtered) >= MIN_PRODUCT_IMAGES_TARGET:
-            work = filtered
-        elif filtered:
-            # Keep likely product images first, but retain extra frames to avoid over-pruning.
-            tails = [u for u in pre if u not in filtered]
-            need = max(0, MIN_PRODUCT_IMAGES_TARGET - len(filtered))
-            work = filtered + tails[:need]
-        else:
-            work = pre
-        if len(work) < MIN_PRODUCT_IMAGES_TARGET <= len(pre):
-            # Do not collapse gallery to 1-2 photos due aggressive frame filtering.
-            work = pre
+        target_max = 7
+        picked = [u for u, _s, _lk in ranked_rows[:target_max]]
+        picked_set = set(picked)
 
-        clustered = _filter_gallery_main_signature_cluster(work)
-        if len(clustered) < MIN_PRODUCT_IMAGES_TARGET <= len(work):
-            return work
-        return clustered
+        # Preserve original sequence in gallery for UX, but only for picked frames.
+        ordered = [u for u in base if u in picked_set]
+
+        # Ensure at least 4 when possible from remaining ranked rows.
+        target_min = MIN_PRODUCT_IMAGES_TARGET
+        if len(ordered) < target_min:
+            for u, _s, _lk in ranked_rows:
+                if u in ordered:
+                    continue
+                ordered.append(u)
+                if len(ordered) >= min(target_min, len(base)):
+                    break
+
+        return ordered[:target_max]
 
     ranked = sorted(uniq, key=lambda x: _score_gallery_image(x), reverse=True)
     return ranked
