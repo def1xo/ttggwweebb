@@ -1212,3 +1212,48 @@ def test_generate_youth_description_has_paragraphs_and_bullets():
     text = si.generate_youth_description("Nike Dunk Low", category_name="Обувь", color="black")
     assert "\n\n" in text
     assert text.count("• ") >= 3
+
+
+def test_split_images_by_color_filters_phantom_colors(monkeypatch):
+    import app.services.color_ml as cml
+
+    predictions = {
+        "u1": {"color": "black", "confidence": 0.91},
+        "u2": {"color": "black", "confidence": 0.86},
+        "u3": {"color": "white", "confidence": 0.78},
+        "u4": {"color": "white", "confidence": 0.74},
+        "u5": {"color": "orange", "confidence": 0.99},
+    }
+
+    monkeypatch.setattr(cml, "predict_color_for_image_url", lambda url, kind: predictions[url])
+
+    grouped = cml.split_images_by_color(["u1", "u2", "u3", "u4", "u5"], kind="shoes", min_conf=0.55, min_images_per_color=2)
+
+    assert grouped == {"black": ["u1", "u2"], "white": ["u3", "u4"]}
+
+
+def test_single_color_assignment_disables_color_selector(monkeypatch):
+    import app.api.v1.admin_supplier_intelligence as asi
+
+    monkeypatch.setattr(
+        asi,
+        "split_images_by_color",
+        lambda image_urls, kind, min_conf=0.55, min_images_per_color=2: {"black": ["img1", "img2"]},
+    )
+    monkeypatch.setattr(
+        asi,
+        "predict_color_for_image_url",
+        lambda url, kind: {"color": "black", "confidence": 0.8, "probs": {"black": 0.8}, "debug": {}},
+    )
+
+    assignment = asi._build_color_assignment(
+        title="Nike Air Max 95",
+        supplier_key="shop_vkus",
+        src_url="https://t.me/s/shop_vkus",
+        item={"title": "Nike Air Max 95", "color": "черный"},
+        image_urls=["img1", "img2", "img3"],
+    )
+
+    assert assignment["color_tokens"] == [""]
+    assert assignment["detected_color"] == "black"
+    assert assignment["variant_images_by_color"][""] == ["img1", "img2"]
