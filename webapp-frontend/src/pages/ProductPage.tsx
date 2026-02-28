@@ -172,6 +172,18 @@ function pickImage(p: any): string | null {
   return all[0] || normalizeMediaUrl(p?.image) || null;
 }
 
+const FALLBACK_IMAGE = "/logo_black.png";
+
+function onImageFallback(ev: React.SyntheticEvent<HTMLImageElement>) {
+  const img = ev.currentTarget;
+  if (img.dataset.fallbackApplied === "1") {
+    img.style.visibility = "hidden";
+    return;
+  }
+  img.dataset.fallbackApplied = "1";
+  img.src = FALLBACK_IMAGE;
+}
+
 export default function ProductPage() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -541,7 +553,7 @@ export default function ProductPage() {
           onTouchStart={onTouchStart}
           onTouchEnd={onTouchEnd}
         >
-          <img key={`${activeImage}_${slideDir}`} className={`product-detail-hero product-detail-hero--${slideDir}`} src={activeImage} alt={product.title} style={{ cursor: "zoom-in" }} onClick={() => setIsImageViewerOpen(true)} />
+          <img key={`${activeImage}_${slideDir}`} className={`product-detail-hero product-detail-hero--${slideDir}`} src={activeImage} alt={product.title} style={{ cursor: "zoom-in" }} onClick={() => setIsImageViewerOpen(true)} onError={onImageFallback} />
 
           {images.length > 1 ? (
             <div className="thumb-grid" style={{ marginTop: 10 }}>
@@ -552,6 +564,7 @@ export default function ProductPage() {
                   src={u}
                   alt=""
                   style={{ outline: idx === activeIndex ? "2px solid var(--ring)" : "none" }}
+                  onError={onImageFallback}
                   onClick={() => {
                     setSlideDir(idx >= activeIndex ? "next" : "prev");
                     setActiveIndex(idx);
@@ -710,6 +723,7 @@ export default function ProductPage() {
             alt={sanitizeProductTitle(product.title || product.name)}
             onClick={(e) => e.stopPropagation()}
             className={`image-viewer__img image-viewer__img--${slideDir}`}
+            onError={onImageFallback}
             style={{ maxWidth: "100%", maxHeight: "90vh", objectFit: "contain", borderRadius: 12 }}
           />
 
@@ -759,7 +773,7 @@ export default function ProductPage() {
               return (
                 <div key={pid} className="related-item" style={{ borderRadius: 16, padding: 10, background: "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01))", border: "1px solid var(--border)" }}>
                   <Link to={`/product/${pid}`} style={{ textDecoration: "none", color: "inherit" }}>
-                    <div className="related-thumb">{img ? <img src={img} alt={pTitle} /> : null}</div>
+                    <div className="related-thumb">{img ? <img src={img} alt={pTitle} onError={onImageFallback} /> : null}</div>
                     <div className="related-title">{pTitle}</div>
                   </Link>
                   <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
