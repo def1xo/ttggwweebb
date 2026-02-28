@@ -1952,14 +1952,21 @@ def import_products_from_sources(
                 # store supplier images locally when possible so they are stable
                 # across devices and not affected by source-side hotlink limits.
                 localized_image_urls: list[str] = []
+                hybrid_image_urls: list[str] = []
                 for img_u in image_urls:
                     local_u = _prefer_local_image_url(img_u, title_hint=title, source_page_url=src_url)
+                    candidate_u = str(local_u or img_u or "").strip()
+                    if not candidate_u:
+                        continue
+                    if "t.me/" in candidate_u or "telegram.me/" in candidate_u:
+                        continue
                     if local_u and local_u not in localized_image_urls:
                         localized_image_urls.append(local_u)
+                    if candidate_u not in hybrid_image_urls:
+                        hybrid_image_urls.append(candidate_u)
 
-                if localized_image_urls:
-                    image_urls = localized_image_urls
-                    image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
+                if hybrid_image_urls:
+                    image_urls = _rerank_gallery_images(hybrid_image_urls, supplier_key=supplier_key)
                     image_url = image_urls[0]
 
                 # Last-resort quality step: if supplier didn't provide any image,
