@@ -114,11 +114,13 @@ export default function Profile() {
     setOrdersLoading(true);
     setOrdersErr(null);
     try {
+
       const endpoints = ["/api/orders/me", "/api/orders", "/api/my/orders", "/orders/me"];
       let last: any = null;
+      const silentHeaders = { "X-Silent-Error": "1" };
       for (const ep of endpoints) {
         try {
-          const res = await axiosInstance.get(ep);
+          const res = await axiosInstance.get(ep, { headers: silentHeaders });
           const data = (res as any)?.data ?? res;
           const list = parseOrders(data);
           setOrders(list);

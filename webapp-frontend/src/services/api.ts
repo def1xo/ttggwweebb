@@ -1,9 +1,19 @@
 import axios, { AxiosRequestConfig } from "axios";
 import { initWebAppAndAuth } from "./webappAuth";
 
+const TOAST_DEDUP_WINDOW_MS = 3500;
+const toastDedupeCache = new Map<string, number>();
+
 function emitToast(message: string, type: "info" | "success" | "error" = "info") {
   try {
-    window.dispatchEvent(new CustomEvent("tg-toast", { detail: { message, type } }));
+    const msg = String(message || "").trim();
+    if (!msg) return;
+    const key = `${type}:${msg}`;
+    const now = Date.now();
+    const last = Number(toastDedupeCache.get(key) || 0);
+    if (now - last < TOAST_DEDUP_WINDOW_MS) return;
+    toastDedupeCache.set(key, now);
+    window.dispatchEvent(new CustomEvent("tg-toast", { detail: { message: msg, type } }));
   } catch {}
 }
 
@@ -263,15 +273,20 @@ axiosInstance.interceptors.response.use(
         }
       }
 
+
       // Friendly UX: show a short toast for common network/auth errors.
-      if (!silentError && status === 401) {
-        emitToast("Нужна авторизация. Перезайдите в WebApp.", "error");
-      } else if (!silentError && status === 403) {
-        emitToast("Недостаточно прав для этого действия.", "error");
-      } else if (!silentError && status >= 500) {
-        emitToast("Сервер временно недоступен. Попробуйте позже.", "error");
-      } else if (!silentError && !status) {
-        emitToast("Нет соединения с сервером.", "error");
+      let friendlyMsg = "";
+      if (status === 401) {
+        friendlyMsg = "Нужна авторизация. Перезайдите в WebApp.";
+      } else if (status === 403) {
+        friendlyMsg = "Недостаточно прав для этого действия.";
+      } else if (status >= 500) {
+        friendlyMsg = "Сервер временно недоступен. Попробуйте позже.";
+      } else if (!status) {
+        friendlyMsg = "Нет соединения с сервером.";
+      }
+      if (!silentError && friendlyMsg) {
+        emitToast(friendlyMsg, "error");
       }
       const info = {
         message: error?.message,
@@ -290,7 +305,7 @@ axiosInstance.interceptors.response.use(
       const serverMsg = formatApiErrorMessage(raw);
 
       const msg = serverMsg || (status === 0 ? "Сеть недоступна" : "Ошибка запроса");
-      if (!silentError) {
+      if (!silentError && !friendlyMsg && msg) {
         emitToast(msg, "error");
       }
     } catch (e) {
