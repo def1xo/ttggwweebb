@@ -140,6 +140,23 @@ function imagesForColor(p: any, color: string | null): string[] {
     const selectedOnly = splitImageCandidates(p?.selected_color_images)
       .map((item) => normalizeMediaUrl(item))
       .filter((item): item is string => Boolean(item));
+    const colorsCount = Array.isArray(p?.colors)
+      ? p.colors.length
+      : Array.isArray(p?.available_colors)
+      ? p.available_colors.length
+      : 0;
+    if (selectedOnly.length >= 4 || colorsCount > 1) return uniq(selectedOnly);
+
+    const singleColorFallback = [
+      ...splitImageCandidates(p?.general_images),
+      ...splitImageCandidates(p?.images),
+      ...splitImageCandidates(p?.image_urls),
+      ...splitImageCandidates(p?.gallery),
+    ]
+      .map((item) => normalizeMediaUrl(item))
+      .filter((item): item is string => Boolean(item));
+
+    if (singleColorFallback.length) return uniq(singleColorFallback);
     if (selectedOnly.length) return uniq(selectedOnly);
     return [];
   }
