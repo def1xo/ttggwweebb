@@ -11,6 +11,7 @@ export default function CategoryView() {
   const { id } = useParams();
   const nav = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const searchParamsKey = searchParams.toString();
   const [category, setCategory] = useState<any>(null);
   const [products, setProducts] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -46,7 +47,7 @@ export default function CategoryView() {
     if (nextQ !== query) setQuery(nextQ);
     if (nextQ !== debouncedQuery) setDebouncedQuery(nextQ);
     if (nextPage !== page) setPage(nextPage);
-  }, [searchParams]);
+  }, [searchParamsKey]);
 
   useEffect(() => {
     const params = new URLSearchParams(searchParams);
@@ -55,7 +56,7 @@ export default function CategoryView() {
     if (page > 1) params.set("page", String(page));
     else params.delete("page");
     if (params.toString() !== searchParams.toString()) setSearchParams(params, { replace: true });
-  }, [debouncedQuery, page, searchParams, setSearchParams]);
+  }, [debouncedQuery, page, searchParamsKey, searchParams, setSearchParams]);
 
   useEffect(() => {
     (async () => {

@@ -14,6 +14,7 @@ type Category = {
 
 export default function Catalog() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const searchParamsKey = searchParams.toString();
   const [query, setQuery] = useState(searchParams.get("q") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchParams.get("q") || "");
   const [categories, setCategories] = useState<Category[]>([]);
@@ -50,7 +51,7 @@ export default function Catalog() {
     if (nextQ !== query) setQuery(nextQ);
     if (nextQ !== debouncedQuery) setDebouncedQuery(nextQ);
     if (nextPage !== page) setPage(nextPage);
-  }, [searchParams]);
+  }, [searchParamsKey]);
 
   useEffect(() => {
     const params = new URLSearchParams(searchParams);
@@ -59,7 +60,7 @@ export default function Catalog() {
     if (page > 1) params.set("page", String(page));
     else params.delete("page");
     if (params.toString() !== searchParams.toString()) setSearchParams(params, { replace: true });
-  }, [debouncedQuery, page, searchParams, setSearchParams]);
+  }, [debouncedQuery, page, searchParamsKey, searchParams, setSearchParams]);
 
   useEffect(() => {
     (async () => {

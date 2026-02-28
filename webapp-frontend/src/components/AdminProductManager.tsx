@@ -23,6 +23,7 @@ type Product = {
 export default function AdminProductManager() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const searchParamsKey = searchParams.toString();
   const [items, setItems] = useState<Product[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -69,7 +70,7 @@ export default function AdminProductManager() {
     if (nextQ !== query) setQuery(nextQ);
     if (nextQ !== debouncedQuery) setDebouncedQuery(nextQ);
     if (nextPage !== page) setPage(nextPage);
-  }, [searchParams]);
+  }, [searchParamsKey]);
 
   useEffect(() => {
     const params = new URLSearchParams(searchParams);
@@ -80,7 +81,7 @@ export default function AdminProductManager() {
     const next = params.toString();
     const cur = searchParams.toString();
     if (next !== cur) setSearchParams(params, { replace: true });
-  }, [debouncedQuery, page, searchParams, setSearchParams]);
+  }, [debouncedQuery, page, searchParamsKey, searchParams, setSearchParams]);
 
   useEffect(() => {
     const key = `scroll:${location.pathname}?${location.search}`;
