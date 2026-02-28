@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import api from "../services/api";
 import Skeleton from "../components/Skeleton";
@@ -14,6 +14,7 @@ type Category = {
 
 export default function Catalog() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const searchParamsKey = searchParams.toString();
   const [query, setQuery] = useState(searchParams.get("q") || "");
   const [debouncedQuery, setDebouncedQuery] = useState(searchParams.get("q") || "");
   const [categories, setCategories] = useState<Category[]>([]);
@@ -26,23 +27,40 @@ export default function Catalog() {
   });
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const debouncedInitializedRef = useRef(false);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
       setDebouncedQuery(query.trim());
-      setPage(1);
     }, 300);
     return () => window.clearTimeout(t);
   }, [query]);
 
   useEffect(() => {
+    if (!debouncedInitializedRef.current) {
+      debouncedInitializedRef.current = true;
+      return;
+    }
+    setPage(1);
+  }, [debouncedQuery]);
+
+  useEffect(() => {
+    const nextQ = searchParams.get("q") || "";
+    const nextPageRaw = Number(searchParams.get("page") || 1);
+    const nextPage = Number.isFinite(nextPageRaw) && nextPageRaw > 0 ? Math.floor(nextPageRaw) : 1;
+    if (nextQ !== query) setQuery(nextQ);
+    if (nextQ !== debouncedQuery) setDebouncedQuery(nextQ);
+    if (nextPage !== page) setPage(nextPage);
+  }, [searchParamsKey]);
+
+  useEffect(() => {
     const params = new URLSearchParams(searchParams);
-    if (query.trim()) params.set("q", query.trim());
+    if (debouncedQuery) params.set("q", debouncedQuery);
     else params.delete("q");
     if (page > 1) params.set("page", String(page));
     else params.delete("page");
     if (params.toString() !== searchParams.toString()) setSearchParams(params, { replace: true });
-  }, [query, page, searchParams, setSearchParams]);
+  }, [debouncedQuery, page, searchParamsKey, searchParams, setSearchParams]);
 
   useEffect(() => {
     (async () => {
@@ -104,9 +122,6 @@ export default function Catalog() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [page]);
 
-  useEffect(() => {
-    if (page > pages) setPage(pages);
-  }, [page, pages]);
 
   const topCategories = useMemo(() => categories.slice(0, 10), [categories]);
 
@@ -176,9 +191,9 @@ export default function Catalog() {
 
         {pages > 1 ? (
           <div style={{ marginTop: 12, display: "flex", gap: 8, justifyContent: "center", alignItems: "center" }}>
-            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.max(1, v - 1))} disabled={page <= 1}>← Назад</button>
+            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.max(1, v - 1))} disabled={loading || page <= 1}>← Назад</button>
             <div className="small-muted">Страница {page} / {pages}</div>
-            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.min(pages, v + 1))} disabled={page >= pages}>Далее →</button>
+            <button className="btn ghost" type="button" onClick={() => setPage((v) => Math.min(pages, v + 1))} disabled={loading || page >= pages}>Далее →</button>
           </div>
         ) : null}
       </div>
