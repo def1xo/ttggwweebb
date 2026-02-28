@@ -20,8 +20,8 @@ from app.db import models
 from app.services.importer_notifications import slugify
 from app.services import media_store
 from app.services.supplier_profiles import normalize_title_for_supplier
-from app.services.color_detection import normalize_color_to_whitelist
-from app.services.color_ml import predict_color_for_image_url, split_images_by_color
+from app.services.color_detection import normalize_color_to_whitelist, normalize_combo_color_key
+from app.services.color_ml import predict_color_for_image_url
 from app.services.supplier_importers import (
     ImporterContext,
     get_importer_for_source,
@@ -36,7 +36,6 @@ from app.services.supplier_intelligence import (
     extract_catalog_items,
     extract_image_urls_from_html_page,
     fetch_tabular_preview,
-    generate_ai_product_description,
     generate_youth_description,
     image_print_signature_from_url,
     map_category,
@@ -114,6 +113,20 @@ def _infer_color_kind_from_title(raw_title: str | None) -> str:
     return "shoes" if FOOTWEAR_TITLE_RE.search(title) else "clothes"
 
 
+def _pick_color_detection_images(image_urls: list[str], limit: int = 4) -> list[str]:
+    ranked: list[str] = []
+    seen: set[str] = set()
+    for u in sorted((image_urls or []), key=lambda x: _score_gallery_image(x), reverse=True):
+        uu = str(u or "").strip()
+        if not uu or uu in seen:
+            continue
+        seen.add(uu)
+        ranked.append(uu)
+        if len(ranked) >= max(1, int(limit)):
+            break
+    return ranked
+
+
 def _build_color_assignment(
     *,
     title: str,
@@ -126,62 +139,74 @@ def _build_color_assignment(
     raw_color_tokens = _split_color_tokens(item.get("color"))
     normalized_raw_colors = [_canonical_color_key(x) for x in raw_color_tokens if _canonical_color_key(x)]
 
-    is_shop_vkus = _is_shop_vkus_item_context(supplier_key, src_url, item)
-    expected_for_split: list[str] = []
-    if is_shop_vkus and normalized_raw_colors:
-        # shop_vkus often sends one colorway per row; keep split focused to row color.
-        expected_for_split = list(normalized_raw_colors)
-
-    images_by_color = split_images_by_color(image_urls, kind=kind, expected_colors=expected_for_split or None)
-    images_by_color_counts = {k: len(v) for k, v in images_by_color.items()}
-
-    final_colors: list[str] = []
-    if is_shop_vkus:
-        inferred_colors = normalized_raw_colors or _extract_shop_vkus_color_tokens(item, image_urls=image_urls)
-        inferred_colors = [_canonical_color_key(x) for x in inferred_colors if _canonical_color_key(x)]
-        final_colors = [c for c in inferred_colors if c in images_by_color]
-        if not final_colors and images_by_color:
-            final_colors = [next(iter(images_by_color.keys()))]
-    else:
-        normalized = normalized_raw_colors
-        final_colors = [c for c in normalized if c in images_by_color]
-        if not final_colors and images_by_color:
-            final_colors = [next(iter(images_by_color.keys()))]
-
-    if len(final_colors) <= 1:
-        single_color = final_colors[0] if final_colors else ""
-        color_images = list(images_by_color.get(single_color) or [])
-        confidences: list[float] = []
-        for url in color_images:
-            pred = predict_color_for_image_url(url, kind=kind)
-            if _canonical_color_key(pred.get("color")) == single_color and float(pred.get("confidence") or 0) > 0:
-                confidences.append(float(pred.get("confidence") or 0.0))
-        mean_conf = (sum(confidences) / len(confidences)) if confidences else 0.0
+    explicit_key = normalize_combo_color_key(normalized_raw_colors) if normalized_raw_colors else ""
+    if explicit_key:
         return {
             "kind": kind,
-            "color_tokens": [""],
-            "variant_images_by_color": {"": color_images},
-            "detected_color": single_color,
-            "detected_color_confidence": mean_conf,
+            "color_tokens": [explicit_key],
+            "variant_images_by_color": {explicit_key: list(image_urls or [])},
+            "detected_color": explicit_key,
+            "detected_color_confidence": 1.0,
             "detected_color_debug": {
                 "kind": kind,
-                "images_by_color_counts": images_by_color_counts,
-                "final_colors": final_colors,
+                "source": "item.color",
+                "final_colors": [explicit_key],
             },
         }
 
-    variant_images = {color_key: list(images_by_color.get(color_key) or []) for color_key in final_colors}
-    final_color_tokens = [c for c in final_colors if variant_images.get(c)]
+    detection_images = _pick_color_detection_images(image_urls or [], limit=4)
+    prob_sums: dict[str, float] = {}
+    total_signal = 0.0
+    for url in detection_images:
+        try:
+            pred = predict_color_for_image_url(url, kind=kind)
+        except Exception:
+            pred = {}
+        probs = pred.get("probs") if isinstance(pred, dict) else None
+        if isinstance(probs, dict) and probs:
+            for raw_key, raw_val in probs.items():
+                ck = _canonical_color_key(str(raw_key or ""))
+                if not ck:
+                    continue
+                val = float(raw_val or 0.0)
+                if val <= 0:
+                    continue
+                prob_sums[ck] = prob_sums.get(ck, 0.0) + val
+                total_signal += val
+        else:
+            ck = _canonical_color_key((pred or {}).get("color") if isinstance(pred, dict) else None)
+            conf = float((pred or {}).get("confidence") or 0.0) if isinstance(pred, dict) else 0.0
+            if ck and conf > 0:
+                prob_sums[ck] = prob_sums.get(ck, 0.0) + conf
+                total_signal += conf
+
+    ranked = sorted(prob_sums.items(), key=lambda kv: kv[1], reverse=True)
+    primary = ranked[0][0] if ranked else ""
+    secondary = ranked[1][0] if len(ranked) > 1 else ""
+    primary_score = float(ranked[0][1]) if ranked else 0.0
+    secondary_score = float(ranked[1][1]) if len(ranked) > 1 else 0.0
+
+    detected_key = primary or "multi"
+    if primary and secondary and primary_score > 0 and secondary_score >= (primary_score * 0.35):
+        combo = normalize_combo_color_key([primary, secondary])
+        if combo:
+            detected_key = combo
+
+    detected_conf = (primary_score / total_signal) if total_signal > 0 else 0.0
+    detected_conf = max(0.0, min(1.0, detected_conf))
+
     return {
         "kind": kind,
-        "color_tokens": final_color_tokens,
-        "variant_images_by_color": variant_images,
-        "detected_color": None,
-        "detected_color_confidence": 0.0,
+        "color_tokens": [detected_key],
+        "variant_images_by_color": {detected_key: list(image_urls or [])},
+        "detected_color": detected_key,
+        "detected_color_confidence": detected_conf,
         "detected_color_debug": {
             "kind": kind,
-            "images_by_color_counts": images_by_color_counts,
-            "final_colors": final_color_tokens,
+            "source": "image_aggregate",
+            "top_images": detection_images,
+            "prob_sums": prob_sums,
+            "final_colors": [detected_key],
         },
     }
 
@@ -1115,7 +1140,7 @@ class ImportProductsIn(BaseModel):
     publish_visible: bool = False
     ai_style_description: bool = True
     ai_description_provider: str = Field(default="disabled", max_length=64)
-    ai_description_enabled: bool = True
+    ai_description_enabled: bool = False
     ai_color_distribution_enabled: bool = False
     ai_color_distribution_provider: str = Field(default="disabled", max_length=64)
     use_avito_pricing: bool = True
@@ -1862,10 +1887,7 @@ def import_products_from_sources(
 
                 desc = str(it.get("description") or "").strip()
                 if payload.ai_style_description and not desc:
-                    if payload.ai_description_enabled:
-                        desc = generate_ai_product_description(title, cat_name, it.get("color"))
-                    else:
-                        desc = generate_youth_description(title, cat_name, it.get("color"))
+                    desc = generate_youth_description(title, cat_name, it.get("color"))
                 # Guard against anomalously low supplier price parse (e.g. 799 for sneakers).
                 # For footwear-like titles enforce a minimal wholesale floor before retail pricing.
                 if re.search(r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574)\b", title):
@@ -1952,19 +1974,27 @@ def import_products_from_sources(
                 # store supplier images locally when possible so they are stable
                 # across devices and not affected by source-side hotlink limits.
                 localized_image_urls: list[str] = []
+                hybrid_image_urls: list[str] = []
                 for img_u in image_urls:
                     local_u = _prefer_local_image_url(img_u, title_hint=title, source_page_url=src_url)
+                    candidate_u = str(local_u or img_u or "").strip()
+                    if not candidate_u:
+                        continue
+                    if "t.me/" in candidate_u or "telegram.me/" in candidate_u:
+                        continue
                     if local_u and local_u not in localized_image_urls:
                         localized_image_urls.append(local_u)
+                    if candidate_u not in hybrid_image_urls:
+                        hybrid_image_urls.append(candidate_u)
 
-                if localized_image_urls:
-                    image_urls = localized_image_urls
-                    image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
+                if hybrid_image_urls:
+                    image_urls = _rerank_gallery_images(hybrid_image_urls, supplier_key=supplier_key)
                     image_url = image_urls[0]
 
-                # Last-resort quality step: if supplier didn't provide any image,
-                # search by title and download a few images to local storage.
-                if not image_urls:
+                allow_external_image_search = _env_bool("IMPORT_ALLOW_EXTERNAL_IMAGE_SEARCH", False)
+                allow_cross_item_enrich = _env_bool("IMPORT_ALLOW_CROSS_ITEM_ENRICH", False)
+
+                if not image_urls and allow_external_image_search:
                     try:
                         searched = search_image_urls_by_title(title, limit=3)
                     except Exception:
@@ -1980,8 +2010,7 @@ def import_products_from_sources(
                         image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
                         image_url = image_urls[0]
 
-                # auto-enrich item gallery with similar photos from known supplier pool
-                if image_url and known_image_urls:
+                if allow_cross_item_enrich and image_url and known_image_urls:
                     try:
                         sim_items = find_similar_images(image_url, known_image_urls, max_hamming_distance=5, limit=8)
                         for sim in sim_items:
@@ -2003,6 +2032,9 @@ def import_products_from_sources(
                 if image_urls:
                     image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
                     image_url = image_urls[0]
+                elif not allow_external_image_search:
+                    report.errors.append(f"{title}: no_supplier_images")
+                    continue
 
                 if not p:
                     # unique slug fallback
@@ -2064,23 +2096,39 @@ def import_products_from_sources(
                         p.import_supplier_name = getattr(src, "supplier_name", None)
                         changed = True
                     prev_media_meta = getattr(p, "import_media_meta", None) or {}
-                    images_by_color_key: dict[str, list[str]] = {}
-                    general_images: list[str] = []
-                    for _u in (image_urls or []):
-                        try:
-                            _c = dominant_color_name_from_url(_u)
-                        except Exception:
-                            _c = None
-                        _ck = normalize_color_to_whitelist(_c) if _c else ""
-                        if _ck:
-                            images_by_color_key.setdefault(_ck, []).append(_u)
-                        else:
-                            general_images.append(_u)
+                    prev_images_by_color_key = dict(prev_media_meta.get("images_by_color_key") or {}) if isinstance(prev_media_meta, dict) else {}
+                    merged_images_by_color_key: dict[str, list[str]] = {
+                        str(k): [str(u).strip() for u in (v or []) if str(u).strip()]
+                        for k, v in prev_images_by_color_key.items()
+                    }
+                    merged_general_images: list[str] = [
+                        str(u).strip() for u in ((prev_media_meta.get("general_images") if isinstance(prev_media_meta, dict) else []) or []) if str(u).strip()
+                    ]
+
+                    row_color_key = ""
+                    row_color_raw = str((it or {}).get("color") or "").strip()
+                    if row_color_raw:
+                        row_color_key = normalize_color_to_whitelist(row_color_raw)
+                    if not row_color_key and getattr(p, "detected_color", None):
+                        row_color_key = normalize_color_to_whitelist(getattr(p, "detected_color", None))
+
+                    if row_color_key:
+                        bucket = merged_images_by_color_key.setdefault(row_color_key, [])
+                        for _u in (image_urls or []):
+                            uu = str(_u).strip()
+                            if uu and uu not in bucket:
+                                bucket.append(uu)
+                    else:
+                        for _u in (image_urls or []):
+                            uu = str(_u).strip()
+                            if uu and uu not in merged_general_images:
+                                merged_general_images.append(uu)
+
                     next_media_meta = {
-                        "photos_ref": photos_ref,
-                        "images_status": images_status,
-                        "images_by_color_key": images_by_color_key,
-                        "general_images": general_images,
+                        "photos_ref": photos_ref or (prev_media_meta.get("photos_ref") if isinstance(prev_media_meta, dict) else []),
+                        "images_status": images_status or (prev_media_meta.get("images_status") if isinstance(prev_media_meta, dict) else None),
+                        "images_by_color_key": merged_images_by_color_key,
+                        "general_images": merged_general_images,
                     }
                     if next_media_meta != prev_media_meta:
                         p.import_media_meta = next_media_meta
@@ -2154,7 +2202,10 @@ def import_products_from_sources(
                     item=(it if isinstance(it, dict) else {}),
                     image_urls=image_urls,
                 )
-                color_tokens = list(color_assignment.get("color_tokens") or [""])
+                color_tokens = [str(x).strip() for x in (color_assignment.get("color_tokens") or []) if str(x).strip()]
+                if not color_tokens:
+                    fallback_key = str(color_assignment.get("detected_color") or "").strip() or "multi"
+                    color_tokens = [fallback_key]
                 variant_images_by_color = dict(color_assignment.get("variant_images_by_color") or {})
                 detected_color = str(color_assignment.get("detected_color") or "").strip()
                 detected_color_confidence = float(color_assignment.get("detected_color_confidence") or 0.0)
@@ -2173,6 +2224,17 @@ def import_products_from_sources(
                     p.detected_color_confidence = None
                     p.detected_color_debug = detected_color_debug
                 db.add(p)
+
+                if detected_color:
+                    existing_variants_for_color_migration = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
+                    has_colored_variants = any(vv.color_id is not None for vv in existing_variants_for_color_migration)
+                    if existing_variants_for_color_migration and not has_colored_variants:
+                        migrated_color = get_or_create_color(detected_color)
+                        if migrated_color is not None:
+                            for vv in existing_variants_for_color_migration:
+                                if vv.color_id is None:
+                                    vv.color_id = migrated_color.id
+                                    db.add(vv)
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
@@ -2568,7 +2630,7 @@ def run_auto_import_now(
         "dry_run": False,
         "publish_visible": True,
         "ai_style_description": True,
-        "ai_description_enabled": True,
+        "ai_description_enabled": False,
         "ai_color_distribution_enabled": (opts.ai_color_distribution_enabled if opts and opts.ai_color_distribution_enabled is not None else _default_auto_import_ai_color_distribution_enabled()),
         "ai_color_distribution_provider": (str(opts.ai_color_distribution_provider).strip() if opts and opts.ai_color_distribution_provider else _default_auto_import_ai_color_distribution_provider()),
         "use_avito_pricing": False,

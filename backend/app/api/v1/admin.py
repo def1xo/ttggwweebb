@@ -10,6 +10,7 @@ import requests
 
 from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
+from app.services.color_detection import normalize_color_to_whitelist, canonical_color_to_display_name
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -61,6 +62,10 @@ def _build_order_supply_info(db: Session, order: models.Order) -> list[str]:
         if variant and variant.color_id:
             color = db.query(models.Color).get(variant.color_id)
             color_name = (color.name if color else "—")
+        elif product and getattr(product, "detected_color", None):
+            normalized = normalize_color_to_whitelist(getattr(product, "detected_color", None))
+            display = canonical_color_to_display_name(normalized)
+            color_name = display or "—"
 
         # optional estimated cost from latest ProductCost
         cost = None

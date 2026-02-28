@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
 from app.services.commissions import compute_and_apply_commissions
+from app.services.color_detection import normalize_color_to_whitelist, canonical_color_to_display_name
 
 router = APIRouter(tags=["admin_orders"])
 
@@ -57,6 +58,10 @@ def _order_supply_lines(db: Session, order: models.Order) -> list[str]:
         if variant and variant.color_id:
             clr = db.query(models.Color).get(variant.color_id)
             color_name = clr.name if clr else "—"
+        elif product and getattr(product, "detected_color", None):
+            normalized = normalize_color_to_whitelist(getattr(product, "detected_color", None))
+            display = canonical_color_to_display_name(normalized)
+            color_name = display or "—"
 
         latest_cost = None
         if variant:
