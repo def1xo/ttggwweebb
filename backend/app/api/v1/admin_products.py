@@ -163,13 +163,24 @@ def _get_or_create_color(db: Session, name: str) -> models.Color:
 @router.get("/products")
 def list_products(
     q: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
     db: Session = Depends(get_db),
     admin: models.User = Depends(get_current_admin_user),
 ):
     query = db.query(models.Product)
     if q:
         query = query.filter(models.Product.title.ilike(f"%{q}%"))
-    items = query.order_by(models.Product.created_at.desc()).all()
+    total = int(query.count() or 0)
+    pages = max(1, (total + int(limit) - 1) // int(limit))
+    safe_page = min(max(1, int(page)), pages)
+    items = (
+        query
+        .order_by(models.Product.created_at.desc())
+        .offset((safe_page - 1) * int(limit))
+        .limit(int(limit))
+        .all()
+    )
     out = []
     for p in items:
         sizes = []
@@ -213,7 +224,14 @@ def list_products(
             "variants": [{"id": v.id, "price": float(v.price or p.base_price or 0), "stock_quantity": int(v.stock_quantity or 0)} for v in (p.variants or [])],
             "cost_price": (round(sum(latest_cost_by_variant.values()) / len(latest_cost_by_variant), 2) if latest_cost_by_variant else None),
         })
-    return {"products": out}
+    return {
+        "items": out,
+        "products": out,
+        "total": total,
+        "page": safe_page,
+        "limit": int(limit),
+        "pages": pages,
+    }
 
 
 @router.post("/products")

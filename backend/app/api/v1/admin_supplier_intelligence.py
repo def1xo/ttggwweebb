@@ -21,6 +21,7 @@ from app.services.importer_notifications import slugify
 from app.services import media_store
 from app.services.supplier_profiles import normalize_title_for_supplier
 from app.services.color_detection import normalize_color_to_whitelist
+from app.services.color_ml import predict_color_for_image_url, split_images_by_color
 from app.services.supplier_importers import (
     ImporterContext,
     get_importer_for_source,
@@ -37,7 +38,6 @@ from app.services.supplier_intelligence import (
     fetch_tabular_preview,
     generate_ai_product_description,
     generate_youth_description,
-    infer_colors_with_ai,
     image_print_signature_from_url,
     map_category,
     find_similar_images,
@@ -67,6 +67,10 @@ MAX_TELEGRAM_MEDIA_EXPANSIONS_PER_IMPORT = 40
 MIN_IMAGE_SIDE_PX = 600
 MIN_IMAGE_FILE_SIZE_BYTES = 40 * 1024
 MAX_IMAGE_ASPECT_RATIO = 5.0
+
+FOOTWEAR_TITLE_RE = re.compile(
+    r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574|1906|2002|dunk|forum|asics)\b"
+)
 
 
 def _looks_like_direct_image_url(url: str | None) -> bool:
@@ -103,6 +107,76 @@ def _canonical_color_key(raw: str | None) -> str:
         return ""
     # strict single color key from whitelist; composite values are forbidden
     return normalize_color_to_whitelist(txt)
+
+
+def _infer_color_kind_from_title(raw_title: str | None) -> str:
+    title = str(raw_title or "")
+    return "shoes" if FOOTWEAR_TITLE_RE.search(title) else "clothes"
+
+
+def _build_color_assignment(
+    *,
+    title: str,
+    supplier_key: str,
+    src_url: str,
+    item: dict[str, object],
+    image_urls: list[str],
+) -> dict[str, object]:
+    kind = _infer_color_kind_from_title(title)
+    images_by_color = split_images_by_color(image_urls, kind=kind)
+    images_by_color_counts = {k: len(v) for k, v in images_by_color.items()}
+
+    is_shop_vkus = _is_shop_vkus_item_context(supplier_key, src_url, item)
+    final_colors: list[str] = []
+    if is_shop_vkus:
+        inferred_colors = _extract_shop_vkus_color_tokens(item, image_urls=image_urls)
+        inferred_colors = [_canonical_color_key(x) for x in inferred_colors if _canonical_color_key(x)]
+        final_colors = [c for c in inferred_colors if c in images_by_color]
+        if not final_colors and images_by_color:
+            final_colors = [next(iter(images_by_color.keys()))]
+    else:
+        raw_colors = _split_color_tokens(item.get("color"))
+        normalized = [_canonical_color_key(x) for x in raw_colors if _canonical_color_key(x)]
+        final_colors = [c for c in normalized if c in images_by_color]
+        if not final_colors and images_by_color:
+            final_colors = [next(iter(images_by_color.keys()))]
+
+    if len(final_colors) <= 1:
+        single_color = final_colors[0] if final_colors else ""
+        color_images = list(images_by_color.get(single_color) or image_urls)
+        confidences: list[float] = []
+        for url in color_images:
+            pred = predict_color_for_image_url(url, kind=kind)
+            if _canonical_color_key(pred.get("color")) == single_color and float(pred.get("confidence") or 0) > 0:
+                confidences.append(float(pred.get("confidence") or 0.0))
+        mean_conf = (sum(confidences) / len(confidences)) if confidences else 0.0
+        return {
+            "kind": kind,
+            "color_tokens": [""],
+            "variant_images_by_color": {"": color_images},
+            "detected_color": single_color,
+            "detected_color_confidence": mean_conf,
+            "detected_color_debug": {
+                "kind": kind,
+                "images_by_color_counts": images_by_color_counts,
+                "final_colors": final_colors,
+            },
+        }
+
+    variant_images = {color_key: list(images_by_color.get(color_key) or []) for color_key in final_colors}
+    final_color_tokens = [c for c in final_colors if variant_images.get(c)]
+    return {
+        "kind": kind,
+        "color_tokens": final_color_tokens,
+        "variant_images_by_color": variant_images,
+        "detected_color": None,
+        "detected_color_confidence": 0.0,
+        "detected_color_debug": {
+            "kind": kind,
+            "images_by_color_counts": images_by_color_counts,
+            "final_colors": final_color_tokens,
+        },
+    }
 
 
 def _shop_vkus_row_post_link(item: dict[str, object], image_urls: list[str] | None = None) -> str:
@@ -630,12 +704,10 @@ def _prefer_local_image_url(url: str | None, *, title_hint: str | None = None, s
         if local_candidate:
             return local_candidate
     except Exception:
-        # keep remote URL only when it already looks like a direct image link;
-        # otherwise we may save broken t.me/page links into product gallery.
-        if _looks_like_direct_image_url(normalized_u):
-            return normalized_u
+        # Do not keep remote URL in gallery when localization fails,
+        # otherwise broken/low-quality sources leak into UI.
         return None
-    return normalized_u
+    return None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -1350,7 +1422,6 @@ def import_products_from_sources(
     supplier_tg_fallback_images: dict[str, list[str]] = {}
     existing_product_by_supplier_title: dict[tuple[str, str], models.Product] = {}
     existing_product_by_global_title: dict[tuple[int, str], models.Product] = {}
-    shop_vkus_rows_by_title: dict[str, int] = {}
 
     def _title_key(raw_title: str | None) -> str:
         return re.sub(r"\s+", " ", str(raw_title or "").strip().lower())
@@ -1763,9 +1834,6 @@ def import_products_from_sources(
                 cat_name = map_category(title)
                 category = get_or_create_category(cat_name)
                 effective_title = (title_for_group or title).strip()[:500]
-                if supplier_key == "shop_vkus" and int(shop_vkus_rows_by_title.get(base_title_key, 0)) >= 3:
-                    # Keep maximum two colorways in a single product for shop_vkus.
-                    effective_title = f"{effective_title} #{int(shop_vkus_rows_by_title.get(base_title_key, 0)) - 1}"[:500]
                 slug_base = (slugify(effective_title) or f"item-{category.id}")[:500]
                 slug = slug_base
                 p = db.query(models.Product).filter(models.Product.slug == slug).one_or_none()
@@ -1777,17 +1845,12 @@ def import_products_from_sources(
                     shop_vkus_post_link = _shop_vkus_row_post_link(it if isinstance(it, dict) else {}, image_urls=image_urls)
                 except Exception:
                     shop_vkus_post_link = ""
-                shop_vkus_row_idx = 0
-                if supplier_key == "shop_vkus":
-                    shop_vkus_row_idx = int(shop_vkus_rows_by_title.get(base_title_key, 0))
-                    shop_vkus_rows_by_title[base_title_key] = shop_vkus_row_idx + 1
-
                 if not p:
                     p = db.query(models.Product).filter(models.Product.title == effective_title, models.Product.category_id == category.id).one_or_none()
-                if not p and supplier_key and not (supplier_key == "shop_vkus" and shop_vkus_row_idx >= 2):
+                if not p and supplier_key:
                     p = _find_existing_supplier_product(supplier_key, getattr(src, "supplier_name", None), _title_key(effective_title))
 
-                if not p and not (supplier_key == "shop_vkus" and shop_vkus_row_idx >= 2):
+                if not p:
                     p = _find_existing_global_product(int(category.id), _title_key(effective_title))
 
                 desc = str(it.get("description") or "").strip()
@@ -2077,44 +2140,32 @@ def import_products_from_sources(
                         existing_product_by_supplier_title[(supplier_key, _title_key(effective_title))] = p
                     existing_product_by_global_title[(int(category.id), _title_key(effective_title))] = p
 
-                # Color policy:
-                # - if source has only one color, do not force color variants;
-                # - for shop_vkus, allow fallback color inference from item text/gallery only when 2+ strong colors are detected.
-                is_shop_vkus = _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None)
-                src_color = it.get("color")
-                color_tokens = _split_color_tokens(src_color)
-                if is_shop_vkus:
-                    if color_tokens:
-                        color_tokens = color_tokens[:2]
-                    elif image_urls:
-                        inferred_colors = _extract_shop_vkus_color_tokens(it if isinstance(it, dict) else {}, image_urls=image_urls)
-                        color_tokens = inferred_colors[:2] if inferred_colors else []
-                else:
-                    if len(color_tokens) <= 1:
-                        if payload.ai_color_distribution_enabled:
-                            ai_colors = infer_colors_with_ai(
-                                title=title,
-                                image_urls=image_urls,
-                                provider=payload.ai_color_distribution_provider,
-                                max_colors=3,
-                            )
-                            if len(ai_colors) >= 1:
-                                color_tokens = ai_colors
-                color_tokens = [_canonical_color_key(x) for x in color_tokens if _canonical_color_key(x)]
-                if len(color_tokens) == 0:
-                    color_tokens = [""]
-                elif is_shop_vkus:
-                    # shop_vkus strict policy:
-                    # - 5..7 photos => exactly one color, never multi
-                    # - >7 photos => max two colors
-                    photo_cnt = len([u for u in (image_urls or []) if str(u or "").strip()])
-                    color_tokens = [c for c in color_tokens if c and c != "multi"]
-                    if 5 <= photo_cnt <= 7:
-                        color_tokens = [color_tokens[0]] if color_tokens else []
-                    elif photo_cnt > 7:
-                        color_tokens = color_tokens[:2] if color_tokens else []
+                color_assignment = _build_color_assignment(
+                    title=title,
+                    supplier_key=supplier_key,
+                    src_url=src_url,
+                    item=(it if isinstance(it, dict) else {}),
+                    image_urls=image_urls,
+                )
+                color_tokens = list(color_assignment.get("color_tokens") or [""])
+                variant_images_by_color = dict(color_assignment.get("variant_images_by_color") or {})
+                detected_color = str(color_assignment.get("detected_color") or "").strip()
+                detected_color_confidence = float(color_assignment.get("detected_color_confidence") or 0.0)
+                detected_color_debug = color_assignment.get("detected_color_debug") or {}
+
+                if len(color_tokens) <= 1:
+                    if detected_color:
+                        p.detected_color = detected_color
+                        p.detected_color_confidence = Decimal(str(round(detected_color_confidence, 4)))
                     else:
-                        color_tokens = [color_tokens[0]] if color_tokens else []
+                        p.detected_color = None
+                        p.detected_color_confidence = None
+                    p.detected_color_debug = detected_color_debug
+                else:
+                    p.detected_color = None
+                    p.detected_color_confidence = None
+                    p.detected_color_debug = detected_color_debug
+                db.add(p)
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
@@ -2301,6 +2352,13 @@ def import_products_from_sources(
                 row_color_ids: set[int | None] = set()
                 for color_name in color_tokens:
                     color = get_or_create_color(color_name) if color_name else None
+                    color_key = _canonical_color_key(color_name)
+                    if color_name:
+                        variant_images = list(variant_images_by_color.get(color_key) or [])
+                    else:
+                        variant_images = list(variant_images_by_color.get("") or image_urls or ([image_url] if image_url else []))
+                    if color_name and not variant_images:
+                        continue
                     row_color_ids.add(color.id if color else None)
                     for size_name in size_tokens:
                         size = get_or_create_size(size_name) if size_name else None
@@ -2326,8 +2384,6 @@ def import_products_from_sources(
                             .filter(models.ProductVariant.color_id == (color.id if color else None))
                             .one_or_none()
                         )
-
-                        variant_images = image_urls or ([image_url] if image_url else None)
 
                         if variant is None:
                             variant = models.ProductVariant(
