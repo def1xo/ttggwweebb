@@ -54,7 +54,6 @@ function normalizeMediaUrl(raw: unknown): string | null {
   return base ? `${base}/${url}` : url;
 }
 
-const FALLBACK_IMAGE = "/logo_black.png";
 
 export default function ProductCard({ product }: Props) {
   const { isFavorite, toggle } = useFavorites();
@@ -65,8 +64,8 @@ export default function ProductCard({ product }: Props) {
     (Array.isArray(imgs) && imgs.length ? (imgs[0]?.url || imgs[0]) : null) ||
     product?.default_image ||
     null;
-  const validImage = normalizeMediaUrl(rawImage) || FALLBACK_IMAGE;
-  const [cardImage, setCardImage] = useState<string>(validImage);
+  const validImage = normalizeMediaUrl(rawImage);
+  const [cardImage, setCardImage] = useState<string | null>(validImage);
 
   const variantList = (product?.variants || []) as any[];
   const defaultVariant = variantList?.[0] || null;
@@ -114,7 +113,11 @@ export default function ProductCard({ product }: Props) {
     <Link to={`/product/${product?.id}`} className="card" style={{ textDecoration: "none", color: "inherit" }}>
       <div className="product-card">
         <div className="product-thumb">
-          <img src={cardImage} alt={title} onError={() => setCardImage(FALLBACK_IMAGE)} style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 12 }} />
+          {cardImage ? (
+            <img src={cardImage} alt={title} loading="lazy" decoding="async" onError={() => setCardImage(null)} style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 12 }} />
+          ) : (
+            <div aria-label="placeholder" style={{ width: "100%", height: 160, borderRadius: 12, background: "linear-gradient(135deg, rgba(255,255,255,0.10), rgba(255,255,255,0.03))", border: "1px solid var(--border)" }} />
+          )}
           {meta.isNew ? <div className="badge">NEW</div> : null}
           <button
             type="button"
