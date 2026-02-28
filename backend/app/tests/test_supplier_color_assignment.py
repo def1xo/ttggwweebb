@@ -119,3 +119,21 @@ def test_build_color_assignment_allows_any_canonical_pair(monkeypatch):
 
     assert assignment["detected_color"] == "blue-red"
     assert assignment["color_tokens"] == ["blue-red"]
+
+
+def test_build_color_assignment_falls_back_to_cv_aggregate_when_ml_empty(monkeypatch):
+    monkeypatch.setattr(asi, "predict_color_for_image_url", lambda url, kind: {"color": "", "confidence": 0.0, "probs": {}})
+    monkeypatch.setattr(asi, "detect_product_colors_from_photos", lambda urls, supplier_profile=None: {"color": "gray", "confidence": 0.63})
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda url: 100.0)
+
+    assignment = asi._build_color_assignment(
+        title="Nite Jogger",
+        supplier_key="any",
+        src_url="https://supplier.example/item",
+        item={"title": "Nite Jogger", "color": ""},
+        image_urls=["img1", "img2", "img3", "img4", "img5"],
+    )
+
+    assert assignment["detected_color"] == "gray"
+    assert assignment["color_tokens"] == ["gray"]
+    assert assignment["detected_color_debug"]["images_used"] >= 4
