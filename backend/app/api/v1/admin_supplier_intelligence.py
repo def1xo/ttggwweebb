@@ -139,9 +139,6 @@ def _build_color_assignment(
     raw_color_tokens = _split_color_tokens(item.get("color"))
     normalized_raw_colors = [_canonical_color_key(x) for x in raw_color_tokens if _canonical_color_key(x)]
 
-    images_by_color_counts: dict[str, int] = {}
-    detected_color_debug: dict[str, object] = {"kind": kind}
-
     explicit_key = normalize_combo_color_key(normalized_raw_colors) if normalized_raw_colors else ""
     if explicit_key:
         return {
@@ -151,7 +148,7 @@ def _build_color_assignment(
             "detected_color": explicit_key,
             "detected_color_confidence": 1.0,
             "detected_color_debug": {
-                **detected_color_debug,
+                "kind": kind,
                 "source": "item.color",
                 "final_colors": [explicit_key],
             },
@@ -195,9 +192,6 @@ def _build_color_assignment(
         if combo:
             detected_key = combo
 
-    if detected_key and image_urls:
-        images_by_color_counts = {detected_key: len(image_urls)}
-
     detected_conf = (primary_score / total_signal) if total_signal > 0 else 0.0
     detected_conf = max(0.0, min(1.0, detected_conf))
 
@@ -208,11 +202,10 @@ def _build_color_assignment(
         "detected_color": detected_key,
         "detected_color_confidence": detected_conf,
         "detected_color_debug": {
-            **detected_color_debug,
+            "kind": kind,
             "source": "image_aggregate",
             "top_images": detection_images,
             "prob_sums": prob_sums,
-            "images_by_color_counts": images_by_color_counts,
             "final_colors": [detected_key],
         },
     }
@@ -1894,7 +1887,6 @@ def import_products_from_sources(
 
                 desc = str(it.get("description") or "").strip()
                 if payload.ai_style_description and not desc:
-                    # LLM-generated descriptions are disabled in import flow by default.
                     desc = generate_youth_description(title, cat_name, it.get("color"))
                 # Guard against anomalously low supplier price parse (e.g. 799 for sneakers).
                 # For footwear-like titles enforce a minimal wholesale floor before retail pricing.
@@ -2002,7 +1994,6 @@ def import_products_from_sources(
                 allow_external_image_search = _env_bool("IMPORT_ALLOW_EXTERNAL_IMAGE_SEARCH", False)
                 allow_cross_item_enrich = _env_bool("IMPORT_ALLOW_CROSS_ITEM_ENRICH", False)
 
-                # Optional last-resort quality step (disabled by default).
                 if not image_urls and allow_external_image_search:
                     try:
                         searched = search_image_urls_by_title(title, limit=3)
@@ -2019,7 +2010,6 @@ def import_products_from_sources(
                         image_urls = _rerank_gallery_images(image_urls, supplier_key=supplier_key)
                         image_url = image_urls[0]
 
-                # Optional cross-item enrich (disabled by default).
                 if allow_cross_item_enrich and image_url and known_image_urls:
                     try:
                         sim_items = find_similar_images(image_url, known_image_urls, max_hamming_distance=5, limit=8)
@@ -2239,10 +2229,7 @@ def import_products_from_sources(
                     existing_variants_for_color_migration = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
                     has_colored_variants = any(vv.color_id is not None for vv in existing_variants_for_color_migration)
                     if existing_variants_for_color_migration and not has_colored_variants:
-                        try:
-                            migrated_color = get_or_create_color(detected_color)
-                        except Exception:
-                            migrated_color = None
+                        migrated_color = get_or_create_color(detected_color)
                         if migrated_color is not None:
                             for vv in existing_variants_for_color_migration:
                                 if vv.color_id is None:
