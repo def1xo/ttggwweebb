@@ -196,13 +196,25 @@ def admin_list_products(q: Optional[str] = Query(None), page: int = Query(1, ge=
         size_labels = sorted({str(v.size.name).strip() for v in variants if getattr(v, "size", None) and str(v.size.name).strip()})
         color_labels = sorted({str(v.color.name).strip() for v in variants if getattr(v, "color", None) and str(v.color.name).strip()})
         if not color_labels:
+            media_meta = getattr(p, "import_media_meta", None) or {}
+            by_key = (media_meta.get("images_by_color_key") if isinstance(media_meta, dict) else {}) or {}
+            for raw_key in by_key.keys() if isinstance(by_key, dict) else []:
+                nk = normalize_color_to_whitelist(raw_key)
+                if not nk:
+                    continue
+                if "-" in nk:
+                    for token in [x for x in nk.split("-") if x]:
+                        color_labels.append(token)
+                else:
+                    color_labels.append(nk)
+        if not color_labels:
             detected_key = normalize_color_to_whitelist(getattr(p, "detected_color", None)) if getattr(p, "detected_color", None) else ""
             if detected_key:
                 if "-" in detected_key:
                     for token in [x for x in detected_key.split("-") if x]:
-                        color_labels.append(canonical_color_to_display_name(token) or token)
+                        color_labels.append(token)
                 else:
-                    color_labels.append(canonical_color_to_display_name(detected_key) or detected_key)
+                    color_labels.append(detected_key)
         color_labels = sorted({str(x).strip() for x in color_labels if str(x).strip()})
         image_count = len(list(getattr(p, "images", None) or []))
         base_price = Decimal(str(getattr(p, "base_price", 0) or 0))

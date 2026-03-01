@@ -804,7 +804,7 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
     if supplier_key == "shop_vkus":
         # Historical rule for this supplier feed:
         # drop first two service/cover frames and keep 4..7 best product photos.
-        base = list(uniq[2:]) if len(uniq) > 2 else list(uniq)
+        base = list(uniq[2:]) if len(uniq) > 6 else list(uniq)
         if not base:
             return uniq[:1]
 

@@ -52,4 +52,21 @@ def test_admin_products_list_falls_back_to_detected_color_when_variants_uncolore
     out = admin_api.admin_list_products(db=tmp_db, admin=_Admin(), q=None, page=1, per_page=50)
 
     payload = out.model_dump()
-    assert payload["items"][0]["colors"] == ["белый", "черный"]
+    assert payload["items"][0]["colors"] == ["black", "white"]
+
+
+def test_admin_products_list_uses_import_media_meta_color_keys_when_variants_missing(tmp_db):
+    product = models.Product(
+        title="Meta colors",
+        slug="meta-colors",
+        base_price=Decimal("1000"),
+        visible=True,
+        import_media_meta={"images_by_color_key": {"black-white": ["/uploads/a.jpg"]}},
+    )
+    tmp_db.add(product)
+    tmp_db.commit()
+
+    out = admin_api.admin_list_products(db=tmp_db, admin=_Admin(), q=None, page=1, per_page=50)
+
+    payload = out.model_dump()
+    assert payload["items"][0]["colors"] == ["black", "white"]

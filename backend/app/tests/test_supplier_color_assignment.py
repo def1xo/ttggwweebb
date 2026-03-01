@@ -238,3 +238,14 @@ def test_stock_map_reset_does_not_touch_other_colors(db_session):
 
     refreshed_white = db_session.query(ProductVariant).filter(ProductVariant.id == white_44.id).one()
     assert int(refreshed_white.stock_quantity or 0) == 7
+
+
+def test_rerank_shop_vkus_keeps_small_gallery_without_dropping_first_two(monkeypatch):
+    monkeypatch.setattr(asi, "_is_likely_product_image", lambda _u: True)
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda _u: 10.0)
+
+    urls = [f"https://cdn.example/{i}.jpg" for i in range(4)]
+    out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
+
+    assert len(out) == 4
+    assert out == urls
