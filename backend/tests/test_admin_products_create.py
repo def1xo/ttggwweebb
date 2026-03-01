@@ -84,3 +84,55 @@ def test_create_product_detects_color_from_image_when_missing_color(tmp_db, monk
     color = tmp_db.query(models.Color).get(variants[0].color_id)
     assert color is not None
     assert color.name == "green"
+
+
+def test_update_product_adds_missing_colorways_for_each_size(tmp_db):
+    created = ap.create_product(
+        title="Base product",
+        base_price="1990",
+        price=None,
+        description=None,
+        category_id=None,
+        visible=True,
+        image=None,
+        images=None,
+        sizes="42,43",
+        color="black",
+        stock_quantity=5,
+        cost_price=None,
+        payload=None,
+        db=tmp_db,
+        admin=_Admin(),
+    )
+    assert created["ok"] is True
+    pid = created["product"]["id"]
+
+    updated = ap.update_product(
+        product_id=pid,
+        title=None,
+        base_price=None,
+        description=None,
+        category_id=None,
+        visible=None,
+        image=None,
+        images=None,
+        sizes="42,43",
+        color="black, white",
+        stock_quantity=None,
+        cost_price=None,
+        payload=None,
+        db=tmp_db,
+        admin=_Admin(),
+    )
+
+    assert updated["ok"] is True
+    variants = tmp_db.query(models.ProductVariant).filter(models.ProductVariant.product_id == pid).all()
+    assert len(variants) == 4
+
+    pairs = set()
+    for v in variants:
+        size = tmp_db.query(models.Size).get(v.size_id).name if v.size_id else None
+        color = tmp_db.query(models.Color).get(v.color_id).name if v.color_id else None
+        pairs.add((size, color))
+
+    assert pairs == {("42", "black"), ("42", "white"), ("43", "black"), ("43", "white")}

@@ -1,6 +1,6 @@
 ﻿from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Path, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from decimal import Decimal
 import os
@@ -101,6 +101,30 @@ class ProductOut(BaseModel):
         orm_mode = True
 
 
+
+class AdminProductListItem(BaseModel):
+    id: int
+    title: str
+    base_price: Decimal
+    price: Decimal
+    category_id: Optional[int] = None
+    default_image: Optional[str] = None
+    visible: bool
+    sizes: List[str] = Field(default_factory=list)
+    colors: List[str] = Field(default_factory=list)
+    image_count: int = 0
+    import_source_url: Optional[str] = None
+    import_source_kind: Optional[str] = None
+    import_supplier_name: Optional[str] = None
+
+
+class AdminProductsPage(BaseModel):
+    items: List[AdminProductListItem]
+    total: int
+    page: int
+    pages: int
+    limit: int
+
 class CategoryOut(BaseModel):
     id: int
     name: str
@@ -156,13 +180,61 @@ class WithdrawOut(BaseModel):
 
 
 # ---------- Products ----------
-@router.get("/products", response_model=List[ProductOut])
+@router.get("/products", response_model=AdminProductsPage)
 def admin_list_products(q: Optional[str] = Query(None), page: int = Query(1, ge=1), per_page: int = Query(100, ge=1, le=1000), db: Session = Depends(get_db), admin: models.User = Depends(get_current_admin_user)):
     query = db.query(models.Product)
     if q:
         query = query.filter(models.Product.title.ilike(f"%{q}%"))
-    items = query.order_by(models.Product.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
-    return items
+
+    total = query.count()
+    pages = max(1, (total + per_page - 1) // per_page)
+    rows = query.order_by(models.Product.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+
+    items: List[AdminProductListItem] = []
+    for p in rows:
+        variants = list(getattr(p, "variants", None) or [])
+        size_labels = sorted({str(v.size.name).strip() for v in variants if getattr(v, "size", None) and str(v.size.name).strip()})
+        color_labels = sorted({str(v.color.name).strip() for v in variants if getattr(v, "color", None) and str(v.color.name).strip()})
+        if not color_labels:
+            media_meta = getattr(p, "import_media_meta", None) or {}
+            by_key = (media_meta.get("images_by_color_key") if isinstance(media_meta, dict) else {}) or {}
+            for raw_key in by_key.keys() if isinstance(by_key, dict) else []:
+                nk = normalize_color_to_whitelist(raw_key)
+                if not nk:
+                    continue
+                if "-" in nk:
+                    for token in [x for x in nk.split("-") if x]:
+                        color_labels.append(token)
+                else:
+                    color_labels.append(nk)
+        if not color_labels:
+            detected_key = normalize_color_to_whitelist(getattr(p, "detected_color", None)) if getattr(p, "detected_color", None) else ""
+            if detected_key:
+                if "-" in detected_key:
+                    for token in [x for x in detected_key.split("-") if x]:
+                        color_labels.append(token)
+                else:
+                    color_labels.append(detected_key)
+        color_labels = sorted({str(x).strip() for x in color_labels if str(x).strip()})
+        image_count = len(list(getattr(p, "images", None) or []))
+        base_price = Decimal(str(getattr(p, "base_price", 0) or 0))
+        items.append(AdminProductListItem(
+            id=p.id,
+            title=p.title,
+            base_price=base_price,
+            price=base_price,
+            category_id=p.category_id,
+            default_image=p.default_image,
+            visible=bool(p.visible),
+            sizes=size_labels,
+            colors=color_labels,
+            image_count=image_count,
+            import_source_url=getattr(p, "import_source_url", None),
+            import_source_kind=getattr(p, "import_source_kind", None),
+            import_supplier_name=getattr(p, "import_supplier_name", None),
+        ))
+
+    return AdminProductsPage(items=items, total=total, page=page, pages=pages, limit=per_page)
 
 
 @router.post("/products", response_model=ProductOut)

@@ -4,6 +4,7 @@ import colorsys
 import io
 import math
 import logging
+import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -59,6 +60,22 @@ _COLOR_PRIORITY: tuple[str, ...] = (
 )
 
 
+def _allowed_combo_pairs() -> set[tuple[str, str]]:
+    raw = os.getenv("COLOR_ALLOWED_PAIRS", "black-white")
+    out: set[tuple[str, str]] = set()
+    for token in str(raw or "").split(","):
+        parts = [normalize_color_key(x) for x in re.split(r"[-/|;]+", token.strip()) if normalize_color_key(x)]
+        if len(parts) != 2 or "multi" in parts:
+            continue
+        a, b = parts[0], parts[1]
+        if a == b:
+            continue
+        out.add(tuple(sorted((a, b))))
+    if not out:
+        out.add(("black", "white"))
+    return out
+
+
 def normalize_color_key(raw: Optional[str]) -> str:
     txt = str(raw or "").strip().lower()
     if not txt:
@@ -83,9 +100,15 @@ def normalize_combo_color_key(keys: Sequence[str]) -> str:
 
     order = {c: i for i, c in enumerate(_COLOR_PRIORITY)}
     normalized.sort(key=lambda x: order.get(x, 999))
+    primary = normalized[0]
     if len(normalized) == 1:
-        return normalized[0]
-    return f"{normalized[0]}-{normalized[1]}"
+        return primary
+
+    secondary = normalized[1]
+    pair = tuple(sorted((primary, secondary)))
+    if pair in _allowed_combo_pairs():
+        return f"{primary}-{secondary}"
+    return primary
 
 
 @dataclass
