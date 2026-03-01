@@ -11,7 +11,7 @@ from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
 from app.services import media_store
 from app.services.importer_notifications import slugify
-from app.services.color_detection import detect_product_colors_from_photos
+from app.services.color_detection import detect_product_colors_from_photos, normalize_color_to_whitelist
 
 router = APIRouter(tags=["admin_products"])
 logger = logging.getLogger("admin_products")
@@ -64,6 +64,16 @@ def _parse_colors(raw: Optional[str]) -> List[str]:
         uniq.append(v)
     return uniq
 
+
+
+
+def _expand_color_keys(raw_value: str | None) -> List[str]:
+    key = normalize_color_to_whitelist(raw_value)
+    if not key:
+        return []
+    if "-" in key:
+        return [p for p in key.split("-") if p]
+    return [key]
 
 def _parse_sizes(raw: Optional[str]) -> List[str]:
     """Parse sizes from admin input.
@@ -215,8 +225,17 @@ def list_products(
         except Exception:
             sizes, colors = [], []
         detected_color = str(getattr(p, "detected_color", "") or "").strip()
-        if not colors and detected_color:
-            colors = [detected_color]
+        if not colors:
+            media_meta = getattr(p, "import_media_meta", None) or {}
+            by_key = (media_meta.get("images_by_color_key") if isinstance(media_meta, dict) else {}) or {}
+            expanded: List[str] = []
+            if isinstance(by_key, dict):
+                for raw_key in by_key.keys():
+                    expanded.extend(_expand_color_keys(str(raw_key or "")))
+            if not expanded and detected_color:
+                expanded.extend(_expand_color_keys(detected_color))
+            if expanded:
+                colors = sorted({c for c in expanded if c})
         out.append({
             "id": p.id,
             "title": p.title,
@@ -508,30 +527,29 @@ def update_product(
         if p.variants is None:
             p.variants = []
 
-        # map existing by size name
-        existing_by_size: dict[str, models.ProductVariant] = {}
+        # map existing by (size_id, color_id)
+        existing_by_pair: dict[tuple[int | None, int | None], models.ProductVariant] = {}
         for v in p.variants:
-            try:
-                nm = v.size.name if getattr(v, "size", None) else ""
-                if nm and nm not in existing_by_size:
-                    existing_by_size[nm] = v
-            except Exception:
-                pass
+            existing_by_pair[(int(v.size_id) if v.size_id else None, int(v.color_id) if v.color_id else None)] = v
 
         if size_list:
             for sz in size_list:
                 s_obj = _get_or_create_size(db, sz)
-                v = existing_by_size.get(s_obj.name)
-                if v:
-                    if color_objs:
-                        v.color_id = color_objs[0].id
-                    # keep stock, sync price
-                    v.price = p.base_price
-                    db.add(v)
-                else:
-                    if color_objs:
-                        for c_obj in color_objs:
+                if color_objs:
+                    for c_obj in color_objs:
+                        key = (int(s_obj.id), int(c_obj.id))
+                        v = existing_by_pair.get(key)
+                        if v:
+                            v.price = p.base_price
+                            db.add(v)
+                        else:
                             db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=c_obj.id, stock_quantity=stock_value))
+                else:
+                    key = (int(s_obj.id), None)
+                    v = existing_by_pair.get(key)
+                    if v:
+                        v.price = p.base_price
+                        db.add(v)
                     else:
                         db.add(models.ProductVariant(product_id=p.id, price=p.base_price, size_id=s_obj.id, color_id=None, stock_quantity=stock_value))
         else:
