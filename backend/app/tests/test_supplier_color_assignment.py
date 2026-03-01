@@ -22,10 +22,10 @@ def db_session():
 
 def test_build_color_assignment_returns_combo_for_significant_two_tone(monkeypatch):
     predictions = {
-        "img1": {"color": "black", "confidence": 0.9, "probs": {"black": 0.9, "white": 0.45}},
-        "img2": {"color": "black", "confidence": 0.8, "probs": {"black": 0.8, "white": 0.35}},
-        "img3": {"color": "black", "confidence": 0.7, "probs": {"black": 0.7, "white": 0.3}},
-        "img4": {"color": "black", "confidence": 0.6, "probs": {"black": 0.6, "white": 0.25}},
+        "img1": {"color": "black", "confidence": 0.9, "probs": {"black": 0.9, "white": 0.7}},
+        "img2": {"color": "black", "confidence": 0.8, "probs": {"black": 0.8, "white": 0.62}},
+        "img3": {"color": "black", "confidence": 0.7, "probs": {"black": 0.7, "white": 0.5}},
+        "img4": {"color": "black", "confidence": 0.6, "probs": {"black": 0.6, "white": 0.45}},
     }
 
     monkeypatch.setattr(asi, "predict_color_for_image_url", lambda url, kind: predictions[url])
@@ -99,7 +99,7 @@ def test_two_colorways_create_distinct_non_null_color_variants(db_session):
     assert len({v.color_id for v in variants}) >= 2
 
 
-def test_build_color_assignment_allows_any_canonical_pair(monkeypatch):
+def test_build_color_assignment_disallows_non_whitelisted_pair(monkeypatch):
     predictions = {
         "img1": {"color": "blue", "confidence": 0.9, "probs": {"blue": 0.9, "red": 0.45}},
         "img2": {"color": "blue", "confidence": 0.8, "probs": {"blue": 0.8, "red": 0.35}},
@@ -116,8 +116,8 @@ def test_build_color_assignment_allows_any_canonical_pair(monkeypatch):
         image_urls=["img1", "img2"],
     )
 
-    assert assignment["detected_color"] == "blue-red"
-    assert assignment["color_tokens"] == ["blue-red"]
+    assert assignment["detected_color"] == "blue"
+    assert assignment["color_tokens"] == ["blue"]
 
 
 def test_build_color_assignment_falls_back_to_cv_aggregate_when_ml_empty(monkeypatch):
@@ -190,3 +190,62 @@ def test_rerank_shop_vkus_drops_first_two_and_keeps_up_to_seven(monkeypatch):
 
     assert all(u not in out for u in urls[:2])
     assert len(out) == 7
+
+
+def test_build_color_assignment_combo_requires_min_images(monkeypatch):
+    predictions = {
+        "img1": {"color": "black", "confidence": 0.9, "probs": {"black": 0.9, "white": 0.8}},
+        "img2": {"color": "black", "confidence": 0.8, "probs": {"black": 0.8, "white": 0.7}},
+        "img3": {"color": "black", "confidence": 0.7, "probs": {"black": 0.7, "white": 0.6}},
+    }
+    monkeypatch.setattr(asi, "predict_color_for_image_url", lambda url, kind: predictions[url])
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda url: 100.0)
+
+    assignment = asi._build_color_assignment(
+        title="Nike Air Max",
+        supplier_key="any",
+        src_url="https://supplier.example/item",
+        item={"title": "Nike Air Max", "color": ""},
+        image_urls=["img1", "img2", "img3"],
+    )
+
+    assert assignment["detected_color"] == "black"
+
+
+def test_stock_map_reset_does_not_touch_other_colors(db_session):
+    product = Product(title="NB 9060", slug="nb-9060", base_price=Decimal("1000"), visible=True)
+    db_session.add(product)
+    black = Color(name="black")
+    white = Color(name="white")
+    db_session.add_all([black, white])
+    db_session.flush()
+
+    black_42 = ProductVariant(product_id=product.id, size_id=None, color_id=black.id, price=Decimal("1000"), stock_quantity=5, images=[])
+    white_44 = ProductVariant(product_id=product.id, size_id=None, color_id=white.id, price=Decimal("1000"), stock_quantity=7, images=[])
+    db_session.add_all([black_42, white_44])
+    db_session.commit()
+
+    row_color_ids = {black.id}
+    allowed_sizes = {"42"}
+    for vv in db_session.query(ProductVariant).filter(ProductVariant.product_id == product.id).all():
+        if vv.color_id not in row_color_ids:
+            continue
+        size_key_norm = "42" if vv.id == black_42.id else "44"
+        if size_key_norm not in allowed_sizes and int(vv.stock_quantity or 0) > 0:
+            vv.stock_quantity = 0
+            db_session.add(vv)
+    db_session.commit()
+
+    refreshed_white = db_session.query(ProductVariant).filter(ProductVariant.id == white_44.id).one()
+    assert int(refreshed_white.stock_quantity or 0) == 7
+
+
+def test_rerank_shop_vkus_keeps_small_gallery_without_dropping_first_two(monkeypatch):
+    monkeypatch.setattr(asi, "_is_likely_product_image", lambda _u: True)
+    monkeypatch.setattr(asi, "_score_gallery_image", lambda _u: 10.0)
+
+    urls = [f"https://cdn.example/{i}.jpg" for i in range(4)]
+    out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
+
+    assert len(out) == 4
+    assert out == urls

@@ -71,6 +71,7 @@ MIN_IMAGE_SIDE_PX = 600
 MIN_IMAGE_FILE_SIZE_BYTES = 40 * 1024
 MAX_IMAGE_ASPECT_RATIO = 5.0
 MIN_PRODUCT_IMAGES_TARGET = 4
+COLOR_COMBO_SECONDARY_RATIO = float(os.getenv("COLOR_COMBO_SECONDARY_RATIO", "0.65") or 0.65)
 
 FOOTWEAR_TITLE_RE = re.compile(
     r"(?i)\b(new\s*balance|nb\s*\d|nike|adidas|jordan|yeezy|air\s*max|vomero|samba|gazelle|campus|9060|574|1906|2002|dunk|forum|asics)\b"
@@ -135,12 +136,15 @@ def _pick_color_detection_images(image_urls: list[str], limit: int = 6) -> list[
     if not uniq:
         return []
 
+    likely = [u for u in uniq if _is_likely_product_image(u)]
+    pool_base = likely if likely else uniq
+
     target = max(1, int(limit))
-    if len(uniq) <= target:
-        return uniq
+    if len(pool_base) <= target:
+        return pool_base
 
     # diversify: sample across top candidates instead of taking only head frames
-    pool = uniq[: max(target * 2, target)]
+    pool = pool_base[: max(target * 2, target)]
     out: list[str] = []
     if pool:
         out.append(pool[0])
@@ -255,7 +259,13 @@ def _build_color_assignment(
     secondary_score = float(ranked[1][1]) if len(ranked) > 1 else 0.0
 
     detected_key = primary or ""
-    if primary and secondary and primary_score > 0 and secondary_score >= (primary_score * 0.35):
+    if (
+        primary
+        and secondary
+        and primary_score > 0
+        and len(detection_images) >= MIN_PRODUCT_IMAGES_TARGET
+        and secondary_score >= (primary_score * COLOR_COMBO_SECONDARY_RATIO)
+    ):
         combo = normalize_combo_color_key([primary, secondary])
         if combo and "-" in combo:
             detected_key = combo
@@ -644,12 +654,13 @@ def _is_likely_product_image(url: str) -> bool:
                 quant = tiny.quantize(colors=24)
                 q_colors = quant.getcolors(maxcolors=128) or []
                 unique_q = len(q_colors)
-                if unique_q <= 8 and entropy < 4.2:
+                top_share = (max(c for c, _ in q_colors) / float(96 * 96)) if q_colors else 1.0
+                if unique_q <= 10 and top_share >= 0.52 and entropy < 4.8:
                     return False
-                if q_colors:
-                    top_share = max(c for c, _ in q_colors) / float(96 * 96)
-                    if top_share >= 0.58 and std < 26.0:
-                        return False
+                if top_share >= 0.65:
+                    return False
+                if q_colors and top_share >= 0.58 and std < 26.0:
+                    return False
         except Exception:
             pass
 
@@ -721,7 +732,7 @@ def _score_gallery_image(url: str | None) -> float:
 
 
 def _filter_gallery_main_signature_cluster(image_urls: list[str]) -> list[str]:
-    if len(image_urls) < 6:
+    if len(image_urls) < 4:
         return image_urls
 
     sigs: list[tuple[str, str]] = []
@@ -755,10 +766,24 @@ def _filter_gallery_main_signature_cluster(image_urls: list[str]) -> list[str]:
     main = clusters[0]
     main_urls = {u for u, _ in main}
 
-    # Drop outlier clusters only when the dominant cluster is clearly large enough.
-    if len(main_urls) >= max(4, len(image_urls) // 2):
+    dominant_count = len(main_urls)
+    dominant_share = dominant_count / max(1, len(sigs))
+
+    # Drop outlier clusters if dominant signature cluster is strong enough.
+    if dominant_count >= 3 and dominant_share >= 0.60:
+        return [u for u in image_urls if u in main_urls]
+    if dominant_count >= max(4, len(image_urls) // 2):
         return [u for u in image_urls if u in main_urls]
     return image_urls
+
+
+
+def _is_explicit_trash_image_url(url: str) -> bool:
+    low = str(url or "").strip().lower()
+    if not low:
+        return True
+    return any(tok in low for tok in ("emoji", "sticker", "logo", "banner", "promo", "avatar", "icon", "watermark"))
+
 
 def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = None) -> list[str]:
     if not image_urls:
@@ -779,7 +804,7 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
     if supplier_key == "shop_vkus":
         # Historical rule for this supplier feed:
         # drop first two service/cover frames and keep 4..7 best product photos.
-        base = list(uniq[2:]) if len(uniq) > 2 else list(uniq)
+        base = list(uniq[2:]) if len(uniq) > 6 else list(uniq)
         if not base:
             return uniq[:1]
 
@@ -789,25 +814,37 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
             lk = _is_likely_product_image(u)
             scored.append((u, sc, lk))
 
-        likely = [row for row in scored if row[2]]
-        source_rows = likely if len(likely) >= MIN_PRODUCT_IMAGES_TARGET else scored
-        ranked_rows = sorted(source_rows, key=lambda x: x[1], reverse=True)
+        likely_urls = [u for u, _sc, lk in scored if lk]
+        clustered_likely = _filter_gallery_main_signature_cluster(likely_urls) if likely_urls else []
+        candidate_urls = clustered_likely if clustered_likely else likely_urls
+        if not candidate_urls:
+            candidate_urls = [u for u, _sc, _lk in scored if not _is_explicit_trash_image_url(u)]
+        if not candidate_urls:
+            candidate_urls = list(base)
+
+        ranked_scored = sorted(scored, key=lambda x: x[1], reverse=True)
+        candidate_set = set(candidate_urls)
+        candidate_rows = [row for row in ranked_scored if row[0] in candidate_set]
 
         target_max = 7
-        picked = [u for u, _s, _lk in ranked_rows[:target_max]]
-        picked_set = set(picked)
+        ordered: list[str] = [u for u in base if u in {x[0] for x in candidate_rows[:target_max]}]
 
-        # Preserve original sequence in gallery for UX, but only for picked frames.
-        ordered = [u for u in base if u in picked_set]
-
-        # Ensure at least 4 when possible from remaining ranked rows.
+        # Ensure at least 4 when possible, first from likely rows then from non-explicit-trash rows.
         target_min = MIN_PRODUCT_IMAGES_TARGET
-        if len(ordered) < target_min:
-            for u, _s, _lk in ranked_rows:
-                if u in ordered:
+        need = min(target_min, len(base))
+        if len(ordered) < need:
+            for u, _s, lk in ranked_scored:
+                if not lk or u in ordered:
                     continue
                 ordered.append(u)
-                if len(ordered) >= min(target_min, len(base)):
+                if len(ordered) >= need:
+                    break
+        if len(ordered) < need:
+            for u, _s, _lk in ranked_scored:
+                if u in ordered or _is_explicit_trash_image_url(u):
+                    continue
+                ordered.append(u)
+                if len(ordered) >= need:
                     break
 
         return ordered[:target_max]
@@ -2226,11 +2263,8 @@ def import_products_from_sources(
                     ]
 
                     row_color_key = ""
-                    row_color_raw = str((it or {}).get("color") or "").strip()
-                    if row_color_raw:
-                        row_color_key = normalize_color_to_whitelist(row_color_raw)
-                    if not row_color_key and getattr(p, "detected_color", None):
-                        row_color_key = normalize_color_to_whitelist(getattr(p, "detected_color", None))
+                    if color_tokens:
+                        row_color_key = _canonical_color_key(color_tokens[0])
 
                     if row_color_key:
                         bucket = merged_images_by_color_key.setdefault(row_color_key, [])
@@ -2334,6 +2368,33 @@ def import_products_from_sources(
                 detected_color_confidence = float(color_assignment.get("detected_color_confidence") or 0.0)
                 detected_color_debug = color_assignment.get("detected_color_debug") or {}
 
+                # Import safety fallback: if color assignment is empty for a row with images,
+                # aggregate lightweight dominant-color heuristic over first frames.
+                if (not any(t for t in color_tokens if t)) and image_urls:
+                    vote_counts: dict[str, int] = {}
+                    for _u in (image_urls or [])[:4]:
+                        try:
+                            _dom = dominant_color_name_from_url(_u)
+                        except Exception:
+                            _dom = None
+                        _ck = normalize_color_to_whitelist(_dom)
+                        if not _ck or _ck == "multi":
+                            continue
+                        vote_counts[_ck] = vote_counts.get(_ck, 0) + 1
+                    if vote_counts:
+                        _best = sorted(vote_counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+                        color_tokens = [_best]
+                        detected_color = detected_color or _best
+                        if not variant_images_by_color:
+                            variant_images_by_color = {_best: list(image_urls or [])}
+                        elif _best not in variant_images_by_color:
+                            variant_images_by_color[_best] = list(image_urls or [])
+                        detected_color_debug = {
+                            **(detected_color_debug if isinstance(detected_color_debug, dict) else {}),
+                            "fallback": "row_dominant_aggregate",
+                            "fallback_votes": vote_counts,
+                        }
+
                 if len(color_tokens) <= 1:
                     if detected_color and normalize_color_to_whitelist(detected_color) != "multi":
                         p.detected_color = detected_color
@@ -2358,6 +2419,35 @@ def import_products_from_sources(
                                 if vv.color_id is None:
                                     vv.color_id = migrated_color.id
                                     db.add(vv)
+
+                # Ensure per-row color galleries are persisted for both new and existing products.
+                meta_now = getattr(p, "import_media_meta", None) or {}
+                merged_by_key: dict[str, list[str]] = {
+                    str(k): [str(u).strip() for u in (v or []) if str(u).strip()]
+                    for k, v in (meta_now.get("images_by_color_key") or {}).items()
+                } if isinstance(meta_now, dict) else {}
+                merged_general: list[str] = [
+                    str(u).strip() for u in ((meta_now.get("general_images") if isinstance(meta_now, dict) else []) or []) if str(u).strip()
+                ]
+                row_color_key = _canonical_color_key(color_tokens[0]) if color_tokens else ""
+                if row_color_key:
+                    bucket = merged_by_key.setdefault(row_color_key, [])
+                    for _u in (image_urls or []):
+                        uu = str(_u).strip()
+                        if uu and uu not in bucket:
+                            bucket.append(uu)
+                else:
+                    for _u in (image_urls or []):
+                        uu = str(_u).strip()
+                        if uu and uu not in merged_general:
+                            merged_general.append(uu)
+                p.import_media_meta = {
+                    "photos_ref": photos_ref or (meta_now.get("photos_ref") if isinstance(meta_now, dict) else []),
+                    "images_status": images_status or (meta_now.get("images_status") if isinstance(meta_now, dict) else None),
+                    "images_by_color_key": merged_by_key,
+                    "general_images": merged_general,
+                }
+                db.add(p)
 
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
@@ -2638,7 +2728,7 @@ def import_products_from_sources(
                         row_variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == p.id).all()
                         size_cache: dict[int, str] = {}
                         for vv in row_variants:
-                            if not availability_sizes_locked and vv.color_id not in row_color_ids:
+                            if vv.color_id not in row_color_ids:
                                 continue
                             sz_name = ""
                             if vv.size_id:
