@@ -2368,6 +2368,33 @@ def import_products_from_sources(
                 detected_color_confidence = float(color_assignment.get("detected_color_confidence") or 0.0)
                 detected_color_debug = color_assignment.get("detected_color_debug") or {}
 
+                # Import safety fallback: if color assignment is empty for a row with images,
+                # aggregate lightweight dominant-color heuristic over first frames.
+                if (not any(t for t in color_tokens if t)) and image_urls:
+                    vote_counts: dict[str, int] = {}
+                    for _u in (image_urls or [])[:4]:
+                        try:
+                            _dom = dominant_color_name_from_url(_u)
+                        except Exception:
+                            _dom = None
+                        _ck = normalize_color_to_whitelist(_dom)
+                        if not _ck or _ck == "multi":
+                            continue
+                        vote_counts[_ck] = vote_counts.get(_ck, 0) + 1
+                    if vote_counts:
+                        _best = sorted(vote_counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+                        color_tokens = [_best]
+                        detected_color = detected_color or _best
+                        if not variant_images_by_color:
+                            variant_images_by_color = {_best: list(image_urls or [])}
+                        elif _best not in variant_images_by_color:
+                            variant_images_by_color[_best] = list(image_urls or [])
+                        detected_color_debug = {
+                            **(detected_color_debug if isinstance(detected_color_debug, dict) else {}),
+                            "fallback": "row_dominant_aggregate",
+                            "fallback_votes": vote_counts,
+                        }
+
                 if len(color_tokens) <= 1:
                     if detected_color and normalize_color_to_whitelist(detected_color) != "multi":
                         p.detected_color = detected_color

@@ -1598,3 +1598,64 @@ def test_import_products_shop_vkus_single_row_keeps_single_colorway_for_four_to_
     finally:
         db.close()
         Base.metadata.drop_all(engine)
+
+
+def test_import_products_fallback_color_tokens_from_row_dominant_when_assignment_empty(monkeypatch):
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    try:
+        src = models.SupplierSource(
+            source_url="https://docs.google.com/spreadsheets/d/test-sheet-fallback/htmlview",
+            supplier_name="shop_vkus",
+            active=True,
+        )
+        db.add(src)
+        db.commit()
+        db.refresh(src)
+
+        def _fake_preview(*args, **kwargs):
+            return {
+                "rows_preview": [
+                    ["Товар", "Дроп цена", "Размер", "Наличие", "Фото"],
+                    ["NIKE TEST", "2700", "41-42", "41", "https://cdn.example.com/p1.jpg"],
+                ]
+            }
+
+        monkeypatch.setattr(asi, "fetch_tabular_preview", _fake_preview)
+        monkeypatch.setattr(asi, "_prefer_local_image_url", lambda url, **kwargs: url)
+        monkeypatch.setattr(asi, "_build_color_assignment", lambda **kwargs: {
+            "kind": "shoes",
+            "color_tokens": [],
+            "variant_images_by_color": {},
+            "detected_color": "",
+            "detected_color_confidence": 0.0,
+            "detected_color_debug": {},
+        })
+        monkeypatch.setattr(asi, "dominant_color_name_from_url", lambda _u: "white")
+
+        out = import_products_from_sources(
+            ImportProductsIn(
+                source_ids=[int(src.id)],
+                dry_run=False,
+                use_avito_pricing=False,
+                ai_style_description=False,
+                ai_description_enabled=False,
+                max_items_per_source=10,
+            ),
+            _admin=None,
+            db=db,
+        )
+
+        assert out.created_products >= 1
+        variants = db.query(models.ProductVariant).all()
+        assert variants
+        color_names = {
+            normalize_color_to_whitelist(db.query(models.Color).filter(models.Color.id == v.color_id).one().name if v.color_id else "")
+            for v in variants
+        }
+        assert "white" in color_names
+    finally:
+        db.close()
+        Base.metadata.drop_all(engine)
