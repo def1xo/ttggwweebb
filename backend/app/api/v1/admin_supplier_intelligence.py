@@ -2393,6 +2393,35 @@ def import_products_from_sources(
                                     vv.color_id = migrated_color.id
                                     db.add(vv)
 
+                # Ensure per-row color galleries are persisted for both new and existing products.
+                meta_now = getattr(p, "import_media_meta", None) or {}
+                merged_by_key: dict[str, list[str]] = {
+                    str(k): [str(u).strip() for u in (v or []) if str(u).strip()]
+                    for k, v in (meta_now.get("images_by_color_key") or {}).items()
+                } if isinstance(meta_now, dict) else {}
+                merged_general: list[str] = [
+                    str(u).strip() for u in ((meta_now.get("general_images") if isinstance(meta_now, dict) else []) or []) if str(u).strip()
+                ]
+                row_color_key = _canonical_color_key(color_tokens[0]) if color_tokens else ""
+                if row_color_key:
+                    bucket = merged_by_key.setdefault(row_color_key, [])
+                    for _u in (image_urls or []):
+                        uu = str(_u).strip()
+                        if uu and uu not in bucket:
+                            bucket.append(uu)
+                else:
+                    for _u in (image_urls or []):
+                        uu = str(_u).strip()
+                        if uu and uu not in merged_general:
+                            merged_general.append(uu)
+                p.import_media_meta = {
+                    "photos_ref": photos_ref or (meta_now.get("photos_ref") if isinstance(meta_now, dict) else []),
+                    "images_status": images_status or (meta_now.get("images_status") if isinstance(meta_now, dict) else None),
+                    "images_by_color_key": merged_by_key,
+                    "general_images": merged_general,
+                }
+                db.add(p)
+
                 size_tokens = [str(x).strip()[:16] for x in split_size_tokens(re.sub(r"[,;/]+", " ", str(it.get("size") or ""))) if str(x).strip()[:16]]
                 if _is_shop_vkus_item_context(supplier_key, src_url, it if isinstance(it, dict) else None) and size_tokens:
                     numeric_sizes = [s for s in size_tokens if re.fullmatch(r"\d{2,3}(?:[.,]5)?", s)]

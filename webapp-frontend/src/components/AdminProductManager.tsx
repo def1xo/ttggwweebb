@@ -235,6 +235,11 @@ export default function AdminProductManager() {
                     ) : (
                       <> • Размеры: —</>
                     )}
+                    {Array.isArray(p.colors) && p.colors.length > 0 ? (
+                      <> • Цвета: {p.colors.join(", ")}</>
+                    ) : (
+                      <> • Цвета: —</>
+                    )}
                   </div>
                   <div className="small-muted" style={{ marginTop: 4, wordBreak: "break-all" }}>
                     Импорт: {(p as any).import_supplier_name || "—"} • {(p as any).import_source_kind || "—"} • {(p as any).import_source_url || "—"}
