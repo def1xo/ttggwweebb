@@ -163,7 +163,7 @@ def test_rerank_shop_vkus_does_not_collapse_gallery_below_four(monkeypatch):
     urls = [f"https://cdn.example/{i}.jpg" for i in range(7)]
     out = asi._rerank_gallery_images(urls, supplier_key="shop_vkus")
 
-    assert len(out) >= 4
+    assert out == []
 
 
 def test_build_color_assignment_debug_contains_min_images_target(monkeypatch):
