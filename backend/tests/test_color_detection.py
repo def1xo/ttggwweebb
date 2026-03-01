@@ -65,7 +65,7 @@ def test_normalize_color_aliases_and_ru_display():
     assert cd.normalize_color_to_whitelist("grey") == "gray"
     assert cd.normalize_color_to_whitelist("серый") == "gray"
     assert cd.normalize_color_to_whitelist("red/white/black") == "black-white"
-    assert cd.normalize_color_to_whitelist("red/blue") == "blue-red"
+    assert cd.normalize_color_to_whitelist("red/blue") == "blue"
     assert cd.canonical_color_to_display_name("green") == "зеленый"
 
 
@@ -264,3 +264,10 @@ def test_detect_product_color_default_aggregation_black_white_combo(monkeypatch)
 
 def test_normalize_combo_keeps_only_top_two_non_multi():
     assert cd.normalize_combo_color_key(["multi", "red", "white", "black"]) == "black-white"
+
+
+def test_normalize_combo_only_for_allowed_pairs(monkeypatch):
+    monkeypatch.setenv("COLOR_ALLOWED_PAIRS", "black-white,black-red")
+    assert cd.normalize_combo_color_key(["red", "blue"]) == "blue"
+    assert cd.normalize_combo_color_key(["black", "white"]) == "black-white"
+    assert cd.normalize_combo_color_key(["multi", "black", "white"]) == "black-white"
