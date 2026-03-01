@@ -11,7 +11,7 @@ from app.api.dependencies import get_db, get_current_admin_user
 from app.db import models
 from app.services import media_store
 from app.services.importer_notifications import slugify
-from app.services.color_detection import detect_product_colors_from_photos
+from app.services.color_detection import detect_product_colors_from_photos, normalize_color_to_whitelist
 
 router = APIRouter(tags=["admin_products"])
 logger = logging.getLogger("admin_products")
@@ -64,6 +64,16 @@ def _parse_colors(raw: Optional[str]) -> List[str]:
         uniq.append(v)
     return uniq
 
+
+
+
+def _expand_color_keys(raw_value: str | None) -> List[str]:
+    key = normalize_color_to_whitelist(raw_value)
+    if not key:
+        return []
+    if "-" in key:
+        return [p for p in key.split("-") if p]
+    return [key]
 
 def _parse_sizes(raw: Optional[str]) -> List[str]:
     """Parse sizes from admin input.
@@ -215,8 +225,17 @@ def list_products(
         except Exception:
             sizes, colors = [], []
         detected_color = str(getattr(p, "detected_color", "") or "").strip()
-        if not colors and detected_color:
-            colors = [detected_color]
+        if not colors:
+            media_meta = getattr(p, "import_media_meta", None) or {}
+            by_key = (media_meta.get("images_by_color_key") if isinstance(media_meta, dict) else {}) or {}
+            expanded: List[str] = []
+            if isinstance(by_key, dict):
+                for raw_key in by_key.keys():
+                    expanded.extend(_expand_color_keys(str(raw_key or "")))
+            if not expanded and detected_color:
+                expanded.extend(_expand_color_keys(detected_color))
+            if expanded:
+                colors = sorted({c for c in expanded if c})
         out.append({
             "id": p.id,
             "title": p.title,

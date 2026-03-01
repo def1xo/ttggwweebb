@@ -136,3 +136,37 @@ def test_update_product_adds_missing_colorways_for_each_size(tmp_db):
         pairs.add((size, color))
 
     assert pairs == {("42", "black"), ("42", "white"), ("43", "black"), ("43", "white")}
+
+
+def test_admin_products_list_uses_import_media_meta_color_keys(tmp_db):
+    product = models.Product(
+        title="Imported colors",
+        slug="imported-colors",
+        base_price=Decimal("1200"),
+        visible=True,
+        import_media_meta={"images_by_color_key": {"black-white": ["/uploads/a.jpg"]}},
+    )
+    tmp_db.add(product)
+    tmp_db.commit()
+
+    payload = ap.list_products(db=tmp_db, admin=_Admin(), q=None, page=1, limit=25)
+    colors = payload["items"][0]["colors"]
+
+    assert colors == ["black", "white"]
+
+
+def test_admin_products_list_splits_detected_combo_color(tmp_db):
+    product = models.Product(
+        title="Detected combo",
+        slug="detected-combo",
+        base_price=Decimal("1200"),
+        visible=True,
+        detected_color="black-white",
+    )
+    tmp_db.add(product)
+    tmp_db.commit()
+
+    payload = ap.list_products(db=tmp_db, admin=_Admin(), q=None, page=1, limit=25)
+    colors = payload["items"][0]["colors"]
+
+    assert colors == ["black", "white"]
