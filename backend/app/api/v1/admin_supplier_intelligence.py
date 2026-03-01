@@ -776,6 +776,15 @@ def _filter_gallery_main_signature_cluster(image_urls: list[str]) -> list[str]:
         return [u for u in image_urls if u in main_urls]
     return image_urls
 
+
+
+def _is_explicit_trash_image_url(url: str) -> bool:
+    low = str(url or "").strip().lower()
+    if not low:
+        return True
+    return any(tok in low for tok in ("emoji", "sticker", "logo", "banner", "promo", "avatar", "icon", "watermark"))
+
+
 def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = None) -> list[str]:
     if not image_urls:
         return []
@@ -808,21 +817,34 @@ def _rerank_gallery_images(image_urls: list[str], supplier_key: str | None = Non
         likely_urls = [u for u, _sc, lk in scored if lk]
         clustered_likely = _filter_gallery_main_signature_cluster(likely_urls) if likely_urls else []
         candidate_urls = clustered_likely if clustered_likely else likely_urls
+        if not candidate_urls:
+            candidate_urls = [u for u, _sc, _lk in scored if not _is_explicit_trash_image_url(u)]
+        if not candidate_urls:
+            candidate_urls = list(base)
 
         ranked_scored = sorted(scored, key=lambda x: x[1], reverse=True)
-        candidate_rows = [row for row in ranked_scored if row[0] in set(candidate_urls)]
+        candidate_set = set(candidate_urls)
+        candidate_rows = [row for row in ranked_scored if row[0] in candidate_set]
 
         target_max = 7
         ordered: list[str] = [u for u in base if u in {x[0] for x in candidate_rows[:target_max]}]
 
-        # Ensure at least 4 when possible from remaining likely rows.
+        # Ensure at least 4 when possible, first from likely rows then from non-explicit-trash rows.
         target_min = MIN_PRODUCT_IMAGES_TARGET
-        if len(ordered) < min(target_min, len(base)):
+        need = min(target_min, len(base))
+        if len(ordered) < need:
             for u, _s, lk in ranked_scored:
                 if not lk or u in ordered:
                     continue
                 ordered.append(u)
-                if len(ordered) >= min(target_min, len(base)):
+                if len(ordered) >= need:
+                    break
+        if len(ordered) < need:
+            for u, _s, _lk in ranked_scored:
+                if u in ordered or _is_explicit_trash_image_url(u):
+                    continue
+                ordered.append(u)
+                if len(ordered) >= need:
                     break
 
         return ordered[:target_max]

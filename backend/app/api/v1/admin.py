@@ -195,6 +195,15 @@ def admin_list_products(q: Optional[str] = Query(None), page: int = Query(1, ge=
         variants = list(getattr(p, "variants", None) or [])
         size_labels = sorted({str(v.size.name).strip() for v in variants if getattr(v, "size", None) and str(v.size.name).strip()})
         color_labels = sorted({str(v.color.name).strip() for v in variants if getattr(v, "color", None) and str(v.color.name).strip()})
+        if not color_labels:
+            detected_key = normalize_color_to_whitelist(getattr(p, "detected_color", None)) if getattr(p, "detected_color", None) else ""
+            if detected_key:
+                if "-" in detected_key:
+                    for token in [x for x in detected_key.split("-") if x]:
+                        color_labels.append(canonical_color_to_display_name(token) or token)
+                else:
+                    color_labels.append(canonical_color_to_display_name(detected_key) or detected_key)
+        color_labels = sorted({str(x).strip() for x in color_labels if str(x).strip()})
         image_count = len(list(getattr(p, "images", None) or []))
         base_price = Decimal(str(getattr(p, "base_price", 0) or 0))
         items.append(AdminProductListItem(
