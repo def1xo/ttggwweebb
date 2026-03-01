@@ -1191,10 +1191,10 @@ export async function deleteAdminManager(id: number) {
 export async function getAdminProducts(params?: Record<string, any>) {
   try {
     const candidates = [
-      "/api/admin/products",
-      "/admin/products",
       "/api/v1/admin/products",
       "/v1/admin/products",
+      "/api/admin/products",
+      "/admin/products",
     ];
     return await tryCandidates(candidates, { method: "get", params });
   } catch (e) {
@@ -1216,10 +1216,10 @@ export async function createProduct(payload: any) {
     if (payload?.image instanceof File) form.append("image", payload.image);
     if (payload?.images && Array.isArray(payload.images)) payload.images.forEach((f: File) => form.append("images", f));
     const candidates = [
-      "/api/admin/products",
-      "/admin/products",
       "/api/v1/admin/products",
       "/v1/admin/products",
+      "/api/admin/products",
+      "/admin/products",
     ];
     return await tryCandidates(candidates, { method: "post", data: form });
   } catch (e) {
@@ -1241,10 +1241,10 @@ export async function updateProduct(id: number, payload: any) {
     if (payload?.image instanceof File) form.append("image", payload.image);
     if (payload?.images && Array.isArray(payload.images)) payload.images.forEach((f: File) => form.append("images", f));
     const candidates = [
-      `/api/admin/products/${id}`,
-      `/admin/products/${id}`,
       `/api/v1/admin/products/${id}`,
       `/v1/admin/products/${id}`,
+      `/api/admin/products/${id}`,
+      `/admin/products/${id}`,
     ];
     return await tryCandidates(candidates, { method: "patch", data: form });
   } catch (e) {
@@ -1255,10 +1255,10 @@ export async function updateProduct(id: number, payload: any) {
 export async function deleteProduct(id: number) {
   try {
     const candidates = [
-      `/api/admin/products/${id}`,
-      `/admin/products/${id}`,
       `/api/v1/admin/products/${id}`,
       `/v1/admin/products/${id}`,
+      `/api/admin/products/${id}`,
+      `/admin/products/${id}`,
     ];
     return await tryCandidates(candidates, { method: "delete" });
   } catch (e) {
