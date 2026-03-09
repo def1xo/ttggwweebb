@@ -576,6 +576,20 @@ def _get_or_create_color(db: Session, name: str):
     return col
 
 
+def _canonical_color_name(raw: Optional[str]) -> str:
+    value = str(raw or "").strip().lower()
+    if not value:
+        return ""
+    aliases = {
+        "grey": "gray",
+        "серый": "gray",
+        "чёрный": "черный",
+        "чёрная": "черный",
+        "чёрное": "черный",
+    }
+    return aliases.get(value, value)
+
+
 def _get_or_create_size(db: Session, label: str):
     label_clean = label.strip()
     size = None
@@ -714,11 +728,18 @@ def parse_and_save_post(db: Session, payload: Dict[str, Any], is_draft: bool = F
                                 db.add(pc)
                             except Exception:
                                 logger.exception("Could not create ProductCost")
+            allowed_colors: set[str] = {_canonical_color_name(c) for c in colors if _canonical_color_name(c)}
             if stock_quantity is not None or size_stock_map:
                 for v in getattr(existing, "variants", []):
                     try:
+                        if allowed_colors:
+                            variant_color_obj = getattr(v, "color", None)
+                            variant_color_name = _canonical_color_name(getattr(variant_color_obj, "name", None))
+                            if variant_color_name and variant_color_name not in allowed_colors:
+                                continue
                         if size_stock_map:
-                            size_name = str(getattr(getattr(v, "size", None), "name", "") or "").strip()
+                            size_obj = getattr(v, "size", None)
+                            size_name = str(getattr(size_obj, "name", "") or getattr(size_obj, "label", "") or "").strip()
                             if size_name:
                                 v.stock_quantity = max(0, int(size_stock_map.get(size_name, 0)))
                             elif stock_quantity is not None:

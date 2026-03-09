@@ -94,7 +94,10 @@ export default function ProductCard({ product }: Props) {
 
     const created = product?.created_at ? new Date(product.created_at) : null;
     const isNew = created ? Date.now() - created.getTime() < 7 * 24 * 60 * 60 * 1000 : false;
-    const inStock = Boolean(product?.has_stock ?? (variantList || []).some((v) => Number(v?.stock || 0) > 0));
+    const inStock = Boolean(
+      product?.has_stock ??
+      (variantList || []).some((v) => Number(v?.stock_quantity ?? v?.stock ?? v?.quantity ?? v?.qty ?? 0) > 0)
+    );
     const showColorMeta = colors.length > 1;
     return { sizes, colors, sizeLabel, isNew, inStock, showColorMeta };
   }, [product, variantList, imgs]);

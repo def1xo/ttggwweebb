@@ -65,3 +65,37 @@ def test_import_post_uses_rrc_minus_300_and_default_stock(tmp_db):
     variant = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == prod.id).first()
     assert variant is not None
     assert int(variant.stock_quantity or 0) == 9999
+
+
+def test_existing_product_update_with_color_limits_stock_update_to_matching_color(tmp_db):
+    db = tmp_db
+    message_id = 889
+
+    initial_payload = {
+        "message_id": message_id,
+        "text": "#shoes\nNike model\nцвет: black, white",
+        "stock_quantity": 5,
+        "image_urls": ["https://example.com/nike.jpg"],
+    }
+    prod = parse_and_save_post(db, initial_payload)
+    assert prod is not None
+
+    variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == prod.id).all()
+    by_color = {str(v.color.name).strip().lower(): int(v.stock_quantity or 0) for v in variants if v.color is not None}
+    assert by_color.get("black") == 5
+    assert by_color.get("white") == 5
+
+    update_payload = {
+        "message_id": message_id,
+        "text": "#shoes\nNike model\nцвет: black",
+        "stock_quantity": 2,
+        "image_urls": ["https://example.com/nike-2.jpg"],
+    }
+    updated = parse_and_save_post(db, update_payload)
+    assert updated is not None
+
+    refreshed_variants = db.query(models.ProductVariant).filter(models.ProductVariant.product_id == updated.id).all()
+    refreshed_by_color = {str(v.color.name).strip().lower(): int(v.stock_quantity or 0) for v in refreshed_variants if v.color is not None}
+    assert refreshed_by_color["black"] == 2
+    # White variant remains untouched because update payload explicitly targets black only.
+    assert refreshed_by_color["white"] == 5
