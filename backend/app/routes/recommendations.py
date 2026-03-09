@@ -28,6 +28,27 @@ except Exception:
 router = APIRouter()
 
 
+def _product_has_stock(p: Any) -> bool:
+    try:
+        raw = getattr(p, "has_stock", None)
+        if raw is not None:
+            return bool(raw)
+    except Exception:
+        pass
+    try:
+        variants = list(getattr(p, "variants", []) or [])
+    except Exception:
+        variants = []
+    for v in variants:
+        try:
+            qty = int(getattr(v, "stock_quantity", 0) or 0)
+        except Exception:
+            qty = 0
+        if qty > 0:
+            return True
+    return False
+
+
 def serialize_product(p: Any) -> Dict[str, Any]:
     return {
         "id": getattr(p, "id", None),
@@ -36,6 +57,7 @@ def serialize_product(p: Any) -> Dict[str, Any]:
         "price": float(getattr(p, "base_price", getattr(p, "price", 0)) or 0),
         "image": getattr(p, "default_image", getattr(p, "image", None)),
         "created_at": getattr(p, "created_at", None),
+        "has_stock": _product_has_stock(p),
     }
 
 

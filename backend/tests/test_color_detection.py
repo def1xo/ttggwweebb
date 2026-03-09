@@ -64,7 +64,7 @@ def test_black_product_on_blue_background_is_not_blue(monkeypatch):
 def test_normalize_color_aliases_and_ru_display():
     assert cd.normalize_color_to_whitelist("grey") == "gray"
     assert cd.normalize_color_to_whitelist("серый") == "gray"
-    assert cd.normalize_color_to_whitelist("red/white/black") == "black-white"
+    assert cd.normalize_color_to_whitelist("red/white/black") == "black-white-red"
     assert cd.normalize_color_to_whitelist("red/blue") == "blue"
     assert cd.canonical_color_to_display_name("green") == "зеленый"
 
@@ -183,7 +183,7 @@ def test_detect_product_color_for_15_images_forces_three_colors(monkeypatch):
 
     monkeypatch.setattr(cd, "detect_color_from_image_source", lambda _src: seq.pop(0))
     out = cd.detect_product_color([str(i) for i in range(15)], supplier_profile="shop_vkus")
-    assert out["color"] == "black-white"
+    assert out["color"] == "black-white-red"
     assert out["debug"]["palette_rule"] == "15_21_to_3"
 
 
@@ -271,3 +271,7 @@ def test_normalize_combo_only_for_allowed_pairs(monkeypatch):
     assert cd.normalize_combo_color_key(["red", "blue"]) == "blue"
     assert cd.normalize_combo_color_key(["black", "white"]) == "black-white"
     assert cd.normalize_combo_color_key(["multi", "black", "white"]) == "black-white"
+
+
+def test_normalize_palette_supports_three_colors():
+    assert cd.normalize_palette_color_key(["red", "white", "black"], max_colors=3) == "black-white-red"

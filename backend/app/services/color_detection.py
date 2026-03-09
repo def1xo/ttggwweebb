@@ -111,6 +111,28 @@ def normalize_combo_color_key(keys: Sequence[str]) -> str:
     return primary
 
 
+def normalize_palette_color_key(keys: Sequence[str], max_colors: int = 3) -> str:
+    normalized: list[str] = []
+    for k in (keys or []):
+        nk = normalize_color_key(k)
+        if not nk or nk == "multi" or nk in normalized:
+            continue
+        normalized.append(nk)
+    if not normalized:
+        return ""
+
+    order = {c: i for i, c in enumerate(_COLOR_PRIORITY)}
+    normalized.sort(key=lambda x: order.get(x, 999))
+    max_colors = max(1, min(int(max_colors or 1), 3))
+    normalized = normalized[:max_colors]
+
+    if len(normalized) == 1:
+        return normalized[0]
+    if len(normalized) == 2:
+        return normalize_combo_color_key(normalized)
+    return "-".join(normalized)
+
+
 @dataclass
 class ImageColorResult:
     color: str
@@ -372,7 +394,7 @@ def _compose_palette_color(top: List[tuple[str, float]], total_score: float, tar
 
     if target_count <= 1 or len(chosen) == 1:
         return chosen[0]
-    return normalize_combo_color_key(chosen[:2])
+    return normalize_palette_color_key(chosen[:target_count], max_colors=target_count)
 
 
 def detect_product_color(image_sources: Sequence[str], supplier_profile: Optional[str] = None) -> Dict[str, Any]:
@@ -508,6 +530,19 @@ def detect_product_color(image_sources: Sequence[str], supplier_profile: Optiona
                     color = combo
                     conf = max(conf, min(0.98, share1 + share2))
 
+    if len(top) > 2:
+        c1, s1 = top[0]
+        c2, s2 = top[1]
+        c3, s3 = top[2]
+        share1 = float(s1) / float(total_score)
+        share2 = float(s2) / float(total_score)
+        share3 = float(s3) / float(total_score)
+        if all(c not in {"", "multi"} for c in (c1, c2, c3)) and share1 <= 0.60 and share3 >= 0.14 and (share1 + share2 + share3) >= 0.84:
+            tri = normalize_palette_color_key([c1, c2, c3], max_colors=3)
+            if tri and tri.count("-") == 2:
+                color = tri
+                conf = max(conf, min(0.99, share1 + share2 + share3))
+
     result = {
         "color": color,
         "confidence": round(min(0.99, conf), 3),
@@ -529,7 +564,7 @@ def normalize_color_to_whitelist(name: Optional[str]) -> str:
         return ""
     if re.search(r"[-/|,;]", raw):
         parts = [x for x in re.split(r"[-/|,;]+", raw) if str(x).strip()]
-        return normalize_combo_color_key(parts)
+        return normalize_palette_color_key(parts, max_colors=3)
     return normalize_color_key(raw)
 
 
