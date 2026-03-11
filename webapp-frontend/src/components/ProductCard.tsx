@@ -54,7 +54,6 @@ function normalizeMediaUrl(raw: unknown): string | null {
   return base ? `${base}/${url}` : url;
 }
 
-
 export default function ProductCard({ product }: Props) {
   const { isFavorite, toggle } = useFavorites();
 
