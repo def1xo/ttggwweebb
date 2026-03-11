@@ -46,3 +46,27 @@ curl -sS "${BACKEND_URL}/api/admin/supplier-intelligence/tasks/${TASK_ID}" \
 Полезные проверки:
 - `GET /health` — что backend доступен.
 - `GET /api/auth/me` с тем же Bearer токеном — что токен действителен.
+
+## Импорт поставщиков (новый pipeline)
+
+ENV-переменные:
+- `CATEGORY_MATCH_THRESHOLD` (по умолчанию `0.8`)
+- `AUTO_CONFIRM_CATEGORY_THRESHOLD` (по умолчанию `0.9`)
+- `IMPORTER_DRY_RUN` (`1/0`)
+
+Миграции и тесты:
+```bash
+cd backend
+alembic upgrade head
+pytest -q
+```
+
+Локальный запуск тестового импорта CSV:
+```bash
+TOKEN=<admin_jwt> SUPPLIER_ID=1 ./backend/scripts/run_sample_import.sh backend/sample_data/test_import.csv
+```
+
+Откат импорта:
+```bash
+./backend/scripts/rollback_import.sh <import_id>
+```
