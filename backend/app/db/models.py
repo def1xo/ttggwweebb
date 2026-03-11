@@ -17,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Index,
     Enum as SAEnum,
+    Float,
 )
 from sqlalchemy.orm import relationship
 from app.db.base import Base
@@ -142,6 +143,11 @@ class Product(Base):
     detected_color = Column(String(32), nullable=True, index=True)
     detected_color_confidence = Column(Numeric(5, 4), nullable=True)
     detected_color_debug = Column(JSON, nullable=True)
+    supplier_sku = Column(String(255), nullable=True, index=True)
+    external_id = Column(String(255), nullable=True, index=True)
+    requires_color_review = Column(Boolean, nullable=False, default=False, index=True)
+    requires_category_review = Column(Boolean, nullable=False, default=False, index=True)
+    review_reason = Column(String(255), nullable=True)
     visible = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -161,6 +167,7 @@ class ProductImage(Base):
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
     product = relationship("Product", back_populates="images")
+    color_links = relationship("ColorImage", back_populates="product_image", cascade="all, delete-orphan")
 
 
 class Color(Base):
@@ -168,6 +175,73 @@ class Color(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(128), nullable=False)
     slug = Column(String(128), nullable=True)
+    images = relationship("ColorImage", back_populates="color", cascade="all, delete-orphan")
+
+
+class ColorImage(Base):
+    __tablename__ = "color_images"
+    __table_args__ = (UniqueConstraint("color_id", "product_image_id", name="uq_color_image_pair"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    color_id = Column(Integer, ForeignKey("colors.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_image_id = Column(Integer, ForeignKey("product_images.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    color = relationship("Color", back_populates="images")
+    product_image = relationship("ProductImage", back_populates="color_links")
+
+
+class SupplierCategoryMap(Base):
+    __tablename__ = "supplier_category_map"
+    __table_args__ = (UniqueConstraint("supplier_id", "supplier_category_raw", name="uq_supplier_category_raw"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    supplier_id = Column(Integer, ForeignKey("supplier_sources.id", ondelete="CASCADE"), nullable=False, index=True)
+    supplier_category_raw = Column(String(255), nullable=False, index=True)
+    mapped_category_id = Column(Integer, ForeignKey("categories.id", ondelete="SET NULL"), nullable=True, index=True)
+    confidence = Column(Float, nullable=False, default=0.0)
+    is_confirmed = Column(Boolean, nullable=False, default=False, index=True)
+    last_used = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    supplier = relationship("SupplierSource")
+    mapped_category = relationship("Category")
+
+
+class ImportJob(Base):
+    __tablename__ = "import_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    supplier_id = Column(Integer, ForeignKey("supplier_sources.id", ondelete="SET NULL"), nullable=True, index=True)
+    status = Column(String(64), nullable=False, default="created", index=True)
+    payload = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+    input_dump_path = Column(String(1024), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ImportItem(Base):
+    __tablename__ = "import_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    import_job_id = Column(Integer, ForeignKey("import_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    supplier_sku = Column(String(255), nullable=True, index=True)
+    status = Column(String(64), nullable=False, default="pending", index=True)
+    reason = Column(String(255), nullable=True)
+    payload = Column(JSON, nullable=True)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class ImportLog(Base):
+    __tablename__ = "import_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    import_job_id = Column(Integer, ForeignKey("import_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    level = Column(String(16), nullable=False, default="INFO", index=True)
+    message = Column(Text, nullable=False)
+    context = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
 
 class Size(Base):

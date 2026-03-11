@@ -1,0 +1,9 @@
+supplier_id,supplier_sku,title,description,supplier_category,price,images,color
+1,SKU-001,Кепка CoolBrand — red,Бейсболка,sports-caps,1900,cap_red_1.jpg|cap_red_2.jpg,red
+1,SKU-002,Кеды Model X (black/white),Двухцветные кеды,sports-shoes,4500,modelx_black.jpg|modelx_white.jpg,
+1,SKU-003,Куртка Neo ???,Неизвестный цвет,outerwear,5200,jacket_unknown.jpg,
+1,SKU-004,Кроссовки Sprint Blue,Легкие кроссовки,sports-shoes,6200,sprint_blue.jpg,
+2,SKU-005,Sneaker Pro,Импорт от поставщика,sports-shoes,7100,sneaker_black.jpg,black
+2,SKU-006,Urban Tee,Футболка,tee/t-shirt,1800,tee_green.jpg,
+2,SKU-007,Hoodie Flex,Худи oversize,hoodiez,3900,hoodie_gray.jpg,
+2,SKU-008,Runner 2026,Категория со странным названием,sport_shooes,7300,runner_white.jpg,white

@@ -634,3 +634,47 @@ def delete_category(category_id: int, db: Session = Depends(get_db), admin: mode
     db.delete(c)
     db.commit()
     return {"ok": True}
+
+@router.get('/colors/{color_id}/images')
+def color_images_preview(color_id: int, db: Session = Depends(get_db), admin: models.User = Depends(get_current_admin_user)):
+    color = db.query(models.Color).filter(models.Color.id == color_id).one_or_none()
+    if not color:
+        raise HTTPException(status_code=404, detail='color not found')
+    rows = (
+        db.query(models.ColorImage)
+        .filter(models.ColorImage.color_id == color_id)
+        .all()
+    )
+    return {
+        'color': {'id': color.id, 'name': color.name, 'slug': color.slug},
+        'images': [
+            {
+                'product_image_id': r.product_image_id,
+                'url': (r.product_image.url if r.product_image else None),
+                'product_id': (r.product_image.product_id if r.product_image else None),
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.post('/products/{product_id}/images/{image_id}/assign-colors')
+def assign_image_colors(
+    product_id: int,
+    image_id: int,
+    color_ids: list[int],
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(get_current_admin_user),
+):
+    img = db.query(models.ProductImage).filter(models.ProductImage.id == image_id, models.ProductImage.product_id == product_id).one_or_none()
+    if not img:
+        raise HTTPException(status_code=404, detail='image not found for product')
+    for cid in color_ids:
+        color = db.query(models.Color).filter(models.Color.id == int(cid)).one_or_none()
+        if not color:
+            raise HTTPException(status_code=400, detail=f'color {cid} does not exist')
+        exists = db.query(models.ColorImage).filter(models.ColorImage.color_id == color.id, models.ColorImage.product_image_id == img.id).one_or_none()
+        if not exists:
+            db.add(models.ColorImage(color_id=color.id, product_image_id=img.id))
+    db.commit()
+    return {'ok': True}
